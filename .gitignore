@@ -1,0 +1,53 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Go
+backend/bin/
+backend/coverage.out
+backend/coverage.html
+backend/*.test
+backend/*.exe
+backend/vendor/
+
+# Node / Vue
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+frontend/.eslintcache
+frontend/.npm-cache/
+frontend/.artifacts/
+*.tsbuildinfo
+
+# Runtime data
+.tools/
+.runtime/
+data/
+backend/data/
+uploads/
+*.db
+*.sqlite
+
+# Logs and temporary files
+*.log
+tmp/
+temp/
+.cache/
+
+# Editors and operating systems
+.idea/
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Test and local tooling
+.testcontainers.properties
+playwright-report/
+test-results/

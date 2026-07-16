@@ -1,0 +1,85 @@
+name: Build Docker artifact
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: backend/go.sum
+
+      - name: Test backend
+        working-directory: backend
+        env:
+          GOPROXY: https://goproxy.cn,direct
+        run: |
+          go test ./... -count=1
+          go vet ./...
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Test and build frontend
+        working-directory: frontend
+        run: |
+          pnpm config set registry https://registry.npmmirror.com
+          pnpm install --frozen-lockfile
+          pnpm test
+          pnpm build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build application image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ai-bot:latest
+          build-args: |
+            GOPROXY=https://goproxy.cn,direct
+            PNPM_REGISTRY=https://registry.npmmirror.com
+            ALPINE_MIRROR=https://mirrors.aliyun.com/alpine
+
+      - name: Export image
+        run: |
+          docker save ai-bot:latest | gzip -9 > ai-bot-linux-amd64.tar.gz
+          sha256sum ai-bot-linux-amd64.tar.gz > ai-bot-linux-amd64.tar.gz.sha256
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-bot-linux-amd64-${{ github.sha }}
+          path: |
+            ai-bot-linux-amd64.tar.gz
+            ai-bot-linux-amd64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
