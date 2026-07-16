@@ -25,6 +25,8 @@ export interface ModelProfile {
   status: Status
   latency: number
   dimension?: number
+  webSearchMode: 'disabled' | 'qwen' | 'openai' | 'custom'
+  extraBody: Record<string, unknown>
 }
 
 export interface ModelTestInput {
@@ -39,12 +41,15 @@ export type ModelTestResult =
 export interface Conversation {
   id: string
   botId: string
+  platformId: string
+  botName: string
   name: string
   platform: 'QQ'
   type: 'group' | 'c2c'
   triggerMode: 'mention_only' | 'always' | 'disabled'
   messageCount: number
   memberCount: number
+  hasFullMessageEvents: boolean
   contextLimit: number
   knowledgeBaseNames: string[]
   knowledgeBaseIds: string[]
@@ -101,6 +106,8 @@ export interface PipelineRow {
   id: string
   time: string
   bot: string
+  conversation?: string
+  content?: string
   eventMs: number
   contextMs: number
   retrieval: { status: Status; ms: number; hit: string }

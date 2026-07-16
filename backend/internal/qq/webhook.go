@@ -28,6 +28,7 @@ type MessageData struct {
 	Content     string `json:"content"`
 	Timestamp   string `json:"timestamp"`
 	GroupOpenID string `json:"group_openid"`
+	GroupName   string `json:"group_name"`
 	OpenID      string `json:"openid"`
 	MsgType     int    `json:"msg_type"`
 	Author      struct {
@@ -35,6 +36,7 @@ type MessageData struct {
 		MemberOpenID string `json:"member_openid"`
 		UserOpenID   string `json:"user_openid"`
 		Username     string `json:"username"`
+		Nickname     string `json:"nickname"`
 		Bot          bool   `json:"bot"`
 	} `json:"author"`
 	Attachments []struct {
@@ -113,6 +115,14 @@ func Parse(body []byte, botID string) (Envelope, *domain.InboundMessage, error) 
 	if sender == "" {
 		sender = d.Author.ID
 	}
+	senderName := strings.TrimSpace(d.Author.Username)
+	if senderName == "" {
+		senderName = strings.TrimSpace(d.Author.Nickname)
+	}
+	conversationName := strings.TrimSpace(d.GroupName)
+	if ct == "private" {
+		conversationName = senderName
+	}
 	parts := []domain.ContentPart{{Type: "text", Text: strings.TrimSpace(d.Content)}}
 	for _, a := range d.Attachments {
 		parts = append(parts, domain.ContentPart{Type: "attachment", URL: a.URL, Text: a.Filename})
@@ -125,7 +135,7 @@ func Parse(body []byte, botID string) (Envelope, *domain.InboundMessage, error) 
 	}
 	deadline := eventTime.Add(5 * time.Minute)
 	return e, &domain.InboundMessage{EventID: e.ID, Channel: "qq", BotID: botID, ConversationType: ct, ConversationID: cid,
-		SenderID: sender, SenderName: d.Author.Username, PlatformMessageID: d.ID, EventType: e.T, Text: strings.TrimSpace(d.Content),
+		ConversationName: conversationName, SenderID: sender, SenderName: senderName, PlatformMessageID: d.ID, EventType: e.T, Text: strings.TrimSpace(d.Content),
 		Parts: parts, EventTime: eventTime, ReplyDeadline: &deadline, Raw: body}, nil
 }
 

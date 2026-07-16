@@ -316,18 +316,20 @@ func (a *App) deleteBot(c *gin.Context) {
 }
 
 type modelInput struct {
-	Name      string `json:"name"`
-	Kind      string `json:"kind"`
-	BaseURL   string `json:"baseUrl"`
-	APIKey    string `json:"apiKey"`
-	Model     string `json:"model"`
-	Dimension *int   `json:"dimension"`
-	Enabled   *bool  `json:"enabled"`
-	IsDefault bool   `json:"isDefault"`
+	Name          string         `json:"name"`
+	Kind          string         `json:"kind"`
+	BaseURL       string         `json:"baseUrl"`
+	APIKey        string         `json:"apiKey"`
+	Model         string         `json:"model"`
+	Dimension     *int           `json:"dimension"`
+	Enabled       *bool          `json:"enabled"`
+	IsDefault     bool           `json:"isDefault"`
+	WebSearchMode string         `json:"webSearchMode"`
+	ExtraBody     map[string]any `json:"extraBody"`
 }
 
 func (a *App) listModels(c *gin.Context) {
-	queryList(c, a, `SELECT id::text,name,kind,base_url AS "baseUrl",model,dimension,enabled,is_default AS "isDefault",api_key_enc<>'' AS "hasApiKey",created_at AS "createdAt" FROM model_profiles ORDER BY kind,name`)
+	queryList(c, a, `SELECT id::text,name,kind,base_url AS "baseUrl",model,dimension,enabled,is_default AS "isDefault",api_key_enc<>'' AS "hasApiKey",web_search_mode AS "webSearchMode",extra_body AS "extraBody",created_at AS "createdAt" FROM model_profiles ORDER BY kind,name`)
 }
 func (a *App) saveModel(c *gin.Context) {
 	var in modelInput
@@ -337,6 +339,19 @@ func (a *App) saveModel(c *gin.Context) {
 	}
 	if in.Kind == "chat" {
 		in.Dimension = nil
+		if in.WebSearchMode == "" {
+			in.WebSearchMode = "disabled"
+		}
+		if in.WebSearchMode != "disabled" && in.WebSearchMode != "qwen" && in.WebSearchMode != "openai" && in.WebSearchMode != "custom" {
+			fail(c, 400, "invalid_request", "联网搜索模式无效")
+			return
+		}
+	} else {
+		in.WebSearchMode = "disabled"
+		in.ExtraBody = nil
+	}
+	if in.ExtraBody == nil {
+		in.ExtraBody = map[string]any{}
 	}
 	enabled := true
 	if in.Enabled != nil {
@@ -358,12 +373,12 @@ func (a *App) saveModel(c *gin.Context) {
 			return
 		}
 		enc, _ := a.cipher.Encrypt(in.APIKey)
-		err = tx.QueryRow(c, "INSERT INTO model_profiles(name,kind,base_url,api_key_enc,model,dimension,enabled,is_default) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id::text", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), enc, in.Model, in.Dimension, enabled, in.IsDefault).Scan(&id)
+		err = tx.QueryRow(c, "INSERT INTO model_profiles(name,kind,base_url,api_key_enc,model,dimension,enabled,is_default,web_search_mode,extra_body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id::text", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), enc, in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ExtraBody).Scan(&id)
 	} else if in.APIKey != "" {
 		enc, _ := a.cipher.Encrypt(in.APIKey)
-		_, err = tx.Exec(c, "UPDATE model_profiles SET name=$1,kind=$2,base_url=$3,api_key_enc=$4,model=$5,dimension=$6,enabled=$7,is_default=$8,updated_at=now() WHERE id=$9", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), enc, in.Model, in.Dimension, enabled, in.IsDefault, id)
+		_, err = tx.Exec(c, "UPDATE model_profiles SET name=$1,kind=$2,base_url=$3,api_key_enc=$4,model=$5,dimension=$6,enabled=$7,is_default=$8,web_search_mode=$9,extra_body=$10,updated_at=now() WHERE id=$11", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), enc, in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ExtraBody, id)
 	} else {
-		_, err = tx.Exec(c, "UPDATE model_profiles SET name=$1,kind=$2,base_url=$3,model=$4,dimension=$5,enabled=$6,is_default=$7,updated_at=now() WHERE id=$8", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), in.Model, in.Dimension, enabled, in.IsDefault, id)
+		_, err = tx.Exec(c, "UPDATE model_profiles SET name=$1,kind=$2,base_url=$3,model=$4,dimension=$5,enabled=$6,is_default=$7,web_search_mode=$8,extra_body=$9,updated_at=now() WHERE id=$10", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ExtraBody, id)
 	}
 	if err != nil {
 		fail(c, 500, "database_error", "保存模型失败")
@@ -388,9 +403,10 @@ func (a *App) loadModel(ctx context.Context, id string) (*openai.Client, string,
 	return cl, kind, err
 }
 func (a *App) loadModelDetails(ctx context.Context, id string) (*openai.Client, string, string, *int, error) {
-	var base, keyEnc, model, kind string
+	var base, keyEnc, model, kind, webSearchMode string
 	var dimension *int
-	err := a.db.QueryRow(ctx, "SELECT base_url,api_key_enc,model,kind,dimension FROM model_profiles WHERE id=$1 AND enabled", id).Scan(&base, &keyEnc, &model, &kind, &dimension)
+	var extraBodyRaw []byte
+	err := a.db.QueryRow(ctx, "SELECT base_url,api_key_enc,model,kind,dimension,web_search_mode,extra_body FROM model_profiles WHERE id=$1 AND enabled", id).Scan(&base, &keyEnc, &model, &kind, &dimension, &webSearchMode, &extraBodyRaw)
 	if err != nil {
 		return nil, "", "", nil, err
 	}
@@ -403,6 +419,20 @@ func (a *App) loadModelDetails(ctx context.Context, id string) (*openai.Client, 
 		return nil, "", "", nil, fmt.Errorf("读取运行时设置失败: %w", err)
 	}
 	client := openai.New(base, key, model, time.Duration(settings.AIRequestTimeoutSeconds)*time.Second)
+	if len(extraBodyRaw) > 0 {
+		_ = json.Unmarshal(extraBodyRaw, &client.ExtraBody)
+	}
+	if client.ExtraBody == nil {
+		client.ExtraBody = map[string]any{}
+	}
+	if kind == "chat" {
+		switch webSearchMode {
+		case "qwen":
+			client.ExtraBody["enable_search"] = true
+		case "openai":
+			client.ExtraBody["web_search_options"] = map[string]any{}
+		}
+	}
 	if dimension != nil && *dimension > 0 {
 		client.Dimensions = *dimension
 	}
@@ -466,7 +496,7 @@ func (a *App) testModel(c *gin.Context) {
 }
 
 func (a *App) listConversations(c *gin.Context) {
-	queryList(c, a, `SELECT c.id::text,c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",b.name AS "botName",c.updated_at AS "updatedAt" FROM conversations c JOIN bots b ON b.id=c.bot_id ORDER BY c.updated_at DESC`)
+	queryList(c, a, `SELECT c.id::text,c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",b.name AS "botName",c.updated_at AS "updatedAt",COALESCE(ms.message_count,0) AS "messageCount",CASE WHEN c.type='private' THEN GREATEST(COALESCE(cm.member_count,0),1) ELSE COALESCE(cm.member_count,0) END AS "memberCount",COALESCE(ms.has_full_message_events,false) AS "hasFullMessageEvents" FROM conversations c JOIN bots b ON b.id=c.bot_id LEFT JOIN LATERAL (SELECT count(*) AS message_count,bool_or(event_type='GROUP_MESSAGE_CREATE') AS has_full_message_events FROM messages WHERE conversation_id=c.id) ms ON true LEFT JOIN LATERAL (SELECT count(*) AS member_count FROM conversation_members WHERE conversation_id=c.id AND active) cm ON true ORDER BY c.updated_at DESC`)
 }
 func (a *App) getConversation(c *gin.Context) {
 	rows, err := a.db.Query(c, `SELECT c.id::text,c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",COALESCE(json_agg(ck.knowledge_base_id::text) FILTER(WHERE ck.knowledge_base_id IS NOT NULL),'[]') AS "knowledgeBaseIds" FROM conversations c LEFT JOIN conversation_knowledge_bases ck ON ck.conversation_id=c.id WHERE c.id=$1 GROUP BY c.id`, c.Param("id"))
@@ -690,23 +720,6 @@ func (a *App) searchKB(c *gin.Context) {
 	d, _ := rowsJSON(rows)
 	ok(c, d)
 }
-func (a *App) overview(c *gin.Context) {
-	var bots, convs, msgs, inboxPending, outboxPending, documentPending, failedTasks, readyDocs, totalDocs, processingDocs int64
-	_ = a.db.QueryRow(c, "SELECT count(*) FROM bots").Scan(&bots)
-	_ = a.db.QueryRow(c, "SELECT count(*) FROM conversations").Scan(&convs)
-	_ = a.db.QueryRow(c, "SELECT count(*) FROM messages WHERE created_at>now()-interval '24 hours'").Scan(&msgs)
-	_ = a.db.QueryRow(c, "SELECT count(*) FROM inbox_tasks WHERE status IN ('pending','processing')").Scan(&inboxPending)
-	_ = a.db.QueryRow(c, "SELECT count(*) FROM outbox_tasks WHERE status IN ('pending','processing')").Scan(&outboxPending)
-	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents WHERE status='pending'").Scan(&documentPending)
-	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents WHERE status='processing'").Scan(&processingDocs)
-	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents WHERE status='ready'").Scan(&readyDocs)
-	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents").Scan(&totalDocs)
-	_ = a.db.QueryRow(c, `SELECT
-		(SELECT count(*) FROM inbox_tasks WHERE status='failed')+
-		(SELECT count(*) FROM outbox_tasks WHERE status='failed')+
-		(SELECT count(*) FROM knowledge_documents WHERE status='failed')`).Scan(&failedTasks)
-	ok(c, gin.H{"bots": bots, "conversations": convs, "messages24h": msgs, "pendingTasks": inboxPending + outboxPending, "pendingInbox": inboxPending, "pendingOutbox": outboxPending, "pendingDocuments": documentPending, "processingDocuments": processingDocs, "failedTasks": failedTasks, "readyDocuments": readyDocs, "totalDocuments": totalDocs, "version": "0.1.0"})
-}
 func (a *App) retryFailedTasks(c *gin.Context) {
 	tx, err := a.db.Begin(c)
 	if err != nil {
@@ -796,12 +809,22 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 	}
 	_, _ = tx.Exec(ctx, "UPDATE bots SET last_event_at=now(),status='online' WHERE id=$1", botID)
 	if msg == nil {
+		if err := a.persistQQGroupEvent(ctx, tx, botID, env, settings.DefaultContextLimit); err != nil {
+			return err
+		}
 		return tx.Commit(ctx)
 	}
+	conversationName := inboundConversationName(msg)
 	var cid, triggerMode string
-	err = tx.QueryRow(ctx, `INSERT INTO conversations(channel,bot_id,platform_id,type,name,context_limit) VALUES('qq',$1,$2,$3,$2,$4) ON CONFLICT(channel,bot_id,platform_id) DO UPDATE SET updated_at=now() RETURNING id::text,trigger_mode`, msg.BotID, msg.ConversationID, msg.ConversationType, settings.DefaultContextLimit).Scan(&cid, &triggerMode)
+	err = tx.QueryRow(ctx, `INSERT INTO conversations(channel,bot_id,platform_id,type,name,context_limit) VALUES('qq',$1,$2,$3,$4,$5) ON CONFLICT(channel,bot_id,platform_id) DO UPDATE SET updated_at=now(),name=CASE WHEN conversations.name='' OR conversations.name=conversations.platform_id OR conversations.name LIKE 'QQ 群聊 · %' OR conversations.name LIKE 'QQ 用户 · %' THEN EXCLUDED.name ELSE conversations.name END RETURNING id::text,trigger_mode`, msg.BotID, msg.ConversationID, msg.ConversationType, conversationName, settings.DefaultContextLimit).Scan(&cid, &triggerMode)
 	if err != nil {
 		return err
+	}
+	if msg.SenderID != "" {
+		_, err = tx.Exec(ctx, `INSERT INTO conversation_members(conversation_id,platform_user_id,display_name,active,last_seen_at) VALUES($1,$2,$3,true,$4) ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET display_name=CASE WHEN EXCLUDED.display_name<>'' THEN EXCLUDED.display_name ELSE conversation_members.display_name END,active=true,last_seen_at=EXCLUDED.last_seen_at`, cid, msg.SenderID, msg.SenderName, msg.EventTime)
+		if err != nil {
+			return err
+		}
 	}
 	parts, _ := json.Marshal(msg.Parts)
 	var mid string
@@ -823,6 +846,57 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func inboundConversationName(msg *domain.InboundMessage) string {
+	if name := strings.TrimSpace(msg.ConversationName); name != "" {
+		return name
+	}
+	prefix := "QQ 群聊 · "
+	if msg.ConversationType == "private" {
+		prefix = "QQ 用户 · "
+	}
+	return prefix + shortPlatformID(msg.ConversationID)
+}
+
+func shortPlatformID(id string) string {
+	runes := []rune(id)
+	if len(runes) > 6 {
+		runes = runes[len(runes)-6:]
+	}
+	return string(runes)
+}
+
+func (a *App) persistQQGroupEvent(ctx context.Context, tx pgx.Tx, botID string, env qq.Envelope, contextLimit int) error {
+	if env.T != "GROUP_ADD_ROBOT" && env.T != "GROUP_DEL_ROBOT" && env.T != "GROUP_MEMBER_ADD" && env.T != "GROUP_MEMBER_REMOVE" && env.T != "GROUP_MSG_RECEIVE" && env.T != "GROUP_MSG_REJECT" {
+		return nil
+	}
+	var event struct {
+		GroupOpenID  string `json:"group_openid"`
+		MemberOpenID string `json:"member_openid"`
+		OpMemberID   string `json:"op_member_openid"`
+	}
+	if err := json.Unmarshal(env.D, &event); err != nil || event.GroupOpenID == "" {
+		return err
+	}
+	var conversationID string
+	err := tx.QueryRow(ctx, `INSERT INTO conversations(channel,bot_id,platform_id,type,name,context_limit) VALUES('qq',$1,$2,'group',$3,$4) ON CONFLICT(channel,bot_id,platform_id) DO UPDATE SET updated_at=now() RETURNING id::text`, botID, event.GroupOpenID, "QQ 群聊 · "+shortPlatformID(event.GroupOpenID), contextLimit).Scan(&conversationID)
+	if err != nil {
+		return err
+	}
+	if env.T == "GROUP_DEL_ROBOT" {
+		_, err = tx.Exec(ctx, "UPDATE conversations SET enabled=false,updated_at=now() WHERE id=$1", conversationID)
+		return err
+	}
+	memberID := event.MemberOpenID
+	if memberID == "" && (env.T == "GROUP_MEMBER_ADD" || env.T == "GROUP_MEMBER_REMOVE") {
+		memberID = event.OpMemberID
+	}
+	if memberID != "" {
+		active := env.T != "GROUP_MEMBER_REMOVE"
+		_, err = tx.Exec(ctx, `INSERT INTO conversation_members(conversation_id,platform_user_id,active,last_seen_at) VALUES($1,$2,$3,now()) ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET active=EXCLUDED.active,last_seen_at=now()`, conversationID, memberID, active)
+	}
+	return err
 }
 
 func nullString(v string) any {

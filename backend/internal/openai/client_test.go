@@ -19,6 +19,11 @@ func TestChatAndEmbedding(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/v1/chat/completions":
+			var request map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&request)
+			if request["enable_search"] != true {
+				t.Errorf("enable_search=%v", request["enable_search"])
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": "OK"}}}, "usage": map[string]int{"prompt_tokens": 2, "completion_tokens": 1}})
 		case "/v1/embeddings":
 			var request map[string]any
@@ -34,6 +39,7 @@ func TestChatAndEmbedding(t *testing.T) {
 	defer s.Close()
 	c := New(s.URL+"/v1", "key", "test", time.Second)
 	c.Dimensions = 2
+	c.ExtraBody = map[string]any{"enable_search": true}
 	chat, err := c.Chat(context.Background(), []domain.ChatMessage{{Role: "user", Content: "hi"}})
 	if err != nil || chat.Content != "OK" || chat.InputTokens != 2 {
 		t.Fatalf("chat=%+v err=%v", chat, err)

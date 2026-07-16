@@ -2,40 +2,14 @@ name: ai-bot
 
 services:
   app:
-    image: ${AI_BOT_IMAGE:-ai-bot:local}
+    image: ${AI_BOT_IMAGE:-ai-bot:latest}
     container_name: ai-bot
     restart: unless-stopped
+    env_file:
+      - .env
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    environment:
-      APP_ADDR: :8080
-      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must point to the PostgreSQL service installed on the host}
-      APP_MASTER_KEY: ${APP_MASTER_KEY:?APP_MASTER_KEY must be set}
-      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set for first initialization}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL must be the public HTTPS origin}
-      COOKIE_SECURE: ${COOKIE_SECURE:-true}
-      DATA_DIR: /app/data
-      WORKER_POLL_INTERVAL: ${WORKER_POLL_INTERVAL:-1s}
-      DEFAULT_CONTEXT_LIMIT: ${DEFAULT_CONTEXT_LIMIT:-20}
-      AI_REQUEST_TIMEOUT: ${AI_REQUEST_TIMEOUT:-90s}
-      MESSAGE_RETENTION_DAYS: ${MESSAGE_RETENTION_DAYS:-90}
-      QQ_API_BASE_URL: ${QQ_API_BASE_URL:-https://api.sgroup.qq.com}
-      QQ_TOKEN_URL: ${QQ_TOKEN_URL:-https://bots.qq.com/app/getAppAccessToken}
-      TZ: Asia/Shanghai
     ports:
-      - "127.0.0.1:${APP_PORT:-8080}:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
-      - app_data:/app/data
-    networks:
-      - ai_bot
-
-volumes:
-  app_data:
-
-networks:
-  ai_bot:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.30.0.0/24
+      - ./data:/app/data

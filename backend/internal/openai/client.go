@@ -16,6 +16,7 @@ import (
 type Client struct {
 	BaseURL, APIKey, Model string
 	Dimensions             int
+	ExtraBody              map[string]any
 	HTTP                   *http.Client
 }
 
@@ -63,13 +64,16 @@ func (c *Client) Chat(ctx context.Context, messages []domain.ChatMessage) (domai
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}
-	req := struct {
-		Model       string  `json:"model"`
-		Messages    []msg   `json:"messages"`
-		Temperature float64 `json:"temperature"`
-	}{Model: c.Model, Temperature: 0.3}
+	chatMessages := make([]msg, 0, len(messages))
 	for _, m := range messages {
-		req.Messages = append(req.Messages, msg{m.Role, m.Content})
+		chatMessages = append(chatMessages, msg{m.Role, m.Content})
+	}
+	req := map[string]any{"model": c.Model, "messages": chatMessages, "temperature": 0.3}
+	for key, value := range c.ExtraBody {
+		if key == "model" || key == "messages" {
+			continue
+		}
+		req[key] = value
 	}
 	var resp struct {
 		Choices []struct {

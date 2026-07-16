@@ -28,6 +28,15 @@ describe('system overview mapping', () => {
       bots: 2,
       conversations: 7,
       messages24h: 12,
+      totalEvents: 18,
+      triggered: 10,
+      successful: 9,
+      triggeredConversations: 4,
+      averageLatencyMs: 1250,
+      slowCalls: 1,
+      modelCalls: 10,
+      sentDeliveries: 8,
+      totalDeliveries: 10,
       pendingTasks: 3,
       pendingInbox: 2,
       pendingOutbox: 1,
@@ -35,19 +44,21 @@ describe('system overview mapping', () => {
       processingDocuments: 1,
       failedTasks: 0,
       readyDocuments: 5,
+      failedDocuments: 1,
       totalDocuments: 10,
-      version: '0.1.0',
+      pipelines: [{ id: 'p1', time: '2026-07-16T08:00:00Z', bot: '机器人', conversation: '测试群', content: '测试消息', eventMs: 5, contextMs: 20, retrieval: { status: 'success', ms: 30, hit: '2' }, model: { status: 'success', ms: 800, name: 'qwen' }, delivery: { status: 'success', ms: 100 }, totalMs: 955 }],
+      alerts: [{ id: 'a1', level: 'warning', time: '2026-07-16T08:00:00Z', bot: '知识索引', content: '索引失败', impact: '知识不完整', recovered: false }],
+      knowledgeQueues: [{ id: 'k1', name: '产品库', progress: 50, eta: '正在索引' }],
+      version: '0.2.0',
     })
 
     const overview = await api.overview()
 
     expect(overview.messages24h).toBe(12)
-    expect(overview.metrics[0].value).toBe('12')
-    expect(overview.metrics[1].value).toBe('—')
-    expect(overview.metrics[5].value).toBe('7')
-    expect(overview.pipelines).toEqual([])
-    expect(overview.alerts).toEqual([])
-    expect(overview.knowledge.queues).toEqual([])
+    expect(overview.metrics.map(metric => metric.value)).toEqual(['18', '9', '1.25s', '10.00%', '80.0%', '4'])
+    expect(overview.pipelines[0]).toMatchObject({ conversation: '测试群', content: '测试消息', totalMs: 955 })
+    expect(overview.alerts[0]).toMatchObject({ content: '索引失败', recovered: false })
+    expect(overview.knowledge.queues).toEqual([{ id: 'k1', name: '产品库', progress: 50, eta: '正在索引' }])
     expect(overview.queues).toEqual({ inbox: 2, outbox: 1, knowledge: 5, failed: 0 })
   })
 })

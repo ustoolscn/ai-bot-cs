@@ -90,7 +90,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	const chatAPIKey = "chat-secret-key-that-must-not-leak"
 	chatID := createdID(t, requestJSON(t, client, http.MethodPost, server.URL+"/api/model-profiles", map[string]any{
 		"name": "集成测试对话模型", "kind": "chat", "baseUrl": mock.URL + "/v1",
-		"apiKey": chatAPIKey, "model": "mock-chat", "enabled": true, "isDefault": true,
+		"apiKey": chatAPIKey, "model": "mock-chat", "enabled": true, "isDefault": true, "webSearchMode": "qwen",
 	}, http.StatusOK))
 
 	const embeddingAPIKey = "embedding-secret-key-that-must-not-leak"
@@ -175,7 +175,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 		t.Fatalf("expected one chat request, got %d", len(chatRequests))
 	}
 	chatPayload := string(chatRequests[0])
-	for _, expected := range []string{"七天内可以申请无理由退款", "今天的普通群消息只应作为上下文", "退款期限是多久"} {
+	for _, expected := range []string{"七天内可以申请无理由退款", "今天的普通群消息只应作为上下文", "退款期限是多久", `"enable_search":true`} {
 		if !strings.Contains(chatPayload, expected) {
 			t.Fatalf("chat prompt is missing %q: %s", expected, chatPayload)
 		}
@@ -207,6 +207,28 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	}
 	if webhookEvents != 1 || inboundMessages != 1 || agentRuns != 1 || outboundMessages != 1 {
 		t.Fatalf("idempotency counts are wrong: events=%d inbound=%d runs=%d outbound=%d", webhookEvents, inboundMessages, agentRuns, outboundMessages)
+	}
+
+	requestJSON(t, client, http.MethodPut, server.URL+"/api/conversations/"+conversationID, map[string]any{
+		"name": "测试群", "triggerMode": "always", "systemPrompt": "你是售后助手。",
+		"chatProfileId": chatID, "enabled": true, "contextLimit": 20,
+		"knowledgeBaseIds": []string{kbID},
+	}, http.StatusOK)
+	alwaysBody := qqEventBody(t, "event-always", "GROUP_MESSAGE_CREATE", "message-always", "普通消息也需要回复")
+	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, alwaysBody)
+	eventually(t, 8*time.Second, "always mode ordinary message delivered", func() (bool, error) {
+		var sent int
+		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
+		return sent == 2 && mock.QQSendCount() == 2, err
+	})
+
+	conversationsJSON := requestJSON(t, client, http.MethodGet, server.URL+"/api/conversations", nil, http.StatusOK)
+	if !bytes.Contains(conversationsJSON, []byte(`"name":"测试群"`)) || !bytes.Contains(conversationsJSON, []byte(`"hasFullMessageEvents":true`)) || !bytes.Contains(conversationsJSON, []byte(`"messageCount":`)) || !bytes.Contains(conversationsJSON, []byte(`"memberCount":`)) {
+		t.Fatalf("conversation list is missing friendly name or statistics: %s", conversationsJSON)
+	}
+	overviewJSON := requestJSON(t, client, http.MethodGet, server.URL+"/api/system/overview", nil, http.StatusOK)
+	if !bytes.Contains(overviewJSON, []byte(`"pipelines":[{`)) || !bytes.Contains(overviewJSON, []byte(`"totalEvents":`)) || !bytes.Contains(overviewJSON, []byte(`"successful":`)) {
+		t.Fatalf("overview is missing operational data: %s", overviewJSON)
 	}
 
 	var mentionMessageID string
@@ -333,8 +355,9 @@ func (m *upstreamMock) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		m.mu.Lock()
 		m.qqSends = append(m.qqSends, qqSendRequest{Path: r.URL.Path, Authorization: r.Header.Get("Authorization"), Body: body})
+		sendID := fmt.Sprintf("qq-outbound-message-%d", len(m.qqSends))
 		m.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": "qq-outbound-message-id"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": sendID})
 	default:
 		http.NotFound(w, r)
 	}

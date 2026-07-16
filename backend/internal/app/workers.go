@@ -137,13 +137,16 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.retryInbox(ctx, j, err)
 	}
 	messages := []domain.ChatMessage{{Role: "system", Content: j.SystemPrompt}}
+	retrievalStarted := time.Now()
 	kbContext, hits, err := a.retrieveForConversation(ctx, j.ConversationID, j.Content)
+	retrievalLatency := time.Since(retrievalStarted).Milliseconds()
 	if err != nil {
 		a.log.Warn("knowledge retrieval failed", "message", j.MessageID, "error", err)
 	}
 	if kbContext != "" {
 		messages = append(messages, domain.ChatMessage{Role: "system", Content: "以下是知识库检索结果。仅在相关时使用，并优先忠于资料：\n" + kbContext})
 	}
+	contextStarted := time.Now()
 	rows, err := a.db.Query(ctx, `SELECT direction,content,sender_name FROM messages WHERE conversation_id=$1 AND id<>$2 AND content<>'' ORDER BY event_at DESC LIMIT $3`, j.ConversationID, j.MessageID, j.ContextLimit)
 	if err == nil {
 		type hist struct{ dir, content, name string }
@@ -167,6 +170,8 @@ func (a *App) processInbox(ctx context.Context) error {
 		}
 	}
 	messages = append(messages, domain.ChatMessage{Role: "user", Content: j.Content})
+	contextLatency := time.Since(contextStarted).Milliseconds()
+	_, _ = a.db.Exec(ctx, "UPDATE agent_runs SET context_latency_ms=$1,retrieval_latency_ms=$2 WHERE id=$3", contextLatency, retrievalLatency, runID)
 	start := time.Now()
 	result, chatErr := client.Chat(ctx, messages)
 	latency := time.Since(start).Milliseconds()

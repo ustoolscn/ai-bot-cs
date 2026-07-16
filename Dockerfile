@@ -27,17 +27,17 @@ RUN cd backend && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -
 FROM ${RUNTIME_IMAGE} AS runtime
 ARG ALPINE_MIRROR=https://mirrors.aliyun.com/alpine
 RUN sed -i "s#https\?://dl-cdn.alpinelinux.org/alpine#${ALPINE_MIRROR}#g" /etc/apk/repositories \
-    && apk add --no-cache ca-certificates tzdata \
+    && apk add --no-cache ca-certificates tzdata su-exec \
     && addgroup -S aibot \
     && adduser -S -G aibot -h /app aibot \
     && mkdir -p /app/data \
     && chown -R aibot:aibot /app
 WORKDIR /app
 COPY --from=backend-build --chown=aibot:aibot /out/ai-bot /app/ai-bot
+COPY --chmod=755 deploy/docker-entrypoint.sh /app/docker-entrypoint.sh
 ENV APP_ADDR=:8080 DATA_DIR=/app/data TZ=Asia/Shanghai
-USER aibot
 EXPOSE 8080
 VOLUME ["/app/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -q -O - http://127.0.0.1:8080/healthz >/dev/null || exit 1
-ENTRYPOINT ["/app/ai-bot"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

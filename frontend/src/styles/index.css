@@ -86,7 +86,12 @@ h1, h2, h3, p { margin-top: 0; }
 .panel-heading .el-button { padding: 0; }
 .pipeline-table-wrap { overflow-x: auto; }
 .pipeline-table, .alert-table, .queue-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.pipeline-table { min-width: 780px; }
+.pipeline-table { min-width: 1040px; }
+.pipeline-message { display:flex; flex-direction:column; gap:3px; min-width:180px; max-width:260px; }
+.pipeline-message strong { color:#263550; font-size:12px; }
+.pipeline-message span { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.trigger-status { display:flex; flex-direction:column; align-items:flex-start; gap:4px; }
+.trigger-status small { color:#c47a14; white-space:nowrap; }
 .pipeline-table th, .pipeline-table td, .alert-table th, .alert-table td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 .pipeline-table th, .alert-table th, .queue-table th { background: #f8fafc; color: #40506a; font-weight: 600; white-space: nowrap; }
 .pipeline-table tr:last-child td { border-bottom: 0; }

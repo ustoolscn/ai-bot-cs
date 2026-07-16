@@ -13,6 +13,7 @@ type ContentPart struct {
 
 type InboundMessage struct {
 	EventID, Channel, BotID, ConversationType, ConversationID string
+	ConversationName                                          string
 	SenderID, SenderName, PlatformMessageID, EventType, Text  string
 	Parts                                                     []ContentPart
 	EventTime                                                 time.Time
