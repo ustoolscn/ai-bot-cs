@@ -6,9 +6,16 @@ import (
 )
 
 type ContentPart struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-	URL  string `json:"url,omitempty"`
+	Type        string `json:"type"`
+	Text        string `json:"text,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Filename    string `json:"filename,omitempty"`
+	ContentType string `json:"contentType,omitempty"`
+	StorageKey  string `json:"storageKey,omitempty"`
+	SizeBytes   int64  `json:"sizeBytes,omitempty"`
+	Width       int    `json:"width,omitempty"`
+	Height      int    `json:"height,omitempty"`
+	Data        []byte `json:"-"`
 }
 
 type InboundMessage struct {
@@ -24,13 +31,24 @@ type InboundMessage struct {
 type OutboundMessage struct {
 	ID, Channel, BotID, ConversationType, ConversationID string
 	ReplyToMessageID, Text                               string
+	Parts                                                []ContentPart
 	ReplyDeadline                                        *time.Time
 	Sequence                                             int
 }
 
+type ChatContentPart struct {
+	Type        string `json:"type"`
+	Text        string `json:"text,omitempty"`
+	URL         string `json:"url,omitempty"`
+	ContentType string `json:"contentType,omitempty"`
+	Detail      string `json:"detail,omitempty"`
+	DataURL     string `json:"-"`
+}
+
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string            `json:"role"`
+	Content string            `json:"content"`
+	Parts   []ChatContentPart `json:"parts,omitempty"`
 }
 type ChatResult struct {
 	Content                   string

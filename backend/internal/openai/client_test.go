@@ -118,3 +118,63 @@ func TestResponsesWebSearch(t *testing.T) {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
+
+func TestChatCompletionsImageInput(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		messages := request["messages"].([]any)
+		content := messages[0].(map[string]any)["content"].([]any)
+		if content[0].(map[string]any)["text"] != "这是什么？" {
+			t.Fatalf("unexpected text part: %#v", content)
+		}
+		image := content[1].(map[string]any)
+		if image["type"] != "image_url" {
+			t.Fatalf("unexpected image part: %#v", image)
+		}
+		imageURL := image["image_url"].(map[string]any)
+		if imageURL["url"] != "data:image/png;base64,aW1hZ2U=" || imageURL["detail"] != "high" {
+			t.Fatalf("unexpected image_url: %#v", imageURL)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": "图片内容"}}}})
+	}))
+	defer s.Close()
+
+	c := New(s.URL, "", "vision-model", time.Second)
+	result, err := c.Chat(context.Background(), []domain.ChatMessage{{
+		Role: "user", Content: "这是什么？",
+		Parts: []domain.ChatContentPart{{Type: "image", DataURL: "data:image/png;base64,aW1hZ2U=", Detail: "high"}},
+	}})
+	if err != nil || result.Content != "图片内容" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestResponsesImageInput(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		input := request["input"].([]any)
+		content := input[0].(map[string]any)["content"].([]any)
+		image := content[1].(map[string]any)
+		if image["type"] != "input_image" || image["image_url"] != "data:image/jpeg;base64,aW1hZ2U=" || image["detail"] != "auto" {
+			t.Fatalf("unexpected responses image: %#v", image)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"output_text": "识别完成"})
+	}))
+	defer s.Close()
+
+	c := New(s.URL, "", "vision-model", time.Second)
+	c.UseResponses = true
+	result, err := c.Chat(context.Background(), []domain.ChatMessage{{
+		Role: "user", Content: "描述图片",
+		Parts: []domain.ChatContentPart{{Type: "image", DataURL: "data:image/jpeg;base64,aW1hZ2U="}},
+	}})
+	if err != nil || result.Content != "识别完成" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}

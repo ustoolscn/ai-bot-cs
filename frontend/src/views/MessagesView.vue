@@ -12,7 +12,7 @@
     <section class="table-panel">
       <el-table :data="filtered">
         <el-table-column prop="time" label="时间" width="170" />
-        <el-table-column label="消息" min-width="340"><template #default="{ row }"><div class="message-preview"><strong>{{ row.question }}</strong><span>{{ row.answer || '未生成回复' }}</span></div></template></el-table-column>
+        <el-table-column label="消息" min-width="340"><template #default="{ row }"><div class="message-preview"><strong>{{ row.question }}</strong><span>{{ row.attachments.length ? `包含 ${row.attachments.length} 张图片 · ` : '' }}{{ row.answer || '未生成回复' }}</span></div></template></el-table-column>
         <el-table-column label="机器人 / 会话" min-width="180"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.botName }}</strong><span>{{ row.conversationName }}</span></div></template></el-table-column>
         <el-table-column prop="sender" label="发送者" width="100" />
         <el-table-column label="模型" width="160"><template #default="{ row }"><el-button class="model-detail-link" link type="primary" @click="open(row)">{{ row.model || '查看详情' }}</el-button><small class="table-sub">{{ row.tokens }} tokens</small></template></el-table-column>
@@ -34,14 +34,14 @@
           <span>{{ selected.time }}</span>
         </div>
 
-        <div class="detail-section"><h3>用户消息</h3><div class="content-box">{{ selected.question }}</div></div>
+        <div class="detail-section"><h3>用户消息</h3><div class="content-box">{{ selected.question }}</div><div v-if="selected.attachments.length" class="message-image-grid"><el-image v-for="image in selected.attachments" :key="image.previewUrl" :src="image.previewUrl" :preview-src-list="selected.attachments.map(item=>item.previewUrl).filter(Boolean) as string[]" fit="cover" loading="lazy" /></div></div>
 
         <div class="detail-section">
           <h3>本次模型完整上下文 <small>（{{ selected.contextMessages?.length || 0 }} 条）</small></h3>
           <div v-if="selected.contextMessages?.length" class="context-message-list">
             <article v-for="(message, index) in selected.contextMessages" :key="`${index}-${message.role}`" class="context-message-item">
               <span :class="`role-${message.role}`">{{ roleText(message.role) }}</span>
-              <pre>{{ message.content }}</pre>
+              <div><pre>{{ message.content }}</pre><div v-if="message.parts?.length" class="message-image-grid compact"><el-image v-for="image in message.parts" :key="image.previewUrl" :src="image.previewUrl" :preview-src-list="message.parts.map(item=>item.previewUrl).filter(Boolean) as string[]" fit="cover" loading="lazy" /></div></div>
             </article>
           </div>
           <el-empty v-else :image-size="54" description="历史记录没有上下文快照；新版本处理的消息会在这里完整展示" />
@@ -51,7 +51,7 @@
           <div v-for="(step,index) in traceSteps" :key="step.title" class="trace-step" :class="step.status"><span>{{ index + 1 }}</span><div><strong>{{ step.title }}</strong><p>{{ step.description }}</p></div><em>{{ step.duration }}</em></div>
         </div>
 
-        <div class="detail-section"><h3>机器人回复</h3><div class="content-box">{{ selected.answer || '处理尚未完成或失败，未生成回复。' }}</div></div>
+        <div class="detail-section"><h3>机器人回复</h3><div class="content-box">{{ selected.answer || (selected.answerAttachments.length ? '图片回复' : '处理尚未完成或失败，未生成回复。') }}</div><div v-if="selected.answerAttachments.length" class="message-image-grid"><el-image v-for="image in selected.answerAttachments" :key="image.previewUrl" :src="image.previewUrl" :preview-src-list="selected.answerAttachments.map(item=>item.previewUrl).filter(Boolean) as string[]" fit="cover" loading="lazy" /></div></div>
 
         <div v-if="selected.retrievedChunks?.length" class="detail-section"><h3>知识召回详情</h3><div class="retrieved-chunk-list"><article v-for="(chunk,index) in selected.retrievedChunks" :key="chunk.id || index"><strong>片段 {{ index + 1 }}<span v-if="chunk.score !== undefined"> · 相似度 {{ (chunk.score * 100).toFixed(1) }}%</span></strong><p>{{ chunk.content }}</p></article></div></div>
 
@@ -89,7 +89,7 @@ const traceSteps = computed(() => {
     { title: 'QQ 事件接收', description: message.eventType, duration: '—', status: 'success' as Status },
     { title: '上下文构建', description: `实际发送给模型 ${message.contextMessages?.length || 0} 条消息`, duration: duration(message.contextLatency), status: stageStatus(Boolean(message.contextMessages?.length) || message.contextLatency > 0) },
     { title: '知识检索', description: `召回 ${message.knowledgeHits} 条知识片段`, duration: duration(message.retrievalLatency), status: stageStatus(message.retrievalLatency > 0 || message.knowledgeHits > 0) },
-    { title: '模型生成', description: message.model || '尚未调用', duration: duration(message.modelLatency), status: stageStatus(Boolean(message.answer) || message.modelLatency > 0) },
+    { title: '模型生成', description: message.model || '尚未调用', duration: duration(message.modelLatency), status: stageStatus(Boolean(message.answer) || message.answerAttachments.length > 0 || message.modelLatency > 0) },
     { title: 'QQ 消息投递', description: message.deliveryStatus === 'success' ? '发送成功' : message.deliveryStatus === 'failed' ? '发送失败' : '等待投递', duration: duration(message.deliveryLatency), status: message.deliveryStatus },
   ]
 })

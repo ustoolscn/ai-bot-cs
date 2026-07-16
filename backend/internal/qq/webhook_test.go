@@ -40,3 +40,21 @@ func TestShouldQueue(t *testing.T) {
 		t.Fatal("always mode should queue")
 	}
 }
+
+func TestParseImageAttachment(t *testing.T) {
+	body := []byte(`{"id":"evt-image","op":0,"t":"GROUP_AT_MESSAGE_CREATE","d":{"id":"m-image","group_openid":"g1","content":"看看这张图","author":{"member_openid":"u1","username":"小明"},"attachments":[{"content_type":"image/png","filename":"screen.png","size":2048,"width":1280,"height":720,"url":"https://example.com/screen.png"}]}}`)
+	_, message, err := Parse(body, "b1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message == nil || len(message.Parts) != 2 {
+		t.Fatalf("unexpected message parts: %#v", message)
+	}
+	image := message.Parts[1]
+	if image.Type != "image" || image.URL != "https://example.com/screen.png" || image.Filename != "screen.png" || image.ContentType != "image/png" {
+		t.Fatalf("unexpected image attachment: %#v", image)
+	}
+	if image.SizeBytes != 2048 || image.Width != 1280 || image.Height != 720 {
+		t.Fatalf("unexpected image metadata: %#v", image)
+	}
+}

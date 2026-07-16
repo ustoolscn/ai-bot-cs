@@ -43,6 +43,9 @@ type MessageData struct {
 		URL         string `json:"url"`
 		ContentType string `json:"content_type"`
 		Filename    string `json:"filename"`
+		Size        int64  `json:"size"`
+		Width       int    `json:"width"`
+		Height      int    `json:"height"`
 	} `json:"attachments"`
 }
 
@@ -123,9 +126,16 @@ func Parse(body []byte, botID string) (Envelope, *domain.InboundMessage, error) 
 	if ct == "private" {
 		conversationName = senderName
 	}
-	parts := []domain.ContentPart{{Type: "text", Text: strings.TrimSpace(d.Content)}}
+	parts := make([]domain.ContentPart, 0, len(d.Attachments)+1)
+	if text := strings.TrimSpace(d.Content); text != "" {
+		parts = append(parts, domain.ContentPart{Type: "text", Text: text})
+	}
 	for _, a := range d.Attachments {
-		parts = append(parts, domain.ContentPart{Type: "attachment", URL: a.URL, Text: a.Filename})
+		partType := "attachment"
+		if strings.HasPrefix(strings.ToLower(a.ContentType), "image/") {
+			partType = "image"
+		}
+		parts = append(parts, domain.ContentPart{Type: partType, URL: a.URL, Text: a.Filename, Filename: a.Filename, ContentType: a.ContentType, SizeBytes: a.Size, Width: a.Width, Height: a.Height})
 	}
 	eventTime := time.Now().UTC()
 	if d.Timestamp != "" {

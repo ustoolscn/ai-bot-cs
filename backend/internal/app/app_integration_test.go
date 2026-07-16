@@ -55,6 +55,12 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create app: %v", err)
 	}
+	imageServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(testPNG)
+	}))
+	t.Cleanup(imageServer.Close)
+	application.imageHTTP = imageServer.Client()
 
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
 	workersDone := make(chan struct{})
@@ -222,6 +228,42 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 		return sent == 2 && mock.QQSendCount() == 2, err
 	})
 
+	mock.SetNextChatContent("这是图片回复。\n![结果](https://example.com/result.png)")
+	imageBody := qqImageEventBody(t, "event-image", "message-image", "请识别这张图片", imageServer.URL+"/question.png")
+	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, imageBody)
+	eventually(t, 8*time.Second, "image answer delivered to QQ", func() (bool, error) {
+		var sent int
+		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
+		return sent == 3 && mock.ChatCount() == 3 && mock.QQSendCount() == 3 && mock.QQUploadCount() == 1, err
+	})
+	imageChatPayload := string(mock.ChatRequests()[2])
+	if !strings.Contains(imageChatPayload, `"type":"image_url"`) || !strings.Contains(imageChatPayload, `"url":"data:image/png;base64,`) {
+		t.Fatalf("image was not sent to the multimodal model: %s", imageChatPayload)
+	}
+	imageUpload := mock.QQUploads()[0]
+	if imageUpload.Path != "/v2/groups/group-open-id/files" || imageUpload.Body["file_type"] != float64(1) || imageUpload.Body["url"] != "https://example.com/result.png" {
+		t.Fatalf("unexpected QQ image upload: %#v", imageUpload)
+	}
+	imageSend := mock.QQSends()[2]
+	if imageSend.Body["msg_type"] != float64(7) || imageSend.Body["msg_id"] != "message-image" {
+		t.Fatalf("unexpected QQ image message: %#v", imageSend.Body)
+	}
+	if media, _ := imageSend.Body["media"].(map[string]any); media["file_info"] != "mock-file-info" {
+		t.Fatalf("unexpected QQ image media: %#v", imageSend.Body["media"])
+	}
+	var imageMessageID string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM messages WHERE platform_message_id='message-image'`).Scan(&imageMessageID); err != nil {
+		t.Fatal(err)
+	}
+	imageDetail := requestJSON(t, client, http.MethodGet, server.URL+"/api/messages/"+imageMessageID, nil, http.StatusOK)
+	if !bytes.Contains(imageDetail, []byte(`"previewUrl":"/api/messages/`+imageMessageID+`/attachments/1"`)) || !bytes.Contains(imageDetail, []byte(`"previewUrl":"https://example.com/result.png"`)) || bytes.Contains(imageDetail, []byte(`storageKey`)) {
+		t.Fatalf("message detail did not expose safe image previews: %s", imageDetail)
+	}
+	imagePreview := requestBytes(t, client, http.MethodGet, server.URL+"/api/messages/"+imageMessageID+"/attachments/1", http.StatusOK)
+	if !bytes.Equal(imagePreview, testPNG) {
+		t.Fatalf("unexpected cached image response: %x", imagePreview)
+	}
+
 	conversationsJSON := requestJSON(t, client, http.MethodGet, server.URL+"/api/conversations", nil, http.StatusOK)
 	if !bytes.Contains(conversationsJSON, []byte(`"name":"测试群"`)) || !bytes.Contains(conversationsJSON, []byte(`"hasFullMessageEvents":true`)) || !bytes.Contains(conversationsJSON, []byte(`"messageCount":`)) || !bytes.Contains(conversationsJSON, []byte(`"memberCount":`)) {
 		t.Fatalf("conversation list is missing friendly name or statistics: %s", conversationsJSON)
@@ -324,10 +366,12 @@ func newIntegrationSchema(t *testing.T, ctx context.Context, databaseURL string)
 
 type upstreamMock struct {
 	*httptest.Server
-	t          *testing.T
-	mu         sync.Mutex
-	chatBodies [][]byte
-	qqSends    []qqSendRequest
+	t               *testing.T
+	mu              sync.Mutex
+	chatBodies      [][]byte
+	qqSends         []qqSendRequest
+	qqUploads       []qqSendRequest
+	nextChatContent string
 }
 
 type qqSendRequest struct {
@@ -363,13 +407,28 @@ func (m *upstreamMock) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		m.mu.Lock()
 		m.chatBodies = append(m.chatBodies, append([]byte(nil), body...))
+		content := m.nextChatContent
+		m.nextChatContent = ""
 		m.mu.Unlock()
+		if content == "" {
+			content = "根据知识库，退款期限是七天。"
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": "根据知识库，退款期限是七天。"}}},
+			"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": content}}},
 			"usage":   map[string]int{"prompt_tokens": 42, "completion_tokens": 9},
 		})
 	case r.URL.Path == "/token":
 		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "mock-access-token", "expires_in": 7200})
+	case strings.HasPrefix(r.URL.Path, "/v2/groups/") && strings.HasSuffix(r.URL.Path, "/files"):
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		m.mu.Lock()
+		m.qqUploads = append(m.qqUploads, qqSendRequest{Path: r.URL.Path, Authorization: r.Header.Get("Authorization"), Body: body})
+		m.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"file_info": "mock-file-info"})
 	case strings.HasPrefix(r.URL.Path, "/v2/groups/") && strings.HasSuffix(r.URL.Path, "/messages"):
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -416,6 +475,26 @@ func (m *upstreamMock) QQSends() []qqSendRequest {
 	return out
 }
 
+func (m *upstreamMock) SetNextChatContent(content string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextChatContent = content
+}
+
+func (m *upstreamMock) QQUploadCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.qqUploads)
+}
+
+func (m *upstreamMock) QQUploads() []qqSendRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]qqSendRequest, len(m.qqUploads))
+	copy(out, m.qqUploads)
+	return out
+}
+
 func requestJSON(t *testing.T, client *http.Client, method, endpoint string, payload any, status int) []byte {
 	t.Helper()
 	var body io.Reader
@@ -432,6 +511,27 @@ func requestJSON(t *testing.T, client *http.Client, method, endpoint string, pay
 	}
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, endpoint, err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != status {
+		t.Fatalf("%s %s: status=%d want=%d body=%s", method, endpoint, resp.StatusCode, status, data)
+	}
+	return data
+}
+
+func requestBytes(t *testing.T, client *http.Client, method, endpoint string, status int) []byte {
+	t.Helper()
+	req, err := http.NewRequest(method, endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -527,6 +627,26 @@ func qqEventBody(t *testing.T, eventID, eventType, messageID, content string) []
 			"id": messageID, "group_openid": "group-open-id", "content": content,
 			"timestamp": time.Now().UTC().Format(time.RFC3339),
 			"author":    map[string]any{"member_openid": "member-open-id", "username": "群成员"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func qqImageEventBody(t *testing.T, eventID, messageID, content, imageURL string) []byte {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"id": eventID, "op": 0, "t": "GROUP_AT_MESSAGE_CREATE",
+		"d": map[string]any{
+			"id": messageID, "group_openid": "group-open-id", "content": content,
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
+			"author":    map[string]any{"member_openid": "member-open-id", "username": "群成员"},
+			"attachments": []map[string]any{{
+				"content_type": "image/png", "filename": "question.png", "size": len(testPNG),
+				"width": 16, "height": 16, "url": imageURL,
+			}},
 		},
 	})
 	if err != nil {

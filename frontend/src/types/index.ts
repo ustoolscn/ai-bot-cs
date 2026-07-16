@@ -83,6 +83,8 @@ export interface MessageRecord {
   deliveryLatency: number
   traceId: string
   platformMessageId?: string
+  attachments: MessageAttachment[]
+  answerAttachments: MessageAttachment[]
   contextMessages?: ContextMessage[]
   retrievedChunks?: Array<{ content?: string; score?: number; documentId?: string; id?: string }>
 }
@@ -90,6 +92,18 @@ export interface MessageRecord {
 export interface ContextMessage {
   role: 'system' | 'developer' | 'user' | 'assistant' | string
   content: string
+  parts?: MessageAttachment[]
+}
+
+export interface MessageAttachment {
+  type: string
+  text?: string
+  filename?: string
+  contentType?: string
+  sizeBytes?: number
+  width?: number
+  height?: number
+  previewUrl?: string
 }
 
 export interface KnowledgeDocument {

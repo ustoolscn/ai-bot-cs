@@ -14,11 +14,13 @@ describe('message trace mapping', () => {
 
   it('maps actual model usage and the saved context snapshot', async () => {
     vi.mocked(request).mockResolvedValue({
-      id: 'message-1', question: '@机器人 最新消息？', answer: '这是最新结果。', senderName: '用户', eventType: 'GROUP_AT_MESSAGE_CREATE', eventAt: '2026-07-16T08:00:00Z', platformMessageId: 'ROBOT1.0_long_message_id', conversationName: '测试群', botName: '机器人', model: 'gpt-test', status: 'completed', inputTokens: 120, outputTokens: 30, modelLatencyMs: 800, contextLatencyMs: 20, retrievalLatencyMs: 40, deliveryLatencyMs: 100, latencyMs: 960, knowledgeHits: 2, deliveryStatus: 'sent', traceId: 'message-1', agentRuns: [{ contextMessages: [{ role: 'system', content: '系统提示' }, { role: 'user', content: '最新消息？' }], retrievedChunks: [{ content: '资料', score: 0.9 }] }],
+      id: 'message-1', question: '@机器人 最新消息？', parts: [{ type: 'image', filename: 'question.png', previewUrl: '/api/messages/message-1/attachments/0' }], answer: '这是最新结果。', answerParts: [{ type: 'image', previewUrl: 'https://example.com/result.png' }], senderName: '用户', eventType: 'GROUP_AT_MESSAGE_CREATE', eventAt: '2026-07-16T08:00:00Z', platformMessageId: 'ROBOT1.0_long_message_id', conversationName: '测试群', botName: '机器人', model: 'gpt-test', status: 'completed', inputTokens: 120, outputTokens: 30, modelLatencyMs: 800, contextLatencyMs: 20, retrievalLatencyMs: 40, deliveryLatencyMs: 100, latencyMs: 960, knowledgeHits: 2, deliveryStatus: 'sent', traceId: 'message-1', agentRuns: [{ contextMessages: [{ role: 'system', content: '系统提示' }, { role: 'user', content: '最新消息？', parts: [{ type: 'image', url: '/api/messages/message-1/attachments/0' }] }], retrievedChunks: [{ content: '资料', score: 0.9 }] }],
     })
 
     const detail = await api.messages.detail('message-1')
     expect(detail).toMatchObject({ tokens: 150, inputTokens: 120, outputTokens: 30, model: 'gpt-test', deliveryStatus: 'success', traceId: 'message-1' })
-    expect(detail.contextMessages).toEqual([{ role: 'system', content: '系统提示' }, { role: 'user', content: '最新消息？' }])
+    expect(detail.attachments).toEqual([{ type: 'image', filename: 'question.png', previewUrl: '/api/messages/message-1/attachments/0', text: undefined, contentType: undefined, sizeBytes: undefined, width: undefined, height: undefined }])
+    expect(detail.answerAttachments[0]?.previewUrl).toBe('https://example.com/result.png')
+    expect(detail.contextMessages?.[1]?.parts?.[0]?.previewUrl).toBe('/api/messages/message-1/attachments/0')
   })
 })

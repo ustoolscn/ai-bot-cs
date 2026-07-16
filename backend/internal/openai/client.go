@@ -69,13 +69,21 @@ func (c *Client) Chat(ctx context.Context, messages []domain.ChatMessage) (domai
 }
 
 func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMessage) (domain.ChatResult, error) {
-	type msg struct {
+	type requestMsg struct {
+		Role    string `json:"role"`
+		Content any    `json:"content"`
+	}
+	type responseMsg struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}
-	chatMessages := make([]msg, 0, len(messages))
+	chatMessages := make([]requestMsg, 0, len(messages))
 	for _, m := range messages {
-		chatMessages = append(chatMessages, msg{m.Role, m.Content})
+		content := any(m.Content)
+		if len(m.Parts) > 0 {
+			content = completionContent(m)
+		}
+		chatMessages = append(chatMessages, requestMsg{Role: m.Role, Content: content})
 	}
 	req := map[string]any{"model": c.Model, "messages": chatMessages, "temperature": 0.3}
 	for key, value := range c.ExtraBody {
@@ -89,7 +97,7 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 	}
 	var resp struct {
 		Choices []struct {
-			Message msg `json:"message"`
+			Message responseMsg `json:"message"`
 		} `json:"choices"`
 		Usage struct {
 			Prompt     int `json:"prompt_tokens"`
@@ -108,7 +116,7 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessage) (domain.ChatResult, error) {
 	type inputMessage struct {
 		Role    string `json:"role"`
-		Content string `json:"content"`
+		Content any    `json:"content"`
 	}
 	input := make([]inputMessage, 0, len(messages))
 	instructions := make([]string, 0, 2)
@@ -123,7 +131,11 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 		if role != "assistant" {
 			role = "user"
 		}
-		input = append(input, inputMessage{Role: role, Content: message.Content})
+		content := any(message.Content)
+		if len(message.Parts) > 0 {
+			content = responsesContent(message)
+		}
+		input = append(input, inputMessage{Role: role, Content: content})
 	}
 	payload := map[string]any{
 		"model": c.Model,
@@ -178,6 +190,62 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 		return domain.ChatResult{}, fmt.Errorf("responses API returned no output_text")
 	}
 	return domain.ChatResult{Content: content, InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens}, nil
+}
+
+func completionContent(message domain.ChatMessage) []map[string]any {
+	parts := make([]map[string]any, 0, len(message.Parts)+1)
+	if strings.TrimSpace(message.Content) != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": message.Content})
+	}
+	for _, part := range message.Parts {
+		if part.Type == "text" && strings.TrimSpace(part.Text) != "" {
+			parts = append(parts, map[string]any{"type": "text", "text": part.Text})
+			continue
+		}
+		if part.Type != "image" {
+			continue
+		}
+		imageURL := part.DataURL
+		if imageURL == "" {
+			imageURL = part.URL
+		}
+		if imageURL != "" {
+			detail := part.Detail
+			if detail == "" {
+				detail = "auto"
+			}
+			parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": imageURL, "detail": detail}})
+		}
+	}
+	return parts
+}
+
+func responsesContent(message domain.ChatMessage) []map[string]any {
+	parts := make([]map[string]any, 0, len(message.Parts)+1)
+	if strings.TrimSpace(message.Content) != "" {
+		parts = append(parts, map[string]any{"type": "input_text", "text": message.Content})
+	}
+	for _, part := range message.Parts {
+		if part.Type == "text" && strings.TrimSpace(part.Text) != "" {
+			parts = append(parts, map[string]any{"type": "input_text", "text": part.Text})
+			continue
+		}
+		if part.Type != "image" {
+			continue
+		}
+		imageURL := part.DataURL
+		if imageURL == "" {
+			imageURL = part.URL
+		}
+		if imageURL != "" {
+			detail := part.Detail
+			if detail == "" {
+				detail = "auto"
+			}
+			parts = append(parts, map[string]any{"type": "input_image", "image_url": imageURL, "detail": detail})
+		}
+	}
+	return parts
 }
 
 func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error) {

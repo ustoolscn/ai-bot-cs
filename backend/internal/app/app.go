@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -31,11 +32,13 @@ import (
 )
 
 type App struct {
-	cfg    config.Config
-	db     *pgxpool.Pool
-	cipher *secure.Cipher
-	files  *storage.Local
-	log    *slog.Logger
+	cfg       config.Config
+	db        *pgxpool.Pool
+	cipher    *secure.Cipher
+	files     *storage.Local
+	images    *storage.Local
+	imageHTTP *http.Client
+	log       *slog.Logger
 }
 
 func New(ctx context.Context, cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (*App, error) {
@@ -47,7 +50,11 @@ func New(ctx context.Context, cfg config.Config, pool *pgxpool.Pool, logger *slo
 	if err != nil {
 		return nil, err
 	}
-	a := &App{cfg: cfg, db: pool, cipher: c, files: f, log: logger}
+	images, err := storage.NewLocal(filepath.Join(cfg.DataDir, "message-images"))
+	if err != nil {
+		return nil, err
+	}
+	a := &App{cfg: cfg, db: pool, cipher: c, files: f, images: images, imageHTTP: newSafeImageHTTPClient(), log: logger}
 	if err := a.ensureRuntimeSettings(ctx); err != nil {
 		return nil, err
 	}
@@ -113,6 +120,7 @@ func (a *App) Router() http.Handler {
 	auth.PUT("/conversations/:id", a.updateConversation)
 	auth.GET("/messages", a.listMessages)
 	auth.GET("/messages/:id", a.getMessage)
+	auth.GET("/messages/:id/attachments/:index", a.getMessageAttachment)
 	auth.GET("/knowledge-bases", a.listKBs)
 	auth.POST("/knowledge-bases", a.createKB)
 	auth.GET("/knowledge-bases/:id", a.getKB)
@@ -571,9 +579,9 @@ func (a *App) listMessages(c *gin.Context) {
 	if v, _ := strconv.Atoi(c.DefaultQuery("limit", "50")); v > 0 && v <= 200 {
 		limit = v
 	}
-	query := `SELECT m.id::text,m.content AS question,m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",
+	query := `SELECT m.id::text,m.content AS question,m.parts,m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",
 		m.platform_message_id AS "platformMessageId",c.name AS "conversationName",b.name AS "botName",
-		COALESCE(om.content,'') AS answer,COALESCE(ar.status,t.status) AS status,
+		COALESCE(om.content,'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",COALESCE(ar.status,t.status) AS status,
 		COALESCE(mp.name,mp.model,'') AS model,COALESCE(mc.input_tokens,0) AS "inputTokens",COALESCE(mc.output_tokens,0) AS "outputTokens",
 		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
 		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",COALESCE(jsonb_array_length(ar.retrieved_chunks),0) AS "knowledgeHits",
@@ -591,13 +599,26 @@ func (a *App) listMessages(c *gin.Context) {
 	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true
 	LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
 	ORDER BY m.event_at DESC LIMIT $1`
-	queryList(c, a, query, limit)
+	rows, err := a.db.Query(c, query, limit)
+	if err != nil {
+		fail(c, 500, "database_error", "读取消息记录失败")
+		return
+	}
+	items, err := rowsJSON(rows)
+	if err != nil {
+		fail(c, 500, "database_error", "读取消息记录失败")
+		return
+	}
+	for _, item := range items {
+		decorateMessageParts(item)
+	}
+	ok(c, items)
 }
 func (a *App) getMessage(c *gin.Context) {
 	var msg map[string]any
-	rows, err := a.db.Query(c, `SELECT m.id::text,m.content AS question,m.sender_id AS "senderId",m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",m.raw_event AS "rawEvent",
+	rows, err := a.db.Query(c, `SELECT m.id::text,m.content AS question,m.parts,m.sender_id AS "senderId",m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",m.raw_event AS "rawEvent",
 		m.platform_message_id AS "platformMessageId",c.name AS "conversationName",b.name AS "botName",
-		COALESCE(om.content,'') AS answer,COALESCE(ar.status,t.status) AS status,
+		COALESCE(om.content,'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",COALESCE(ar.status,t.status) AS status,
 		COALESCE(mp.name,mp.model,'') AS model,COALESCE(mc.input_tokens,0) AS "inputTokens",COALESCE(mc.output_tokens,0) AS "outputTokens",
 		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
 		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",COALESCE(jsonb_array_length(ar.retrieved_chunks),0) AS "knowledgeHits",
@@ -625,6 +646,7 @@ func (a *App) getMessage(c *gin.Context) {
 		fail(c, 404, "not_found", "消息不存在")
 		return
 	}
+	decorateMessageParts(msg)
 	runs, _ := a.db.Query(c, `SELECT r.id::text,r.status,r.context_messages AS "contextMessages",r.retrieved_chunks AS "retrievedChunks",
 		r.context_latency_ms AS "contextLatencyMs",r.retrieval_latency_ms AS "retrievalLatencyMs",r.error,r.started_at AS "startedAt",r.completed_at AS "completedAt",
 		COALESCE(json_agg(json_build_object('kind',mc.kind,'profileName',COALESCE(mp.name,mp.model,''),'model',COALESCE(mp.model,''),'inputTokens',mc.input_tokens,'outputTokens',mc.output_tokens,'latencyMs',mc.latency_ms,'error',mc.error) ORDER BY mc.created_at) FILTER(WHERE mc.id IS NOT NULL),'[]') AS calls

@@ -66,7 +66,13 @@ func (a *App) processMaintenance(ctx context.Context) error {
 	if _, err = tx.Exec(ctx, "DELETE FROM admin_sessions WHERE expires_at<now()"); err != nil {
 		return fmt.Errorf("清理过期管理会话失败: %w", err)
 	}
-	return tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
+	if err = a.images.CleanupOlderThan(cutoff); err != nil {
+		return fmt.Errorf("清理过期图片缓存失败: %w", err)
+	}
+	return nil
 }
 func (a *App) workerLoop(ctx context.Context, name string, fn func(context.Context) error) {
 	ticker := time.NewTicker(a.cfg.WorkerPoll)
@@ -136,9 +142,19 @@ func (a *App) processInbox(ctx context.Context) error {
 	if err = a.db.QueryRow(ctx, "INSERT INTO agent_runs(message_id) VALUES($1) RETURNING id::text", j.MessageID).Scan(&runID); err != nil {
 		return a.retryInbox(ctx, j, err)
 	}
-	messages := []domain.ChatMessage{{Role: "system", Content: j.SystemPrompt}}
+	imageParts, err := a.prepareMessageImages(ctx, j.MessageID)
+	if err != nil {
+		_, _ = a.db.Exec(ctx, "UPDATE agent_runs SET status='failed',error=$1,completed_at=now() WHERE id=$2", err.Error(), runID)
+		return a.retryInbox(ctx, j, err)
+	}
+	systemPrompt := strings.TrimSpace(j.SystemPrompt) + "\n\n如需让机器人向 QQ 用户发送图片，请在回复中使用 Markdown 图片语法 ![图片说明](https://公开图片地址)，每次回复最多发送一张图片。"
+	messages := []domain.ChatMessage{{Role: "system", Content: strings.TrimSpace(systemPrompt)}}
 	retrievalStarted := time.Now()
-	kbContext, hits, err := a.retrieveForConversation(ctx, j.ConversationID, j.Content)
+	var kbContext string
+	var hits []map[string]any
+	if strings.TrimSpace(j.Content) != "" {
+		kbContext, hits, err = a.retrieveForConversation(ctx, j.ConversationID, j.Content)
+	}
 	retrievalLatency := time.Since(retrievalStarted).Milliseconds()
 	if err != nil {
 		a.log.Warn("knowledge retrieval failed", "message", j.MessageID, "error", err)
@@ -169,7 +185,11 @@ func (a *App) processInbox(ctx context.Context) error {
 			messages = append(messages, domain.ChatMessage{Role: role, Content: content})
 		}
 	}
-	messages = append(messages, domain.ChatMessage{Role: "user", Content: j.Content})
+	userContent := strings.TrimSpace(j.Content)
+	if userContent == "" && len(imageParts) > 0 {
+		userContent = "请分析用户发送的图片并回答。"
+	}
+	messages = append(messages, domain.ChatMessage{Role: "user", Content: userContent, Parts: imageParts})
 	contextLatency := time.Since(contextStarted).Milliseconds()
 	contextJSON, _ := json.Marshal(messages)
 	_, _ = a.db.Exec(ctx, "UPDATE agent_runs SET context_latency_ms=$1,retrieval_latency_ms=$2,context_messages=$3::jsonb WHERE id=$4", contextLatency, retrievalLatency, string(contextJSON), runID)
@@ -187,8 +207,10 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.retryInbox(ctx, j, err)
 	}
 	defer tx.Rollback(ctx)
+	responseText, responseParts := extractOutboundImage(result.Content)
+	partsJSON, _ := json.Marshal(responseParts)
 	var outID string
-	err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,content,reply_to_message_id,status,event_at,reply_deadline) VALUES('qq',$1,$2,'outbound',$3,$4,'pending',now(),$5) RETURNING id::text`, j.BotID, j.ConversationID, result.Content, j.PlatformMessageID, j.Deadline).Scan(&outID)
+	err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,content,parts,reply_to_message_id,status,event_at,reply_deadline) VALUES('qq',$1,$2,'outbound',$3,$4::jsonb,$5,'pending',now(),$6) RETURNING id::text`, j.BotID, j.ConversationID, responseText, string(partsJSON), j.PlatformMessageID, j.Deadline).Scan(&outID)
 	if err == nil {
 		_, err = tx.Exec(ctx, "INSERT INTO outbox_tasks(message_id) VALUES($1)", outID)
 	}
@@ -377,6 +399,7 @@ type outboxJob struct {
 	TaskID, MessageID, BotID, ConversationType, ConversationID, ReplyTo, Text, AppID, SecretEnc string
 	Sequence, Attempts                                                                          int
 	Deadline                                                                                    *time.Time
+	Parts                                                                                       []domain.ContentPart
 }
 
 func (a *App) claimOutbox(ctx context.Context) (outboxJob, error) {
@@ -386,10 +409,12 @@ func (a *App) claimOutbox(ctx context.Context) (outboxJob, error) {
 	}
 	defer tx.Rollback(ctx)
 	var j outboxJob
-	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,c.type,c.platform_id,COALESCE(m.reply_to_message_id,''),m.content,b.app_id,b.app_secret_enc,t.msg_seq,t.attempts,m.reply_deadline FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='pending' AND t.next_attempt_at<=now() ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationType, &j.ConversationID, &j.ReplyTo, &j.Text, &j.AppID, &j.SecretEnc, &j.Sequence, &j.Attempts, &j.Deadline)
+	var partsRaw []byte
+	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,c.type,c.platform_id,COALESCE(m.reply_to_message_id,''),m.content,m.parts,b.app_id,b.app_secret_enc,t.msg_seq,t.attempts,m.reply_deadline FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='pending' AND t.next_attempt_at<=now() ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationType, &j.ConversationID, &j.ReplyTo, &j.Text, &partsRaw, &j.AppID, &j.SecretEnc, &j.Sequence, &j.Attempts, &j.Deadline)
 	if err != nil {
 		return j, err
 	}
+	_ = json.Unmarshal(partsRaw, &j.Parts)
 	_, err = tx.Exec(ctx, "UPDATE outbox_tasks SET status='processing',attempts=attempts+1,locked_at=now(),updated_at=now() WHERE id=$1", j.TaskID)
 	if err != nil {
 		return j, err
@@ -410,8 +435,16 @@ func (a *App) processOutbox(ctx context.Context) error {
 	if err != nil {
 		return a.retryOutbox(ctx, j, err)
 	}
+	for index := range j.Parts {
+		if j.Parts[index].Type == "image" && j.Parts[index].StorageKey != "" {
+			j.Parts[index].Data, err = a.images.Read(ctx, j.Parts[index].StorageKey)
+			if err != nil {
+				return a.retryOutbox(ctx, j, fmt.Errorf("读取待发送图片失败: %w", err))
+			}
+		}
+	}
 	client := qq.NewClient(j.AppID, secret, a.cfg.QQAPIBaseURL, a.cfg.QQTokenURL)
-	pid, err := client.Send(ctx, domain.OutboundMessage{ID: j.MessageID, Channel: "qq", BotID: j.BotID, ConversationType: j.ConversationType, ConversationID: j.ConversationID, ReplyToMessageID: j.ReplyTo, Text: j.Text, ReplyDeadline: j.Deadline, Sequence: j.Sequence})
+	pid, err := client.Send(ctx, domain.OutboundMessage{ID: j.MessageID, Channel: "qq", BotID: j.BotID, ConversationType: j.ConversationType, ConversationID: j.ConversationID, ReplyToMessageID: j.ReplyTo, Text: j.Text, Parts: j.Parts, ReplyDeadline: j.Deadline, Sequence: j.Sequence})
 	if err != nil {
 		return a.retryOutbox(ctx, j, err)
 	}
