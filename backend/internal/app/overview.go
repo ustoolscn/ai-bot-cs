@@ -13,8 +13,11 @@ type overviewPipeline struct {
 	Bot          string         `json:"bot"`
 	Conversation string         `json:"conversation"`
 	Content      string         `json:"content"`
+	EventType    string         `json:"eventType"`
 	EventMS      int64          `json:"eventMs"`
 	ContextMS    int64          `json:"contextMs"`
+	ContextLabel string         `json:"contextLabel"`
+	ContextState string         `json:"contextStatus"`
 	Retrieval    map[string]any `json:"retrieval"`
 	Model        map[string]any `json:"model"`
 	Delivery     map[string]any `json:"delivery"`
@@ -62,7 +65,29 @@ func (a *App) overview(c *gin.Context) {
 }
 
 func (a *App) overviewPipelines(c *gin.Context) []overviewPipeline {
-	rows, err := a.db.Query(c, `SELECT m.id::text,m.event_at,b.name,c.name,left(m.content,160),GREATEST(EXTRACT(EPOCH FROM (t.created_at-m.created_at))*1000,0)::bigint,COALESCE(ar.context_latency_ms,0),COALESCE(ar.retrieval_latency_ms,0),COALESCE(jsonb_array_length(ar.retrieved_chunks),0),COALESCE(ar.status,'pending'),COALESCE(mc.latency_ms,0),COALESCE(mp.name,mp.model,''),COALESCE(mc.error,''),COALESCE(ot.status,'pending'),COALESCE(GREATEST(EXTRACT(EPOCH FROM (ot.updated_at-ot.created_at))*1000,0),0)::bigint,COALESCE(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ot.updated_at,ar.completed_at,now())-m.created_at))*1000,0),0)::bigint FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY created_at DESC LIMIT 1) mc ON true LEFT JOIN model_profiles mp ON mp.id=mc.profile_id LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true LEFT JOIN outbox_tasks ot ON ot.message_id=om.id ORDER BY m.event_at DESC LIMIT 10`)
+	rows, err := a.db.Query(c, `
+		SELECT w.id::text,w.created_at,b.name,
+		       COALESCE(NULLIF(c.name,''),'系统事件'),
+		       COALESCE(NULLIF(left(m.content,160),''),w.event_type),w.event_type,
+		       CASE WHEN m.id IS NULL THEN 0 ELSE GREATEST(EXTRACT(EPOCH FROM (m.created_at-w.created_at))*1000,0)::bigint END,
+		       COALESCE(ar.context_latency_ms,0),COALESCE(ar.retrieval_latency_ms,0),
+		       COALESCE(jsonb_array_length(ar.retrieved_chunks),0),
+		       COALESCE(t.status,'not_triggered'),COALESCE(ar.status,'pending'),
+		       COALESCE(mc.latency_ms,0),COALESCE(mp.name,mp.model,''),COALESCE(mc.error,''),
+		       COALESCE(ot.status,'pending'),
+		       COALESCE(GREATEST(EXTRACT(EPOCH FROM (ot.updated_at-ot.created_at))*1000,0),0)::bigint,
+		       CASE WHEN t.id IS NULL THEN 0 ELSE COALESCE(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ot.updated_at,ar.completed_at,now())-w.created_at))*1000,0),0)::bigint END
+		FROM webhook_events w
+		JOIN bots b ON b.id=w.bot_id
+		LEFT JOIN messages m ON m.channel=w.channel AND m.bot_id=w.bot_id AND m.direction='inbound' AND m.platform_message_id=(w.raw_event #>> '{d,id}')
+		LEFT JOIN conversations c ON c.id=m.conversation_id
+		LEFT JOIN inbox_tasks t ON t.message_id=m.id
+		LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true
+		LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY created_at DESC LIMIT 1) mc ON true
+		LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
+		LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true
+		LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
+		ORDER BY w.created_at DESC LIMIT 10`)
 	if err != nil {
 		a.log.Warn("overview pipelines", "error", err)
 		return []overviewPipeline{}
@@ -72,14 +97,27 @@ func (a *App) overviewPipelines(c *gin.Context) []overviewPipeline {
 	for rows.Next() {
 		var p overviewPipeline
 		var contextMS, retrievalMS, hits, modelMS, deliveryMS int64
-		var runStatus, modelName, modelError, deliveryStatus string
-		if err := rows.Scan(&p.ID, &p.Time, &p.Bot, &p.Conversation, &p.Content, &p.EventMS, &contextMS, &retrievalMS, &hits, &runStatus, &modelMS, &modelName, &modelError, &deliveryStatus, &deliveryMS, &p.TotalMS); err != nil {
+		var taskStatus, runStatus, modelName, modelError, deliveryStatus string
+		if err := rows.Scan(&p.ID, &p.Time, &p.Bot, &p.Conversation, &p.Content, &p.EventType, &p.EventMS, &contextMS, &retrievalMS, &hits, &taskStatus, &runStatus, &modelMS, &modelName, &modelError, &deliveryStatus, &deliveryMS, &p.TotalMS); err != nil {
+			a.log.Warn("scan overview pipeline", "error", err)
 			continue
 		}
 		p.ContextMS = contextMS
+		switch {
+		case taskStatus == "not_triggered":
+			p.ContextLabel, p.ContextState = "未触发", "warning"
+		case taskStatus == "failed":
+			p.ContextLabel, p.ContextState = "失败", "failed"
+		case runStatus == "pending":
+			p.ContextLabel, p.ContextState = "排队", "pending"
+		default:
+			p.ContextLabel, p.ContextState = "构建", "success"
+		}
 		retrievalStatus := "success"
 		if runStatus == "pending" {
 			retrievalStatus = "pending"
+		} else if runStatus == "failed" && retrievalMS == 0 {
+			retrievalStatus = "failed"
 		} else if retrievalMS > 5000 {
 			retrievalStatus = "warning"
 		}

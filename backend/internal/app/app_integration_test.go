@@ -227,7 +227,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 		t.Fatalf("conversation list is missing friendly name or statistics: %s", conversationsJSON)
 	}
 	overviewJSON := requestJSON(t, client, http.MethodGet, server.URL+"/api/system/overview", nil, http.StatusOK)
-	if !bytes.Contains(overviewJSON, []byte(`"pipelines":[{`)) || !bytes.Contains(overviewJSON, []byte(`"totalEvents":`)) || !bytes.Contains(overviewJSON, []byte(`"successful":`)) {
+	if !bytes.Contains(overviewJSON, []byte(`"pipelines":[{`)) || !bytes.Contains(overviewJSON, []byte(`"contextLabel":"未触发"`)) || !bytes.Contains(overviewJSON, []byte(`"totalEvents":`)) || !bytes.Contains(overviewJSON, []byte(`"successful":`)) {
 		t.Fatalf("overview is missing operational data: %s", overviewJSON)
 	}
 

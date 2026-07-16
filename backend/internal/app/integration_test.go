@@ -62,6 +62,15 @@ func TestDatabaseWorkerReliability(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": "chat-ok"}}}, "usage": map[string]int{"prompt_tokens": 7, "completion_tokens": 3}})
 				return
 			}
+			if r.URL.Path == "/v1/responses" {
+				tools, _ := request["tools"].([]any)
+				if len(tools) != 1 || tools[0].(map[string]any)["type"] != "web_search" {
+					http.Error(w, "missing web_search tool", http.StatusBadRequest)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"output": []any{map[string]any{"type": "message", "content": []any{map[string]any{"type": "output_text", "text": "responses-search-ok"}}}}, "usage": map[string]int{"input_tokens": 9, "output_tokens": 4}})
+				return
+			}
 			if r.URL.Path == "/v1/embeddings" {
 				_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]any{"index": 0, "embedding": []float32{0.1, 0.2, 0.3}}}})
 				return
@@ -89,6 +98,16 @@ func TestDatabaseWorkerReliability(t *testing.T) {
 		data := body["data"].(map[string]any)
 		if data["content"] != "chat-ok" || data["inputTokens"] != float64(7) || data["model"] != "chat-good" {
 			t.Fatalf("chat data=%v", data)
+		}
+		responsesID := insertProfile("chat", "responses-good", 0)
+		_, _ = pool.Exec(ctx, "UPDATE model_profiles SET web_search_mode='responses' WHERE id=$1", responsesID)
+		status, body = callModelTest(t, a, responsesID, map[string]string{"input": "latest news", "systemPrompt": "search first"})
+		if status != 200 {
+			t.Fatalf("responses status=%d body=%v", status, body)
+		}
+		data = body["data"].(map[string]any)
+		if data["content"] != "responses-search-ok" || data["inputTokens"] != float64(9) {
+			t.Fatalf("responses data=%v", data)
 		}
 		embedID := insertProfile("embedding", "embed-good", 3)
 		status, body = callModelTest(t, a, embedID, map[string]string{"input": "hello"})

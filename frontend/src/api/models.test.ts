@@ -36,4 +36,9 @@ describe('model test contract', () => {
       data: expect.objectContaining({ webSearchMode: 'qwen', extraBody: { search_options: { forced_search: true } } }),
     }), { id: 'chat-id' })
   })
+
+  it('preserves Responses API web search mode from the backend', async () => {
+    vi.mocked(request).mockResolvedValue([{ id: 'chat-id', name: 'Responses 模型', kind: 'chat', baseUrl: 'https://example.com/v1', model: 'gpt-test', enabled: true, isDefault: false, hasApiKey: true, webSearchMode: 'responses', extraBody: {} }])
+    await expect(api.models.list()).resolves.toEqual([expect.objectContaining({ id: 'chat-id', webSearchMode: 'responses' })])
+  })
 })

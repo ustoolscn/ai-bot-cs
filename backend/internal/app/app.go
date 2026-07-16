@@ -342,7 +342,7 @@ func (a *App) saveModel(c *gin.Context) {
 		if in.WebSearchMode == "" {
 			in.WebSearchMode = "disabled"
 		}
-		if in.WebSearchMode != "disabled" && in.WebSearchMode != "qwen" && in.WebSearchMode != "openai" && in.WebSearchMode != "custom" {
+		if in.WebSearchMode != "disabled" && in.WebSearchMode != "qwen" && in.WebSearchMode != "openai" && in.WebSearchMode != "responses" && in.WebSearchMode != "custom" {
 			fail(c, 400, "invalid_request", "联网搜索模式无效")
 			return
 		}
@@ -431,6 +431,8 @@ func (a *App) loadModelDetails(ctx context.Context, id string) (*openai.Client, 
 			client.ExtraBody["enable_search"] = true
 		case "openai":
 			client.ExtraBody["web_search_options"] = map[string]any{}
+		case "responses":
+			client.UseResponses = true
 		}
 	}
 	if dimension != nil && *dimension > 0 {

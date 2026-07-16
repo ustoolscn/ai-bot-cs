@@ -25,7 +25,7 @@ export interface ModelProfile {
   status: Status
   latency: number
   dimension?: number
-  webSearchMode: 'disabled' | 'qwen' | 'openai' | 'custom'
+  webSearchMode: 'disabled' | 'qwen' | 'openai' | 'responses' | 'custom'
   extraBody: Record<string, unknown>
 }
 
@@ -108,8 +108,11 @@ export interface PipelineRow {
   bot: string
   conversation?: string
   content?: string
+  eventType?: string
   eventMs: number
   contextMs: number
+  contextLabel?: string
+  contextStatus?: Status
   retrieval: { status: Status; ms: number; hit: string }
   model: { status: Status; ms?: number; name?: string }
   delivery: { status: Status; ms?: number }

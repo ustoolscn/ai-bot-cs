@@ -68,3 +68,44 @@ func TestNonJSONResponseExplainsBaseURL(t *testing.T) {
 		}
 	}
 }
+
+func TestResponsesWebSearch(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			http.NotFound(w, r)
+			return
+		}
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		tools, _ := request["tools"].([]any)
+		if len(tools) != 1 || tools[0].(map[string]any)["type"] != "web_search" {
+			t.Fatalf("unexpected tools: %#v", request["tools"])
+		}
+		if request["instructions"] != "使用最新信息回答。" {
+			t.Fatalf("unexpected instructions: %#v", request["instructions"])
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": []any{map[string]any{
+				"type":    "message",
+				"content": []any{map[string]any{"type": "output_text", "text": "联网搜索结果"}},
+			}},
+			"usage": map[string]any{"input_tokens": 8, "output_tokens": 4, "total_tokens": 12},
+		})
+	}))
+	defer s.Close()
+
+	c := New(s.URL+"/v1", "key", "gpt-test", time.Second)
+	c.UseResponses = true
+	result, err := c.Chat(context.Background(), []domain.ChatMessage{
+		{Role: "system", Content: "使用最新信息回答。"},
+		{Role: "user", Content: "今天有什么新闻？"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "联网搜索结果" || result.InputTokens != 8 || result.OutputTokens != 4 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}

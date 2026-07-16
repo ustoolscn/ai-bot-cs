@@ -20,8 +20,8 @@
               <thead><tr><th>时间</th><th>会话 / 消息</th><th>机器人</th><th>QQ 事件</th><th>上下文</th><th>知识检索</th><th>模型</th><th>投递</th><th>总耗时</th></tr></thead>
               <tbody><tr v-for="row in overview.pipelines" :key="row.id">
                 <td>{{ row.time }}</td><td><div class="pipeline-message"><strong>{{ row.conversation || '未知会话' }}</strong><span>{{ row.content || '空消息' }}</span></div></td><td>{{ row.bot }}</td>
-                <td><StageCell label="接收" status="success" :ms="row.eventMs" /></td>
-                <td><StageCell label="构建" status="success" :ms="row.contextMs" /></td>
+                <td><StageCell label="接收" status="success" :ms="row.eventMs" :sub="row.eventType" /></td>
+                <td><StageCell :label="row.contextLabel || '构建'" :status="row.contextStatus || 'success'" :ms="row.contextMs" /></td>
                 <td><StageCell :label="row.retrieval.status === 'warning' ? '超时' : row.retrieval.status === 'failed' ? '失败' : '检索'" :status="row.retrieval.status" :ms="row.retrieval.ms" :sub="`命中 ${row.retrieval.hit}`" /></td>
                 <td><StageCell :label="row.model.status === 'pending' ? '—' : '调用'" :status="row.model.status" :ms="row.model.ms" :sub="row.model.name" /></td>
                 <td><StageCell :label="row.delivery.status === 'failed' ? '失败' : '投递'" :status="row.delivery.status" :ms="row.delivery.ms" :sub="row.delivery.status === 'failed' ? '已丢弃' : '成功'" /></td>

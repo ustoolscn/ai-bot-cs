@@ -240,7 +240,15 @@ QQ 群聊和单聊消息事件只提供 `group_openid`、`member_openid` 或 `us
 - OpenAI 兼容服务的 Base URL 是否包含 `/v1` 取决于服务商；请以测试工作台展示的最终 endpoint 和服务商文档为准。
 - Embedding 配置的向量维度会随请求发送，并校验上游实际返回维度，避免文档索引后才发现维度不一致。
 - 文档索引失败时，知识库文档表会直接展示失败阶段和原因；完整错误可查看、复制并在修正配置后重试。
-- 对话模型可以配置内置联网搜索协议：Qwen/DashScope 使用 `enable_search`，OpenAI Chat Completions 使用 `web_search_options`，其他兼容服务可填写额外请求参数 JSON。模型测试和机器人真实回答使用同一配置。
+- 对话模型可以配置内置联网搜索协议：推荐的 Responses 模式请求 `{Base URL}/responses`，并发送 `tools: [{"type":"web_search"}]`；Qwen/DashScope 模式继续使用 `enable_search`，Chat Completions 兼容模式使用 `web_search_options`。模型测试和机器人真实回答使用同一配置。
+- Responses 模式会把系统提示词写入 `instructions`，把历史对话写入 `input`，并从 `output[].content[].output_text` 读取回复。额外请求参数不能覆盖 `model`、`input`、`instructions` 和 `tools`。
+- 升级到包含迁移 `004_responses_web_search.sql` 的镜像后，原先选择“OpenAI Chat Completions 联网搜索”的 Chat 配置会自动切换为 Responses 模式。部署完成后建议进入模型测试工作台，确认 endpoint 为 `/v1/responses` 并实际提问一条需要最新信息的问题；如果服务商不支持该接口，页面会显示上游返回的具体错误。
+
+## 概览管道健康度
+
+- 管道健康度从最近的 QQ Webhook 事件开始展示，不再只显示已经进入 AI Worker 的消息。
+- 普通群消息、未触发消息、排队任务、处理失败、模型失败、投递失败和非消息系统事件都会保留一行状态。
+- 未进入 AI 流程的消息会明确显示“上下文：未触发”；因此只要服务收到 QQ Webhook，概览就能看到对应记录。
 
 ## 动态系统设置
 

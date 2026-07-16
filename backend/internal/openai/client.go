@@ -17,6 +17,7 @@ type Client struct {
 	BaseURL, APIKey, Model string
 	Dimensions             int
 	ExtraBody              map[string]any
+	UseResponses           bool
 	HTTP                   *http.Client
 }
 
@@ -60,6 +61,13 @@ func (c *Client) do(ctx context.Context, path string, payload any, out any) erro
 }
 
 func (c *Client) Chat(ctx context.Context, messages []domain.ChatMessage) (domain.ChatResult, error) {
+	if c.UseResponses {
+		return c.responsesChat(ctx, messages)
+	}
+	return c.completionsChat(ctx, messages)
+}
+
+func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMessage) (domain.ChatResult, error) {
 	type msg struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
@@ -91,6 +99,78 @@ func (c *Client) Chat(ctx context.Context, messages []domain.ChatMessage) (domai
 		return domain.ChatResult{}, fmt.Errorf("model returned no choices")
 	}
 	return domain.ChatResult{Content: resp.Choices[0].Message.Content, InputTokens: resp.Usage.Prompt, OutputTokens: resp.Usage.Completion}, nil
+}
+
+func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessage) (domain.ChatResult, error) {
+	type inputMessage struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	input := make([]inputMessage, 0, len(messages))
+	instructions := make([]string, 0, 2)
+	for _, message := range messages {
+		if message.Role == "system" || message.Role == "developer" {
+			if strings.TrimSpace(message.Content) != "" {
+				instructions = append(instructions, message.Content)
+			}
+			continue
+		}
+		role := message.Role
+		if role != "assistant" {
+			role = "user"
+		}
+		input = append(input, inputMessage{Role: role, Content: message.Content})
+	}
+	payload := map[string]any{
+		"model": c.Model,
+		"input": input,
+		"tools": []map[string]any{{"type": "web_search"}},
+	}
+	if len(instructions) > 0 {
+		payload["instructions"] = strings.Join(instructions, "\n\n")
+	}
+	for key, value := range c.ExtraBody {
+		if key == "model" || key == "input" || key == "instructions" || key == "tools" {
+			continue
+		}
+		payload[key] = value
+	}
+	var resp struct {
+		OutputText string `json:"output_text"`
+		Output     []struct {
+			Type    string `json:"type"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if err := c.do(ctx, "/responses", payload, &resp); err != nil {
+		return domain.ChatResult{}, err
+	}
+	parts := make([]string, 0, 2)
+	for _, output := range resp.Output {
+		if output.Type != "message" {
+			continue
+		}
+		for _, content := range output.Content {
+			if content.Type == "output_text" && strings.TrimSpace(content.Text) != "" {
+				parts = append(parts, content.Text)
+			}
+		}
+	}
+	content := strings.TrimSpace(strings.Join(parts, "\n"))
+	if content == "" {
+		content = strings.TrimSpace(resp.OutputText)
+	}
+	if content == "" {
+		return domain.ChatResult{}, fmt.Errorf("responses API returned no output_text")
+	}
+	return domain.ChatResult{Content: content, InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens}, nil
 }
 
 func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error) {
