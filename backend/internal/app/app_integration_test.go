@@ -286,6 +286,14 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 		t.Fatalf("message detail does not expose the completed RAG trace: %s", messageDetail)
 	}
 	assertSecretNotReturned(t, messageDetail, chatAPIKey, embeddingAPIKey, botSecret)
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET retrieved_chunks='{}'::jsonb WHERE message_id=$1`, mentionMessageID); err != nil {
+		t.Fatal(err)
+	}
+	malformedOverview := requestJSON(t, client, http.MethodGet, server.URL+"/api/system/overview", nil, http.StatusOK)
+	if !bytes.Contains(malformedOverview, []byte(`"pipelines":[{`)) {
+		t.Fatalf("overview should tolerate legacy non-array retrieval data: %s", malformedOverview)
+	}
+	requestJSON(t, client, http.MethodGet, server.URL+"/api/messages", nil, http.StatusOK)
 
 	requestJSON(t, client, http.MethodDelete, server.URL+"/api/knowledge-bases/"+kbID+"/documents/"+documentID+"/index", nil, http.StatusOK)
 	var indexedStatus string
@@ -304,6 +312,56 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	var remainingDocuments int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM knowledge_documents WHERE id=$1", documentID).Scan(&remainingDocuments); err != nil || remainingDocuments != 0 {
 		t.Fatalf("document was not deleted: count=%d err=%v", remainingDocuments, err)
+	}
+}
+
+func TestGroupMentionQueuesWhenFullEventArrivesFirst(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	pool := newIntegrationSchema(t, ctx, databaseURL)
+	application, err := New(ctx, config.Config{
+		DataDir: t.TempDir(), MasterKey: []byte("0123456789abcdef0123456789abcdef"),
+		AdminUsername: "admin", AdminPassword: "integration-password", WorkerPoll: 10 * time.Millisecond,
+	}, pool, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const botSecret = "duplicate-group-event-secret"
+	secretEnc, err := application.cipher.Encrypt(botSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var botID string
+	if err = pool.QueryRow(ctx, `INSERT INTO bots(name,app_id,app_secret_enc) VALUES('群聊机器人','app-id',$1) RETURNING id::text`, secretEnc).Scan(&botID); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(application.Router())
+	defer server.Close()
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, qqEventBody(t, "full-event-first", "GROUP_MESSAGE_CREATE", "same-group-message", "@机器人 请回复"))
+	var tasks int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM inbox_tasks`).Scan(&tasks); err != nil || tasks != 0 {
+		t.Fatalf("full event should not queue in mention-only mode: tasks=%d err=%v", tasks, err)
+	}
+	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, qqEventBody(t, "mention-event-second", "GROUP_AT_MESSAGE_CREATE", "same-group-message", "请回复"))
+	var messages, events int
+	var eventType string
+	if err = pool.QueryRow(ctx, `SELECT count(*),max(event_type) FROM messages WHERE platform_message_id='same-group-message'`).Scan(&messages, &eventType); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM webhook_events`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM inbox_tasks`).Scan(&tasks); err != nil {
+		t.Fatal(err)
+	}
+	if messages != 1 || events != 2 || tasks != 1 || eventType != "GROUP_AT_MESSAGE_CREATE" {
+		t.Fatalf("duplicate group event reconciliation failed: messages=%d events=%d tasks=%d eventType=%q", messages, events, tasks, eventType)
 	}
 }
 

@@ -16,7 +16,8 @@
         <section class="panel-surface pipeline-panel">
           <div class="panel-heading"><h2>管道健康度 <span>（QQ事件 / 上下文 / 知识检索 / 模型 / 投递）</span><el-tooltip content="展示最近处理消息在各环节的状态和耗时"><el-icon><InfoFilled /></el-icon></el-tooltip></h2><el-button link type="primary" @click="$router.push('/messages')">查看详情 <el-icon><ArrowRight /></el-icon></el-button></div>
           <div class="pipeline-table-wrap">
-            <table class="pipeline-table">
+            <table v-if="overview.pipelines.length" class="pipeline-table">
+              <colgroup><col class="pipeline-col-time"><col class="pipeline-col-message"><col class="pipeline-col-bot"><col class="pipeline-col-stage" span="5"><col class="pipeline-col-total"></colgroup>
               <thead><tr><th>时间</th><th>会话 / 消息</th><th>机器人</th><th>QQ 事件</th><th>上下文</th><th>知识检索</th><th>模型</th><th>投递</th><th>总耗时</th></tr></thead>
               <tbody><tr v-for="row in overview.pipelines" :key="row.id">
                 <td>{{ row.time }}</td><td><div class="pipeline-message"><strong>{{ row.conversation || '未知会话' }}</strong><span>{{ row.content || '空消息' }}</span></div></td><td>{{ row.bot }}</td>
@@ -26,8 +27,9 @@
                 <td><StageCell :label="row.model.status === 'pending' ? '—' : '调用'" :status="row.model.status" :ms="row.model.ms" :sub="row.model.name" /></td>
                 <td><StageCell :label="row.delivery.status === 'failed' ? '失败' : '投递'" :status="row.delivery.status" :ms="row.delivery.ms" :sub="row.delivery.status === 'failed' ? '已丢弃' : '成功'" /></td>
                 <td :class="{ 'danger-text': row.totalMs > 5000 }"><strong>{{ formatDuration(row.totalMs) }}</strong></td>
-              </tr><tr v-if="overview.pipelines.length === 0"><td colspan="9"><div class="table-empty"><el-icon><DataLine /></el-icon><strong>暂无管道明细</strong><span>收到触发消息后会在这里展示完整处理链路</span></div></td></tr></tbody>
+              </tr></tbody>
             </table>
+            <div v-else class="table-empty"><el-icon><DataLine /></el-icon><strong>{{ overviewError ? '管道数据加载失败' : '暂无管道明细' }}</strong><span>{{ overviewError || '收到触发消息后会在这里展示完整处理链路' }}</span></div>
           </div>
         </section>
 
@@ -51,7 +53,7 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, onMounted, ref } from 'vue'
 import { ArrowRight, Bell, Bottom, CircleCheck, CircleClose, DataLine, Document, Filter, InfoFilled, Remove, Top, Warning } from '@element-plus/icons-vue'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
 import FilterSidebar from '@/components/FilterSidebar.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
@@ -62,9 +64,19 @@ import { createEmptyOverview } from '@/utils/overview'
 const overview = ref<SystemOverview>(createEmptyOverview())
 const filterOpen = ref(false)
 const showAllAlerts = ref(false)
+const overviewError = ref('')
 const visibleAlerts = computed(() => showAllAlerts.value ? overview.value.alerts : overview.value.alerts.slice(0, 4))
 const hasKnowledge = computed(() => overview.value.knowledge.total > 0)
-onMounted(async () => { overview.value = await api.overview() })
+onMounted(loadOverview)
+async function loadOverview() {
+  overviewError.value = ''
+  try { overview.value = await api.overview() }
+  catch (error) {
+    overview.value = createEmptyOverview()
+    overviewError.value = error instanceof Error ? error.message : '暂时无法读取管道数据'
+    ElMessage.error(`概览加载失败：${overviewError.value}`)
+  }
+}
 function inspectAlert(content: string) { ElMessageBox.alert(content, '告警详情', { confirmButtonText: '知道了' }) }
 
 const StageCell = defineComponent({

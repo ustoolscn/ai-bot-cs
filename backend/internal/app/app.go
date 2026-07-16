@@ -584,7 +584,7 @@ func (a *App) listMessages(c *gin.Context) {
 		COALESCE(om.content,'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",COALESCE(ar.status,t.status) AS status,
 		COALESCE(mp.name,mp.model,'') AS model,COALESCE(mc.input_tokens,0) AS "inputTokens",COALESCE(mc.output_tokens,0) AS "outputTokens",
 		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
-		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",COALESCE(jsonb_array_length(ar.retrieved_chunks),0) AS "knowledgeHits",
+		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END AS "knowledgeHits",
 		COALESCE(ot.status,CASE WHEN om.id IS NULL THEN 'pending' ELSE om.status END,'pending') AS "deliveryStatus",
 		COALESCE(GREATEST(EXTRACT(EPOCH FROM (ot.updated_at-ot.created_at))*1000,0),0)::bigint AS "deliveryLatencyMs",
 		COALESCE(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ot.updated_at,ar.completed_at,t.updated_at)-t.created_at))*1000,0),0)::bigint AS "latencyMs",
@@ -621,7 +621,7 @@ func (a *App) getMessage(c *gin.Context) {
 		COALESCE(om.content,'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",COALESCE(ar.status,t.status) AS status,
 		COALESCE(mp.name,mp.model,'') AS model,COALESCE(mc.input_tokens,0) AS "inputTokens",COALESCE(mc.output_tokens,0) AS "outputTokens",
 		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
-		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",COALESCE(jsonb_array_length(ar.retrieved_chunks),0) AS "knowledgeHits",
+		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END AS "knowledgeHits",
 		COALESCE(ot.status,CASE WHEN om.id IS NULL THEN 'pending' ELSE om.status END,'pending') AS "deliveryStatus",
 		COALESCE(GREATEST(EXTRACT(EPOCH FROM (ot.updated_at-ot.created_at))*1000,0),0)::bigint AS "deliveryLatencyMs",
 		COALESCE(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ot.updated_at,ar.completed_at,t.updated_at)-t.created_at))*1000,0),0)::bigint AS "latencyMs",
@@ -939,10 +939,15 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 	}
 	parts, _ := json.Marshal(msg.Parts)
 	var mid string
-	err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,sender_id,sender_name,platform_message_id,event_type,content,parts,raw_event,event_at,reply_deadline) VALUES('qq',$1,$2,'inbound',$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11) ON CONFLICT DO NOTHING RETURNING id::text`, msg.BotID, cid, msg.SenderID, msg.SenderName, msg.PlatformMessageID, msg.EventType, msg.Text, string(parts), string(msg.Raw), msg.EventTime, msg.ReplyDeadline).Scan(&mid)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return tx.Commit(ctx)
-	}
+	err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,sender_id,sender_name,platform_message_id,event_type,content,parts,raw_event,event_at,reply_deadline)
+		VALUES('qq',$1,$2,'inbound',$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11)
+		ON CONFLICT(channel,bot_id,platform_message_id) WHERE platform_message_id IS NOT NULL DO UPDATE SET
+			event_type=CASE WHEN EXCLUDED.event_type='GROUP_AT_MESSAGE_CREATE' THEN EXCLUDED.event_type ELSE messages.event_type END,
+			content=CASE WHEN EXCLUDED.event_type='GROUP_AT_MESSAGE_CREATE' THEN EXCLUDED.content ELSE messages.content END,
+			parts=CASE WHEN EXCLUDED.event_type='GROUP_AT_MESSAGE_CREATE' THEN EXCLUDED.parts ELSE messages.parts END,
+			raw_event=CASE WHEN EXCLUDED.event_type='GROUP_AT_MESSAGE_CREATE' THEN EXCLUDED.raw_event ELSE messages.raw_event END,
+			reply_deadline=CASE WHEN EXCLUDED.event_type='GROUP_AT_MESSAGE_CREATE' THEN EXCLUDED.reply_deadline ELSE messages.reply_deadline END
+		RETURNING id::text`, msg.BotID, cid, msg.SenderID, msg.SenderName, msg.PlatformMessageID, msg.EventType, msg.Text, string(parts), string(msg.Raw), msg.EventTime, msg.ReplyDeadline).Scan(&mid)
 	if err != nil {
 		return err
 	}

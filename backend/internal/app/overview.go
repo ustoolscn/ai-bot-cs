@@ -69,7 +69,7 @@ func (a *App) overviewPipelines(c *gin.Context) []overviewPipeline {
 		SELECT m.id::text,m.event_at,b.name,c.name,left(m.content,160),m.event_type,
 		       GREATEST(EXTRACT(EPOCH FROM (t.created_at-m.created_at))*1000,0)::bigint,
 		       COALESCE(ar.context_latency_ms,0),COALESCE(ar.retrieval_latency_ms,0),
-		       COALESCE(jsonb_array_length(ar.retrieved_chunks),0),
+		       CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END,
 		       t.status,COALESCE(ar.status,'pending'),
 		       COALESCE(mc.latency_ms,0),COALESCE(mp.name,mp.model,''),COALESCE(mc.error,''),
 		       COALESCE(ot.status,'pending'),

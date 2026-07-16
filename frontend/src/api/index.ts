@@ -7,9 +7,9 @@ type BackendBot = { id: string; name: string; appId: string; enabled: boolean; s
 type BackendModel = { id: string; name: string; kind: 'chat' | 'embedding'; baseUrl: string; model: string; dimension?: number; enabled: boolean; isDefault: boolean; hasApiKey: boolean; webSearchMode?: 'disabled' | 'qwen' | 'openai' | 'responses' | 'custom'; reasoningEffort?: 'default' | 'none' | 'minimal' | 'low' | 'medium' | 'high'; extraBody?: Record<string, unknown> }
 type BackendConversation = { id: string; channel: string; platformId: string; type: 'group' | 'private'; name: string; enabled: boolean; triggerMode: 'mention_only' | 'always'; contextLimit: number; systemPrompt: string; chatProfileId?: string; botName: string; updatedAt?: string; messageCount?: number | string; memberCount?: number | string; hasFullMessageEvents?: boolean }
 type BackendMessagePart = { type: string; text?: string; filename?: string; contentType?: string; sizeBytes?: number; width?: number; height?: number; previewUrl?: string; url?: string }
-type BackendContextMessage = { role?: string; Role?: string; content?: string; Content?: string; parts?: BackendMessagePart[]; Parts?: BackendMessagePart[] }
+type BackendContextMessage = { role?: string; Role?: string; content?: string; Content?: string; parts?: unknown; Parts?: unknown }
 type BackendAgentRun = { contextMessages?: BackendContextMessage[]; retrievedChunks?: Array<{ content?: string; score?: number; documentId?: string; id?: string }> }
-type BackendMessage = { id: string; question: string; parts?: BackendMessagePart[]; answer?: string; answerParts?: BackendMessagePart[]; senderName?: string; eventType?: string; status: string; eventAt?: string; platformMessageId?: string; conversationName: string; botName: string; model?: string; inputTokens?: number; outputTokens?: number; modelLatencyMs?: number; contextLatencyMs?: number; retrievalLatencyMs?: number; deliveryLatencyMs?: number; latencyMs?: number; knowledgeHits?: number; deliveryStatus?: string; traceId?: string; agentRuns?: BackendAgentRun[] }
+type BackendMessage = { id: string; question: string; parts?: unknown; answer?: string; answerParts?: unknown; senderName?: string; eventType?: string; status: string; eventAt?: string; platformMessageId?: string; conversationName: string; botName: string; model?: string; inputTokens?: number; outputTokens?: number; modelLatencyMs?: number; contextLatencyMs?: number; retrievalLatencyMs?: number; deliveryLatencyMs?: number; latencyMs?: number; knowledgeHits?: number; deliveryStatus?: string; traceId?: string; agentRuns?: BackendAgentRun[] }
 type BackendKnowledgeBase = { id: string; name: string; description: string; embeddingProfileId?: string; embeddingModel: string; documentCount: number | string; chunkCount: number | string; createdAt?: string }
 type BackendKnowledgeDocument = { id: string; name: string; status: string; sizeBytes: number; chunkCount?: number | string; lastError?: string; createdAt?: string; updatedAt?: string }
 type BackendKnowledgeDetail = BackendKnowledgeBase & { documents: BackendKnowledgeDocument[] }
@@ -55,8 +55,14 @@ function mapMessage(item: BackendMessage): MessageRecord {
   return { id: item.id, time: dateText(item.eventAt), botName: item.botName, conversationName: item.conversationName, sender: item.senderName || 'QQ用户', question: item.question || (attachments.length ? '图片消息' : '空消息'), answer: item.answer || '', eventType: item.eventType || 'QQ_MESSAGE', model: item.model || '未调用', status: asStatus(item.status), latency: Number(item.latencyMs || 0), tokens: inputTokens + outputTokens, inputTokens, outputTokens, knowledgeHits: Number(item.knowledgeHits || 0), deliveryStatus: asStatus(item.deliveryStatus || 'pending'), contextLatency: Number(item.contextLatencyMs || 0), retrievalLatency: Number(item.retrievalLatencyMs || 0), modelLatency: Number(item.modelLatencyMs || 0), deliveryLatency: Number(item.deliveryLatencyMs || 0), traceId: item.traceId || item.id, platformMessageId: item.platformMessageId, attachments, answerAttachments, contextMessages, retrievedChunks: run?.retrievedChunks || [] }
 }
 
-function mapMessageParts(parts: BackendMessagePart[]): MessageAttachment[] {
-  return parts.filter(part => part.type === 'image').map(part => ({ type: part.type, text: part.text, filename: part.filename, contentType: part.contentType, sizeBytes: part.sizeBytes, width: part.width, height: part.height, previewUrl: part.previewUrl || part.url }))
+function mapMessageParts(value: unknown): MessageAttachment[] {
+  let parts = value
+  if (typeof parts === 'string') {
+    try { parts = JSON.parse(parts) }
+    catch { return [] }
+  }
+  if (!Array.isArray(parts)) return []
+  return parts.filter((part): part is BackendMessagePart => Boolean(part) && typeof part === 'object' && (part as BackendMessagePart).type === 'image').map(part => ({ type: part.type, text: part.text, filename: part.filename, contentType: part.contentType, sizeBytes: part.sizeBytes, width: part.width, height: part.height, previewUrl: part.previewUrl || part.url }))
 }
 export function sanitizeServiceError(value?: string): string | undefined {
   if (!value) return undefined

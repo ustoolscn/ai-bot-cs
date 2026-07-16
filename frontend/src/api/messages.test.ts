@@ -23,4 +23,17 @@ describe('message trace mapping', () => {
     expect(detail.answerAttachments[0]?.previewUrl).toBe('https://example.com/result.png')
     expect(detail.contextMessages?.[1]?.parts?.[0]?.previewUrl).toBe('/api/messages/message-1/attachments/0')
   })
+
+  it('tolerates legacy or malformed attachment JSON without blanking the page', async () => {
+    vi.mocked(request).mockResolvedValue({
+      id: 'legacy-message', question: '旧消息', parts: '{not-json', answerParts: { type: 'image' },
+      conversationName: '测试群', botName: '机器人', status: 'completed',
+      agentRuns: [{ contextMessages: [{ role: 'user', content: '旧上下文', parts: '{}' }] }],
+    })
+
+    const detail = await api.messages.detail('legacy-message')
+    expect(detail.attachments).toEqual([])
+    expect(detail.answerAttachments).toEqual([])
+    expect(detail.contextMessages?.[0]?.parts).toEqual([])
+  })
 })
