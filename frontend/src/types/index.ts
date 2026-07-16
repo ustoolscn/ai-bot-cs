@@ -1,7 +1,7 @@
 export interface ApiEnvelope<T> { data: T }
 export interface ApiErrorEnvelope { error: { code: string; message: string } }
 
-export type Status = 'online' | 'offline' | 'warning' | 'success' | 'failed' | 'processing' | 'pending'
+export type Status = 'online' | 'offline' | 'warning' | 'success' | 'failed' | 'processing' | 'pending' | 'unindexed'
 
 export interface Bot {
   id: string
@@ -26,6 +26,7 @@ export interface ModelProfile {
   latency: number
   dimension?: number
   webSearchMode: 'disabled' | 'qwen' | 'openai' | 'responses' | 'custom'
+  reasoningEffort: 'default' | 'none' | 'minimal' | 'low' | 'medium' | 'high'
   extraBody: Record<string, unknown>
 }
 
@@ -72,9 +73,23 @@ export interface MessageRecord {
   status: Status
   latency: number
   tokens: number
+  inputTokens: number
+  outputTokens: number
   knowledgeHits: number
   deliveryStatus: Status
+  contextLatency: number
+  retrievalLatency: number
+  modelLatency: number
+  deliveryLatency: number
   traceId: string
+  platformMessageId?: string
+  contextMessages?: ContextMessage[]
+  retrievedChunks?: Array<{ content?: string; score?: number; documentId?: string; id?: string }>
+}
+
+export interface ContextMessage {
+  role: 'system' | 'developer' | 'user' | 'assistant' | string
+  content: string
 }
 
 export interface KnowledgeDocument {

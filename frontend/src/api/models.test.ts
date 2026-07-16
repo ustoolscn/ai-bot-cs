@@ -27,18 +27,18 @@ describe('model test contract', () => {
     await expect(api.models.test('embedding-id', { input: '测试文本' })).resolves.toEqual(result)
   })
 
-  it('saves built-in web search mode and custom request parameters', async () => {
+  it('saves built-in web search mode, reasoning effort and custom request parameters', async () => {
     vi.mocked(request).mockResolvedValue({ id: 'chat-id' })
-    await api.models.save({ id: 'chat-id', kind: 'chat', name: '联网模型', baseUrl: 'https://example.com/v1', model: 'qwen-plus', status: 'online', webSearchMode: 'qwen', extraBody: { search_options: { forced_search: true } } })
+    await api.models.save({ id: 'chat-id', kind: 'chat', name: '联网模型', baseUrl: 'https://example.com/v1', model: 'qwen-plus', status: 'online', webSearchMode: 'qwen', reasoningEffort: 'medium', extraBody: { search_options: { forced_search: true } } })
     expect(request).toHaveBeenCalledWith(expect.objectContaining({
       method: 'PUT',
       url: '/model-profiles/chat-id',
-      data: expect.objectContaining({ webSearchMode: 'qwen', extraBody: { search_options: { forced_search: true } } }),
+      data: expect.objectContaining({ webSearchMode: 'qwen', reasoningEffort: 'medium', extraBody: { search_options: { forced_search: true } } }),
     }), { id: 'chat-id' })
   })
 
   it('preserves Responses API web search mode from the backend', async () => {
-    vi.mocked(request).mockResolvedValue([{ id: 'chat-id', name: 'Responses 模型', kind: 'chat', baseUrl: 'https://example.com/v1', model: 'gpt-test', enabled: true, isDefault: false, hasApiKey: true, webSearchMode: 'responses', extraBody: {} }])
-    await expect(api.models.list()).resolves.toEqual([expect.objectContaining({ id: 'chat-id', webSearchMode: 'responses' })])
+    vi.mocked(request).mockResolvedValue([{ id: 'chat-id', name: 'Responses 模型', kind: 'chat', baseUrl: 'https://example.com/v1', model: 'gpt-test', enabled: true, isDefault: false, hasApiKey: true, webSearchMode: 'responses', reasoningEffort: 'high', extraBody: {} }])
+    await expect(api.models.list()).resolves.toEqual([expect.objectContaining({ id: 'chat-id', webSearchMode: 'responses', reasoningEffort: 'high' })])
   })
 })

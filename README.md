@@ -241,14 +241,16 @@ QQ 群聊和单聊消息事件只提供 `group_openid`、`member_openid` 或 `us
 - Embedding 配置的向量维度会随请求发送，并校验上游实际返回维度，避免文档索引后才发现维度不一致。
 - 文档索引失败时，知识库文档表会直接展示失败阶段和原因；完整错误可查看、复制并在修正配置后重试。
 - 对话模型可以配置内置联网搜索协议：推荐的 Responses 模式请求 `{Base URL}/responses`，并发送 `tools: [{"type":"web_search"}]`；Qwen/DashScope 模式继续使用 `enable_search`，Chat Completions 兼容模式使用 `web_search_options`。模型测试和机器人真实回答使用同一配置。
+- 对话模型可以单独配置思考等级。Responses API 使用 `reasoning.effort`，Chat Completions 兼容模式使用 `reasoning_effort`；选择“模型默认”时不会额外发送该参数。
 - Responses 模式会把系统提示词写入 `instructions`，把历史对话写入 `input`，并从 `output[].content[].output_text` 读取回复。额外请求参数不能覆盖 `model`、`input`、`instructions` 和 `tools`。
 - 升级到包含迁移 `004_responses_web_search.sql` 的镜像后，原先选择“OpenAI Chat Completions 联网搜索”的 Chat 配置会自动切换为 Responses 模式。部署完成后建议进入模型测试工作台，确认 endpoint 为 `/v1/responses` 并实际提问一条需要最新信息的问题；如果服务商不支持该接口，页面会显示上游返回的具体错误。
 
 ## 概览管道健康度
 
-- 管道健康度从最近的 QQ Webhook 事件开始展示，不再只显示已经进入 AI Worker 的消息。
-- 普通群消息、未触发消息、排队任务、处理失败、模型失败、投递失败和非消息系统事件都会保留一行状态。
-- 未进入 AI 流程的消息会明确显示“上下文：未触发”；因此只要服务收到 QQ Webhook，概览就能看到对应记录。
+- 管道健康度和消息记录都以实际创建了入口任务的消息为准，展示排队、上下文、知识检索、模型和投递状态。
+- 在“仅 @ 回复”模式下，全量普通群消息仍保存在数据库中供上下文使用，但不会出现在消息记录和管道列表中。
+- 新处理的消息会保存实际发给模型的完整上下文快照；消息详情同时展示真实模型名称、输入/输出 Token、各阶段耗时、知识召回和投递结果。
+- 知识库文档支持分别“删除索引”和“删除文件”：删除索引会保留原文件并允许重新索引；删除文件会同时级联删除该文件生成的全部向量分块。
 
 ## 动态系统设置
 

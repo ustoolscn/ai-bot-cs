@@ -6,7 +6,8 @@ vi.mock('./client', () => ({
   request: vi.fn(),
 }))
 
-import { mapDocument, sanitizeServiceError } from './index'
+import { api, mapDocument, sanitizeServiceError } from './index'
+import { request } from './client'
 
 describe('knowledge document failure mapping', () => {
   it('maps lastError for direct table display and removes credential-like values', () => {
@@ -32,5 +33,13 @@ describe('knowledge document failure mapping', () => {
 
   it('turns an HTML/non-JSON response into a Base URL guidance message', () => {
     expect(sanitizeServiceError("invalid character '<' looking for beginning of value")).toContain('有时需要包含 /v1')
+  })
+
+  it('exposes separate file and generated-index deletion operations', async () => {
+    vi.mocked(request).mockResolvedValue({ deleted: true })
+    await api.knowledge.deleteDocumentIndex('kb-1', 'doc-1')
+    await api.knowledge.deleteDocument('kb-1', 'doc-1')
+    expect(request).toHaveBeenNthCalledWith(1, { method: 'DELETE', url: '/knowledge-bases/kb-1/documents/doc-1/index' }, { deleted: true })
+    expect(request).toHaveBeenNthCalledWith(2, { method: 'DELETE', url: '/knowledge-bases/kb-1/documents/doc-1' }, { deleted: true })
   })
 })

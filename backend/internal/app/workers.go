@@ -171,7 +171,8 @@ func (a *App) processInbox(ctx context.Context) error {
 	}
 	messages = append(messages, domain.ChatMessage{Role: "user", Content: j.Content})
 	contextLatency := time.Since(contextStarted).Milliseconds()
-	_, _ = a.db.Exec(ctx, "UPDATE agent_runs SET context_latency_ms=$1,retrieval_latency_ms=$2 WHERE id=$3", contextLatency, retrievalLatency, runID)
+	contextJSON, _ := json.Marshal(messages)
+	_, _ = a.db.Exec(ctx, "UPDATE agent_runs SET context_latency_ms=$1,retrieval_latency_ms=$2,context_messages=$3::jsonb WHERE id=$4", contextLatency, retrievalLatency, string(contextJSON), runID)
 	start := time.Now()
 	result, chatErr := client.Chat(ctx, messages)
 	latency := time.Since(start).Milliseconds()

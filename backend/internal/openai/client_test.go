@@ -24,6 +24,9 @@ func TestChatAndEmbedding(t *testing.T) {
 			if request["enable_search"] != true {
 				t.Errorf("enable_search=%v", request["enable_search"])
 			}
+			if request["reasoning_effort"] != "low" {
+				t.Errorf("reasoning_effort=%v", request["reasoning_effort"])
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": "OK"}}}, "usage": map[string]int{"prompt_tokens": 2, "completion_tokens": 1}})
 		case "/v1/embeddings":
 			var request map[string]any
@@ -39,6 +42,7 @@ func TestChatAndEmbedding(t *testing.T) {
 	defer s.Close()
 	c := New(s.URL+"/v1", "key", "test", time.Second)
 	c.Dimensions = 2
+	c.ReasoningEffort = "low"
 	c.ExtraBody = map[string]any{"enable_search": true}
 	chat, err := c.Chat(context.Background(), []domain.ChatMessage{{Role: "user", Content: "hi"}})
 	if err != nil || chat.Content != "OK" || chat.InputTokens != 2 {
@@ -86,6 +90,10 @@ func TestResponsesWebSearch(t *testing.T) {
 		if request["instructions"] != "使用最新信息回答。" {
 			t.Fatalf("unexpected instructions: %#v", request["instructions"])
 		}
+		reasoning, _ := request["reasoning"].(map[string]any)
+		if reasoning["effort"] != "high" {
+			t.Fatalf("unexpected reasoning: %#v", request["reasoning"])
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"output": []any{map[string]any{
 				"type":    "message",
@@ -98,6 +106,7 @@ func TestResponsesWebSearch(t *testing.T) {
 
 	c := New(s.URL+"/v1", "key", "gpt-test", time.Second)
 	c.UseResponses = true
+	c.ReasoningEffort = "high"
 	result, err := c.Chat(context.Background(), []domain.ChatMessage{
 		{Role: "system", Content: "使用最新信息回答。"},
 		{Role: "user", Content: "今天有什么新闻？"},

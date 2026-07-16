@@ -28,7 +28,10 @@ type OutboundMessage struct {
 	Sequence                                             int
 }
 
-type ChatMessage struct{ Role, Content string }
+type ChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
 type ChatResult struct {
 	Content                   string
 	InputTokens, OutputTokens int

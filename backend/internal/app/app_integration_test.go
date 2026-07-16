@@ -90,7 +90,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	const chatAPIKey = "chat-secret-key-that-must-not-leak"
 	chatID := createdID(t, requestJSON(t, client, http.MethodPost, server.URL+"/api/model-profiles", map[string]any{
 		"name": "集成测试对话模型", "kind": "chat", "baseUrl": mock.URL + "/v1",
-		"apiKey": chatAPIKey, "model": "mock-chat", "enabled": true, "isDefault": true, "webSearchMode": "qwen",
+		"apiKey": chatAPIKey, "model": "mock-chat", "enabled": true, "isDefault": true, "webSearchMode": "qwen", "reasoningEffort": "medium",
 	}, http.StatusOK))
 
 	const embeddingAPIKey = "embedding-secret-key-that-must-not-leak"
@@ -175,7 +175,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 		t.Fatalf("expected one chat request, got %d", len(chatRequests))
 	}
 	chatPayload := string(chatRequests[0])
-	for _, expected := range []string{"七天内可以申请无理由退款", "今天的普通群消息只应作为上下文", "退款期限是多久", `"enable_search":true`} {
+	for _, expected := range []string{"七天内可以申请无理由退款", "今天的普通群消息只应作为上下文", "退款期限是多久", `"enable_search":true`, `"reasoning_effort":"medium"`} {
 		if !strings.Contains(chatPayload, expected) {
 			t.Fatalf("chat prompt is missing %q: %s", expected, chatPayload)
 		}
@@ -227,7 +227,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 		t.Fatalf("conversation list is missing friendly name or statistics: %s", conversationsJSON)
 	}
 	overviewJSON := requestJSON(t, client, http.MethodGet, server.URL+"/api/system/overview", nil, http.StatusOK)
-	if !bytes.Contains(overviewJSON, []byte(`"pipelines":[{`)) || !bytes.Contains(overviewJSON, []byte(`"contextLabel":"未触发"`)) || !bytes.Contains(overviewJSON, []byte(`"totalEvents":`)) || !bytes.Contains(overviewJSON, []byte(`"successful":`)) {
+	if !bytes.Contains(overviewJSON, []byte(`"pipelines":[{`)) || !bytes.Contains(overviewJSON, []byte(`"contextLabel":"构建"`)) || !bytes.Contains(overviewJSON, []byte(`"totalEvents":`)) || !bytes.Contains(overviewJSON, []byte(`"successful":`)) {
 		t.Fatalf("overview is missing operational data: %s", overviewJSON)
 	}
 
@@ -235,11 +235,34 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT id::text FROM messages WHERE platform_message_id='message-mention'`).Scan(&mentionMessageID); err != nil {
 		t.Fatal(err)
 	}
+	messagesJSON := requestJSON(t, client, http.MethodGet, server.URL+"/api/messages", nil, http.StatusOK)
+	if bytes.Contains(messagesJSON, []byte("今天的普通群消息只应作为上下文")) || !bytes.Contains(messagesJSON, []byte("退款期限是多久")) || !bytes.Contains(messagesJSON, []byte(`"inputTokens":`)) {
+		t.Fatalf("message list should contain only triggered records with real usage: %s", messagesJSON)
+	}
 	messageDetail := requestJSON(t, client, http.MethodGet, server.URL+"/api/messages/"+mentionMessageID, nil, http.StatusOK)
-	if !bytes.Contains(messageDetail, []byte("七天内可以申请无理由退款")) || !bytes.Contains(messageDetail, []byte(`"status":"completed"`)) {
+	if !bytes.Contains(messageDetail, []byte("七天内可以申请无理由退款")) || !bytes.Contains(messageDetail, []byte("今天的普通群消息只应作为上下文")) || !bytes.Contains(messageDetail, []byte(`"contextMessages":`)) || !bytes.Contains(messageDetail, []byte(`"status":"completed"`)) {
 		t.Fatalf("message detail does not expose the completed RAG trace: %s", messageDetail)
 	}
 	assertSecretNotReturned(t, messageDetail, chatAPIKey, embeddingAPIKey, botSecret)
+
+	requestJSON(t, client, http.MethodDelete, server.URL+"/api/knowledge-bases/"+kbID+"/documents/"+documentID+"/index", nil, http.StatusOK)
+	var indexedStatus string
+	var indexedChunks int
+	if err := pool.QueryRow(ctx, `SELECT d.status,count(c.id) FROM knowledge_documents d LEFT JOIN knowledge_chunks c ON c.document_id=d.id WHERE d.id=$1 GROUP BY d.id`, documentID).Scan(&indexedStatus, &indexedChunks); err != nil || indexedStatus != "unindexed" || indexedChunks != 0 {
+		t.Fatalf("delete index status=%q chunks=%d err=%v", indexedStatus, indexedChunks, err)
+	}
+	requestJSON(t, client, http.MethodPost, server.URL+"/api/knowledge-bases/"+kbID+"/documents/"+documentID+"/retry", nil, http.StatusOK)
+	eventually(t, 8*time.Second, "document reindexed", func() (bool, error) {
+		var status string
+		var chunks int
+		err := pool.QueryRow(ctx, `SELECT d.status,count(c.id) FROM knowledge_documents d LEFT JOIN knowledge_chunks c ON c.document_id=d.id WHERE d.id=$1 GROUP BY d.id`, documentID).Scan(&status, &chunks)
+		return status == "ready" && chunks > 0, err
+	})
+	requestJSON(t, client, http.MethodDelete, server.URL+"/api/knowledge-bases/"+kbID+"/documents/"+documentID, nil, http.StatusOK)
+	var remainingDocuments int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM knowledge_documents WHERE id=$1", documentID).Scan(&remainingDocuments); err != nil || remainingDocuments != 0 {
+		t.Fatalf("document was not deleted: count=%d err=%v", remainingDocuments, err)
+	}
 }
 
 func newIntegrationSchema(t *testing.T, ctx context.Context, databaseURL string) *pgxpool.Pool {

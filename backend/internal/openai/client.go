@@ -18,6 +18,7 @@ type Client struct {
 	Dimensions             int
 	ExtraBody              map[string]any
 	UseResponses           bool
+	ReasoningEffort        string
 	HTTP                   *http.Client
 }
 
@@ -78,10 +79,13 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 	}
 	req := map[string]any{"model": c.Model, "messages": chatMessages, "temperature": 0.3}
 	for key, value := range c.ExtraBody {
-		if key == "model" || key == "messages" {
+		if key == "model" || key == "messages" || key == "reasoning_effort" {
 			continue
 		}
 		req[key] = value
+	}
+	if c.ReasoningEffort != "" && c.ReasoningEffort != "default" {
+		req["reasoning_effort"] = c.ReasoningEffort
 	}
 	var resp struct {
 		Choices []struct {
@@ -130,10 +134,13 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 		payload["instructions"] = strings.Join(instructions, "\n\n")
 	}
 	for key, value := range c.ExtraBody {
-		if key == "model" || key == "input" || key == "instructions" || key == "tools" {
+		if key == "model" || key == "input" || key == "instructions" || key == "tools" || key == "reasoning" {
 			continue
 		}
 		payload[key] = value
+	}
+	if c.ReasoningEffort != "" && c.ReasoningEffort != "default" {
+		payload["reasoning"] = map[string]any{"effort": c.ReasoningEffort}
 	}
 	var resp struct {
 		OutputText string `json:"output_text"`

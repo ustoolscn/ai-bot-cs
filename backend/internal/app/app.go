@@ -119,6 +119,7 @@ func (a *App) Router() http.Handler {
 	auth.DELETE("/knowledge-bases/:id", a.deleteKB)
 	auth.POST("/knowledge-bases/:id/documents", a.uploadDocument)
 	auth.DELETE("/knowledge-bases/:id/documents/:documentId", a.deleteDocument)
+	auth.DELETE("/knowledge-bases/:id/documents/:documentId/index", a.deleteDocumentIndex)
 	auth.POST("/knowledge-bases/:id/documents/:documentId/retry", a.retryDocument)
 	auth.POST("/knowledge-bases/:id/search", a.searchKB)
 	auth.GET("/system/overview", a.overview)
@@ -316,20 +317,21 @@ func (a *App) deleteBot(c *gin.Context) {
 }
 
 type modelInput struct {
-	Name          string         `json:"name"`
-	Kind          string         `json:"kind"`
-	BaseURL       string         `json:"baseUrl"`
-	APIKey        string         `json:"apiKey"`
-	Model         string         `json:"model"`
-	Dimension     *int           `json:"dimension"`
-	Enabled       *bool          `json:"enabled"`
-	IsDefault     bool           `json:"isDefault"`
-	WebSearchMode string         `json:"webSearchMode"`
-	ExtraBody     map[string]any `json:"extraBody"`
+	Name            string         `json:"name"`
+	Kind            string         `json:"kind"`
+	BaseURL         string         `json:"baseUrl"`
+	APIKey          string         `json:"apiKey"`
+	Model           string         `json:"model"`
+	Dimension       *int           `json:"dimension"`
+	Enabled         *bool          `json:"enabled"`
+	IsDefault       bool           `json:"isDefault"`
+	WebSearchMode   string         `json:"webSearchMode"`
+	ReasoningEffort string         `json:"reasoningEffort"`
+	ExtraBody       map[string]any `json:"extraBody"`
 }
 
 func (a *App) listModels(c *gin.Context) {
-	queryList(c, a, `SELECT id::text,name,kind,base_url AS "baseUrl",model,dimension,enabled,is_default AS "isDefault",api_key_enc<>'' AS "hasApiKey",web_search_mode AS "webSearchMode",extra_body AS "extraBody",created_at AS "createdAt" FROM model_profiles ORDER BY kind,name`)
+	queryList(c, a, `SELECT id::text,name,kind,base_url AS "baseUrl",model,dimension,enabled,is_default AS "isDefault",api_key_enc<>'' AS "hasApiKey",web_search_mode AS "webSearchMode",reasoning_effort AS "reasoningEffort",extra_body AS "extraBody",created_at AS "createdAt" FROM model_profiles ORDER BY kind,name`)
 }
 func (a *App) saveModel(c *gin.Context) {
 	var in modelInput
@@ -346,8 +348,18 @@ func (a *App) saveModel(c *gin.Context) {
 			fail(c, 400, "invalid_request", "联网搜索模式无效")
 			return
 		}
+		if in.ReasoningEffort == "" {
+			in.ReasoningEffort = "default"
+		}
+		switch in.ReasoningEffort {
+		case "default", "none", "minimal", "low", "medium", "high":
+		default:
+			fail(c, 400, "invalid_request", "思考等级无效")
+			return
+		}
 	} else {
 		in.WebSearchMode = "disabled"
+		in.ReasoningEffort = "default"
 		in.ExtraBody = nil
 	}
 	if in.ExtraBody == nil {
@@ -373,12 +385,12 @@ func (a *App) saveModel(c *gin.Context) {
 			return
 		}
 		enc, _ := a.cipher.Encrypt(in.APIKey)
-		err = tx.QueryRow(c, "INSERT INTO model_profiles(name,kind,base_url,api_key_enc,model,dimension,enabled,is_default,web_search_mode,extra_body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id::text", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), enc, in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ExtraBody).Scan(&id)
+		err = tx.QueryRow(c, "INSERT INTO model_profiles(name,kind,base_url,api_key_enc,model,dimension,enabled,is_default,web_search_mode,reasoning_effort,extra_body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id::text", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), enc, in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ReasoningEffort, in.ExtraBody).Scan(&id)
 	} else if in.APIKey != "" {
 		enc, _ := a.cipher.Encrypt(in.APIKey)
-		_, err = tx.Exec(c, "UPDATE model_profiles SET name=$1,kind=$2,base_url=$3,api_key_enc=$4,model=$5,dimension=$6,enabled=$7,is_default=$8,web_search_mode=$9,extra_body=$10,updated_at=now() WHERE id=$11", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), enc, in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ExtraBody, id)
+		_, err = tx.Exec(c, "UPDATE model_profiles SET name=$1,kind=$2,base_url=$3,api_key_enc=$4,model=$5,dimension=$6,enabled=$7,is_default=$8,web_search_mode=$9,reasoning_effort=$10,extra_body=$11,updated_at=now() WHERE id=$12", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), enc, in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ReasoningEffort, in.ExtraBody, id)
 	} else {
-		_, err = tx.Exec(c, "UPDATE model_profiles SET name=$1,kind=$2,base_url=$3,model=$4,dimension=$5,enabled=$6,is_default=$7,web_search_mode=$8,extra_body=$9,updated_at=now() WHERE id=$10", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ExtraBody, id)
+		_, err = tx.Exec(c, "UPDATE model_profiles SET name=$1,kind=$2,base_url=$3,model=$4,dimension=$5,enabled=$6,is_default=$7,web_search_mode=$8,reasoning_effort=$9,extra_body=$10,updated_at=now() WHERE id=$11", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ReasoningEffort, in.ExtraBody, id)
 	}
 	if err != nil {
 		fail(c, 500, "database_error", "保存模型失败")
@@ -403,10 +415,10 @@ func (a *App) loadModel(ctx context.Context, id string) (*openai.Client, string,
 	return cl, kind, err
 }
 func (a *App) loadModelDetails(ctx context.Context, id string) (*openai.Client, string, string, *int, error) {
-	var base, keyEnc, model, kind, webSearchMode string
+	var base, keyEnc, model, kind, webSearchMode, reasoningEffort string
 	var dimension *int
 	var extraBodyRaw []byte
-	err := a.db.QueryRow(ctx, "SELECT base_url,api_key_enc,model,kind,dimension,web_search_mode,extra_body FROM model_profiles WHERE id=$1 AND enabled", id).Scan(&base, &keyEnc, &model, &kind, &dimension, &webSearchMode, &extraBodyRaw)
+	err := a.db.QueryRow(ctx, "SELECT base_url,api_key_enc,model,kind,dimension,web_search_mode,reasoning_effort,extra_body FROM model_profiles WHERE id=$1 AND enabled", id).Scan(&base, &keyEnc, &model, &kind, &dimension, &webSearchMode, &reasoningEffort, &extraBodyRaw)
 	if err != nil {
 		return nil, "", "", nil, err
 	}
@@ -419,6 +431,7 @@ func (a *App) loadModelDetails(ctx context.Context, id string) (*openai.Client, 
 		return nil, "", "", nil, fmt.Errorf("读取运行时设置失败: %w", err)
 	}
 	client := openai.New(base, key, model, time.Duration(settings.AIRequestTimeoutSeconds)*time.Second)
+	client.ReasoningEffort = reasoningEffort
 	if len(extraBodyRaw) > 0 {
 		_ = json.Unmarshal(extraBodyRaw, &client.ExtraBody)
 	}
@@ -558,12 +571,50 @@ func (a *App) listMessages(c *gin.Context) {
 	if v, _ := strconv.Atoi(c.DefaultQuery("limit", "50")); v > 0 && v <= 200 {
 		limit = v
 	}
-	query := `SELECT m.id::text,m.direction,m.content,m.sender_name AS "senderName",m.event_type AS "eventType",m.status,m.event_at AS "eventAt",m.platform_message_id AS "platformMessageId",m.reply_to_message_id AS "replyToMessageId",c.name AS "conversationName",b.name AS "botName" FROM messages m JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id ORDER BY m.event_at DESC LIMIT $1`
+	query := `SELECT m.id::text,m.content AS question,m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",
+		m.platform_message_id AS "platformMessageId",c.name AS "conversationName",b.name AS "botName",
+		COALESCE(om.content,'') AS answer,COALESCE(ar.status,t.status) AS status,
+		COALESCE(mp.name,mp.model,'') AS model,COALESCE(mc.input_tokens,0) AS "inputTokens",COALESCE(mc.output_tokens,0) AS "outputTokens",
+		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
+		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",COALESCE(jsonb_array_length(ar.retrieved_chunks),0) AS "knowledgeHits",
+		COALESCE(ot.status,CASE WHEN om.id IS NULL THEN 'pending' ELSE om.status END,'pending') AS "deliveryStatus",
+		COALESCE(GREATEST(EXTRACT(EPOCH FROM (ot.updated_at-ot.created_at))*1000,0),0)::bigint AS "deliveryLatencyMs",
+		COALESCE(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ot.updated_at,ar.completed_at,t.updated_at)-t.created_at))*1000,0),0)::bigint AS "latencyMs",
+		m.id::text AS "traceId"
+	FROM inbox_tasks t
+	JOIN messages m ON m.id=t.message_id
+	JOIN conversations c ON c.id=m.conversation_id
+	JOIN bots b ON b.id=m.bot_id
+	LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true
+	LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY created_at DESC LIMIT 1) mc ON true
+	LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
+	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true
+	LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
+	ORDER BY m.event_at DESC LIMIT $1`
 	queryList(c, a, query, limit)
 }
 func (a *App) getMessage(c *gin.Context) {
 	var msg map[string]any
-	rows, err := a.db.Query(c, `SELECT m.id::text,m.direction,m.content,m.sender_id AS "senderId",m.sender_name AS "senderName",m.event_type AS "eventType",m.status,m.event_at AS "eventAt",m.raw_event AS "rawEvent",m.platform_message_id AS "platformMessageId",m.reply_to_message_id AS "replyToMessageId",c.name AS "conversationName",b.name AS "botName" FROM messages m JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE m.id=$1`, c.Param("id"))
+	rows, err := a.db.Query(c, `SELECT m.id::text,m.content AS question,m.sender_id AS "senderId",m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",m.raw_event AS "rawEvent",
+		m.platform_message_id AS "platformMessageId",c.name AS "conversationName",b.name AS "botName",
+		COALESCE(om.content,'') AS answer,COALESCE(ar.status,t.status) AS status,
+		COALESCE(mp.name,mp.model,'') AS model,COALESCE(mc.input_tokens,0) AS "inputTokens",COALESCE(mc.output_tokens,0) AS "outputTokens",
+		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
+		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",COALESCE(jsonb_array_length(ar.retrieved_chunks),0) AS "knowledgeHits",
+		COALESCE(ot.status,CASE WHEN om.id IS NULL THEN 'pending' ELSE om.status END,'pending') AS "deliveryStatus",
+		COALESCE(GREATEST(EXTRACT(EPOCH FROM (ot.updated_at-ot.created_at))*1000,0),0)::bigint AS "deliveryLatencyMs",
+		COALESCE(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ot.updated_at,ar.completed_at,t.updated_at)-t.created_at))*1000,0),0)::bigint AS "latencyMs",
+		m.id::text AS "traceId"
+	FROM inbox_tasks t
+	JOIN messages m ON m.id=t.message_id
+	JOIN conversations c ON c.id=m.conversation_id
+	JOIN bots b ON b.id=m.bot_id
+	LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true
+	LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY created_at DESC LIMIT 1) mc ON true
+	LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
+	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true
+	LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
+	WHERE m.id=$1`, c.Param("id"))
 	if err == nil {
 		d, _ := rowsJSON(rows)
 		if len(d) > 0 {
@@ -574,7 +625,11 @@ func (a *App) getMessage(c *gin.Context) {
 		fail(c, 404, "not_found", "消息不存在")
 		return
 	}
-	runs, _ := a.db.Query(c, `SELECT r.id::text,r.status,r.retrieved_chunks AS "retrievedChunks",r.error,r.started_at AS "startedAt",r.completed_at AS "completedAt",COALESCE(json_agg(json_build_object('kind',mc.kind,'inputTokens',mc.input_tokens,'outputTokens',mc.output_tokens,'latencyMs',mc.latency_ms,'error',mc.error)) FILTER(WHERE mc.id IS NOT NULL),'[]') AS calls FROM agent_runs r LEFT JOIN model_calls mc ON mc.agent_run_id=r.id WHERE r.message_id=$1 GROUP BY r.id`, c.Param("id"))
+	runs, _ := a.db.Query(c, `SELECT r.id::text,r.status,r.context_messages AS "contextMessages",r.retrieved_chunks AS "retrievedChunks",
+		r.context_latency_ms AS "contextLatencyMs",r.retrieval_latency_ms AS "retrievalLatencyMs",r.error,r.started_at AS "startedAt",r.completed_at AS "completedAt",
+		COALESCE(json_agg(json_build_object('kind',mc.kind,'profileName',COALESCE(mp.name,mp.model,''),'model',COALESCE(mp.model,''),'inputTokens',mc.input_tokens,'outputTokens',mc.output_tokens,'latencyMs',mc.latency_ms,'error',mc.error) ORDER BY mc.created_at) FILTER(WHERE mc.id IS NOT NULL),'[]') AS calls
+	FROM agent_runs r LEFT JOIN model_calls mc ON mc.agent_run_id=r.id LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
+	WHERE r.message_id=$1 GROUP BY r.id ORDER BY r.started_at DESC`, c.Param("id"))
 	rd, _ := rowsJSON(runs)
 	msg["agentRuns"] = rd
 	ok(c, msg)
@@ -605,7 +660,11 @@ func (a *App) createKB(c *gin.Context) {
 	created(c, gin.H{"id": id})
 }
 func (a *App) getKB(c *gin.Context) {
-	rows, err := a.db.Query(c, `SELECT k.id::text,k.name,k.description,k.embedding_profile_id::text AS "embeddingProfileId",k.embedding_model AS "embeddingModel",COALESCE(json_agg(json_build_object('id',d.id::text,'name',d.name,'status',d.status,'sizeBytes',d.size_bytes,'lastError',d.last_error,'createdAt',d.created_at) ORDER BY d.created_at DESC) FILTER(WHERE d.id IS NOT NULL),'[]') AS documents FROM knowledge_bases k LEFT JOIN knowledge_documents d ON d.knowledge_base_id=k.id WHERE k.id=$1 GROUP BY k.id`, c.Param("id"))
+	rows, err := a.db.Query(c, `SELECT k.id::text,k.name,k.description,k.embedding_profile_id::text AS "embeddingProfileId",k.embedding_model AS "embeddingModel",
+		COALESCE(json_agg(json_build_object('id',d.id::text,'name',d.name,'status',d.status,'sizeBytes',d.size_bytes,'chunkCount',COALESCE(dc.chunk_count,0),'lastError',d.last_error,'createdAt',d.created_at,'updatedAt',d.updated_at) ORDER BY d.created_at DESC) FILTER(WHERE d.id IS NOT NULL),'[]') AS documents
+	FROM knowledge_bases k LEFT JOIN knowledge_documents d ON d.knowledge_base_id=k.id
+	LEFT JOIN LATERAL (SELECT count(*) AS chunk_count FROM knowledge_chunks WHERE document_id=d.id) dc ON true
+	WHERE k.id=$1 GROUP BY k.id`, c.Param("id"))
 	if err != nil {
 		fail(c, 500, "database_error", "读取失败")
 		return
@@ -677,6 +736,34 @@ func (a *App) deleteDocument(c *gin.Context) {
 	}
 	if err := a.files.Delete(c, key); err != nil {
 		a.log.Warn("delete document file", "key", key, "error", err)
+	}
+	ok(c, gin.H{"deleted": true})
+}
+func (a *App) deleteDocumentIndex(c *gin.Context) {
+	tx, err := a.db.Begin(c)
+	if err != nil {
+		fail(c, 500, "database_error", "删除索引失败")
+		return
+	}
+	defer tx.Rollback(c)
+	var status string
+	if err = tx.QueryRow(c, "SELECT status FROM knowledge_documents WHERE id=$1 AND knowledge_base_id=$2 FOR UPDATE", c.Param("documentId"), c.Param("id")).Scan(&status); errors.Is(err, pgx.ErrNoRows) {
+		fail(c, 404, "not_found", "文档不存在")
+		return
+	} else if err != nil {
+		fail(c, 500, "database_error", "删除索引失败")
+		return
+	}
+	if status == "processing" {
+		fail(c, 409, "document_processing", "文档正在索引，请稍后再删除索引")
+		return
+	}
+	if _, err = tx.Exec(c, "DELETE FROM knowledge_chunks WHERE document_id=$1", c.Param("documentId")); err == nil {
+		_, err = tx.Exec(c, "UPDATE knowledge_documents SET status='unindexed',attempts=0,last_error=NULL,updated_at=now() WHERE id=$1", c.Param("documentId"))
+	}
+	if err != nil || tx.Commit(c) != nil {
+		fail(c, 500, "database_error", "删除索引失败")
+		return
 	}
 	ok(c, gin.H{"deleted": true})
 }
