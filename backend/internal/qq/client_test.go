@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -141,6 +142,37 @@ func TestClientFallsBackWhenMarkdownIsRejected(t *testing.T) {
 	}
 	if bodies[0]["msg_type"] != float64(2) || bodies[1]["msg_type"] != float64(0) || bodies[1]["content"] != "## Markdown 回复" {
 		t.Fatalf("unexpected fallback bodies: %#v", bodies)
+	}
+}
+
+func TestClientRetractGroupAndPrivateMessages(t *testing.T) {
+	var paths []string
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/token":
+			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "token"})
+		case r.Method == http.MethodDelete:
+			if r.Header.Get("Authorization") != "QQBot token" {
+				t.Errorf("unexpected authorization: %s", r.Header.Get("Authorization"))
+			}
+			paths = append(paths, r.RequestURI)
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer s.Close()
+
+	c := NewClient("app", "secret", s.URL, s.URL+"/token")
+	if err := c.Retract(context.Background(), "group", "group id", "group/message"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Retract(context.Background(), "private", "user id", "private/message"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/v2/groups/group%20id/messages/group%2Fmessage", "/v2/users/user%20id/messages/private%2Fmessage"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("paths=%#v want=%#v", paths, want)
 	}
 }
 

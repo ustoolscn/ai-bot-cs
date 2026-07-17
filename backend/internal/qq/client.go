@@ -100,6 +100,36 @@ func (c *Client) Send(ctx context.Context, m domain.OutboundMessage) (string, er
 	return id, err
 }
 
+func (c *Client) Retract(ctx context.Context, conversationType, conversationID, messageID string) error {
+	token, err := c.token(ctx)
+	if err != nil {
+		return err
+	}
+	prefix := "/v2/groups/" + url.PathEscape(conversationID)
+	if conversationType == "private" {
+		prefix = "/v2/users/" + url.PathEscape(conversationID)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.APIBase+prefix+"/messages/"+url.PathEscape(messageID), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "QQBot "+token)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("QQ retract status %d: %s", resp.StatusCode, string(data))
+	}
+	return nil
+}
+
 func (c *Client) sendPayload(ctx context.Context, token, path string, payload map[string]any) (string, error) {
 	b, _ := json.Marshal(payload)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.APIBase+path, bytes.NewReader(b))

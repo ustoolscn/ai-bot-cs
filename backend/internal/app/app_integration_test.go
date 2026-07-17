@@ -173,7 +173,13 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	eventually(t, 8*time.Second, "RAG answer delivered to QQ", func() (bool, error) {
 		var sent int
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
-		return sent == 2 && mock.QQSendCount() == 2, err
+		if err != nil || (sent == 2 && mock.QQSendCount() == 2) {
+			return sent == 2 && mock.QQSendCount() == 2, err
+		}
+		var inboxStatus, outboxStates string
+		_ = pool.QueryRow(ctx, `SELECT COALESCE(max(status),'') FROM inbox_tasks`).Scan(&inboxStatus)
+		_ = pool.QueryRow(ctx, `SELECT COALESCE(string_agg(m.event_type||':'||t.status||':'||COALESCE(t.last_error,''),',' ORDER BY t.created_at),'') FROM outbox_tasks t JOIN messages m ON m.id=t.message_id`).Scan(&outboxStates)
+		return false, fmt.Errorf("sent=%d sends=%d inbox=%s outbox=%s", sent, mock.QQSendCount(), inboxStatus, outboxStates)
 	})
 
 	chatRequests := mock.ChatRequests()
@@ -199,6 +205,15 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	}
 	if sends[1].Body["content"] != "根据知识库，退款期限是七天。" || sends[1].Body["msg_id"] != "message-mention" || sends[1].Body["msg_type"] != float64(2) || sends[1].Body["msg_seq"] != float64(2) {
 		t.Fatalf("unexpected QQ markdown body: %#v", sends[1].Body)
+	}
+	eventually(t, 5*time.Second, "processing ARK retracted after final answer", func() (bool, error) {
+		var retracted int
+		err := pool.QueryRow(ctx, `SELECT count(*) FROM message_retractions WHERE status='retracted'`).Scan(&retracted)
+		return retracted == 1 && mock.QQRetractionCount() == 1, err
+	})
+	retractions := mock.QQRetractions()
+	if retractions[0].Authorization != "QQBot mock-access-token" || retractions[0].Path != "/v2/groups/group-open-id/messages/qq-outbound-message-1" {
+		t.Fatalf("unexpected QQ retraction request: %+v", retractions[0])
 	}
 
 	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, mentionBody)
@@ -228,7 +243,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	eventually(t, 8*time.Second, "always mode ordinary message delivered", func() (bool, error) {
 		var sent int
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
-		return sent == 4 && mock.QQSendCount() == 4, err
+		return sent == 4 && mock.QQSendCount() == 4 && mock.QQRetractionCount() == 2, err
 	})
 
 	mock.SetNextChatContent("这是图片回复。\n![结果](https://example.com/result.png)")
@@ -237,7 +252,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	eventually(t, 8*time.Second, "image answer delivered to QQ", func() (bool, error) {
 		var sent int
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
-		return sent == 6 && mock.ChatCount() == 3 && mock.QQSendCount() == 6, err
+		return sent == 6 && mock.ChatCount() == 3 && mock.QQSendCount() == 6 && mock.QQRetractionCount() == 3, err
 	})
 	imageChatPayload := string(mock.ChatRequests()[2])
 	if !strings.Contains(imageChatPayload, `"type":"image_url"`) || !strings.Contains(imageChatPayload, `"url":"data:image/png;base64,`) {
@@ -343,12 +358,12 @@ func TestGroupMentionQueuesWhenFullEventArrivesFirst(t *testing.T) {
 	defer server.Close()
 	client := &http.Client{Timeout: 5 * time.Second}
 
-	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, qqEventBody(t, "full-event-first", "GROUP_MESSAGE_CREATE", "same-group-message", "@机器人 请回复"))
+	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, qqEventBody(t, "shared-event-id", "GROUP_MESSAGE_CREATE", "same-group-message", "@机器人 请回复"))
 	var tasks int
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM inbox_tasks`).Scan(&tasks); err != nil || tasks != 0 {
 		t.Fatalf("full event should not queue in mention-only mode: tasks=%d err=%v", tasks, err)
 	}
-	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, qqEventBody(t, "mention-event-second", "GROUP_AT_MESSAGE_CREATE", "same-group-message", "请回复"))
+	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, qqEventBody(t, "shared-event-id", "GROUP_AT_MESSAGE_CREATE", "same-group-message", "请回复"))
 	var messages, events int
 	var eventType string
 	if err = pool.QueryRow(ctx, `SELECT count(*),max(event_type) FROM messages WHERE platform_message_id='same-group-message'`).Scan(&messages, &eventType); err != nil {
@@ -553,6 +568,7 @@ type upstreamMock struct {
 	chatBodies      [][]byte
 	qqSends         []qqSendRequest
 	qqUploads       []qqSendRequest
+	qqRetractions   []qqSendRequest
 	nextChatContent string
 }
 
@@ -601,6 +617,11 @@ func (m *upstreamMock) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 	case r.URL.Path == "/token":
 		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "mock-access-token", "expires_in": 7200})
+	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/v2/groups/") && strings.Contains(r.URL.Path, "/messages/"):
+		m.mu.Lock()
+		m.qqRetractions = append(m.qqRetractions, qqSendRequest{Path: r.URL.Path, Authorization: r.Header.Get("Authorization")})
+		m.mu.Unlock()
+		w.WriteHeader(http.StatusOK)
 	case strings.HasPrefix(r.URL.Path, "/v2/groups/") && strings.HasSuffix(r.URL.Path, "/files"):
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -654,6 +675,20 @@ func (m *upstreamMock) QQSends() []qqSendRequest {
 	defer m.mu.Unlock()
 	out := make([]qqSendRequest, len(m.qqSends))
 	copy(out, m.qqSends)
+	return out
+}
+
+func (m *upstreamMock) QQRetractionCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.qqRetractions)
+}
+
+func (m *upstreamMock) QQRetractions() []qqSendRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]qqSendRequest, len(m.qqRetractions))
+	copy(out, m.qqRetractions)
 	return out
 }
 

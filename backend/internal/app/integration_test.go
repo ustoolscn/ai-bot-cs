@@ -207,6 +207,7 @@ func TestDatabaseWorkerReliability(t *testing.T) {
 		_, _ = pool.Exec(ctx, "INSERT INTO inbox_tasks(message_id,status,locked_at) VALUES($1,'processing',now())", inMessage)
 		outMessage, outTask := insertOutboxFixture(t, pool, botID, conversationID, time.Now().Add(time.Minute))
 		_, _ = pool.Exec(ctx, "UPDATE outbox_tasks SET status='processing',locked_at=now() WHERE id=$1", outTask)
+		_, _ = pool.Exec(ctx, "INSERT INTO message_retractions(message_id,status,locked_at) VALUES($1,'processing',now())", outMessage)
 		var profileID, kbID, docID string
 		_ = pool.QueryRow(ctx, `INSERT INTO model_profiles(name,kind,base_url,api_key_enc,model,dimension) VALUES('embed','embedding','http://invalid','x','embed',2) RETURNING id::text`).Scan(&profileID)
 		_ = pool.QueryRow(ctx, `INSERT INTO knowledge_bases(name,embedding_profile_id,embedding_model) VALUES('kb',$1,'embed') RETURNING id::text`, profileID).Scan(&kbID)
@@ -214,7 +215,7 @@ func TestDatabaseWorkerReliability(t *testing.T) {
 		if err := a.recoverTasks(ctx); err != nil {
 			t.Fatal(err)
 		}
-		for table, id := range map[string]string{"inbox_tasks": inMessage, "outbox_tasks": outMessage, "knowledge_documents": docID} {
+		for table, id := range map[string]string{"inbox_tasks": inMessage, "outbox_tasks": outMessage, "message_retractions": outMessage, "knowledge_documents": docID} {
 			var status string
 			column := "message_id"
 			if table == "knowledge_documents" {

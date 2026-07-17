@@ -71,6 +71,7 @@ func (a *App) recoverTasks(ctx context.Context) error {
 	queries := []string{
 		"UPDATE inbox_tasks SET status='pending',locked_at=NULL,next_attempt_at=now(),updated_at=now() WHERE status='processing'",
 		"UPDATE outbox_tasks SET status='pending',locked_at=NULL,next_attempt_at=now(),updated_at=now() WHERE status='processing'",
+		"UPDATE message_retractions SET status='pending',locked_at=NULL,next_attempt_at=now(),updated_at=now() WHERE status='processing'",
 		"UPDATE knowledge_documents SET status='pending',next_attempt_at=now(),updated_at=now() WHERE status='processing'",
 	}
 	for _, query := range queries {

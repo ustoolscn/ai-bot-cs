@@ -19,7 +19,7 @@ import (
 
 func (a *App) RunWorkers(ctx context.Context) {
 	var wg sync.WaitGroup
-	for name, fn := range map[string]func(context.Context) error{"inbox": a.processInbox, "documents": a.processDocument, "outbox": a.processOutbox} {
+	for name, fn := range map[string]func(context.Context) error{"inbox": a.processInbox, "documents": a.processDocument, "outbox": a.processOutbox, "retractions": a.processRetraction} {
 		name, fn := name, fn
 		wg.Add(1)
 		go func() { defer wg.Done(); a.workerLoop(ctx, name, fn) }()
@@ -121,7 +121,10 @@ func (a *App) processInbox(ctx context.Context) error {
 		return err
 	}
 	if !j.Enabled || (j.Deadline != nil && time.Now().After(*j.Deadline)) {
-		return a.finishInbox(ctx, j.TaskID, "skipped", nil)
+		if err := a.finishInbox(ctx, j.TaskID, "skipped", nil); err != nil {
+			return err
+		}
+		return a.scheduleProcessingAckRetraction(ctx, j.BotID, j.ConversationID, j.PlatformMessageID)
 	}
 	profileID := ""
 	if j.ChatProfileID != nil {
@@ -255,6 +258,9 @@ func (a *App) excludeModeratedMessage(ctx context.Context, j inboxJob, cause err
 	if _, err = tx.Exec(ctx, `UPDATE inbox_tasks SET status='failed',last_error=$1,next_attempt_at=now(),updated_at=now() WHERE id=$2`, cause.Error(), j.TaskID); err != nil {
 		return err
 	}
+	if _, err = tx.Exec(ctx, scheduleProcessingAckRetractionSQL, j.BotID, j.ConversationID, j.PlatformMessageID); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -320,6 +326,9 @@ func (a *App) retryInbox(ctx context.Context, j inboxJob, cause error) error {
 		status = "failed"
 	}
 	_, err := a.db.Exec(ctx, "UPDATE inbox_tasks SET status=$1,last_error=$2,next_attempt_at=now()+interval '5 seconds',updated_at=now() WHERE id=$3", status, cause.Error(), j.TaskID)
+	if err == nil && status == "failed" {
+		err = a.scheduleProcessingAckRetraction(ctx, j.BotID, j.ConversationID, j.PlatformMessageID)
+	}
 	return err
 }
 
@@ -427,10 +436,10 @@ func (a *App) retryDocumentJob(ctx context.Context, j documentJob, cause error) 
 }
 
 type outboxJob struct {
-	TaskID, MessageID, BotID, ConversationType, ConversationID, ReplyTo, Text, EventType, AppID, SecretEnc string
-	Sequence, Attempts                                                                                     int
-	Deadline                                                                                               *time.Time
-	Parts                                                                                                  []domain.ContentPart
+	TaskID, MessageID, BotID, ConversationRecordID, ConversationType, ConversationID, ReplyTo, Text, EventType, AppID, SecretEnc string
+	Sequence, Attempts                                                                                                           int
+	Deadline                                                                                                                     *time.Time
+	Parts                                                                                                                        []domain.ContentPart
 }
 
 func (a *App) claimOutbox(ctx context.Context) (outboxJob, error) {
@@ -441,7 +450,7 @@ func (a *App) claimOutbox(ctx context.Context) (outboxJob, error) {
 	defer tx.Rollback(ctx)
 	var j outboxJob
 	var partsRaw []byte
-	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,c.type,c.platform_id,COALESCE(m.reply_to_message_id,''),m.content,m.event_type,m.parts,b.app_id,b.app_secret_enc,t.msg_seq,t.attempts,m.reply_deadline FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='pending' AND t.next_attempt_at<=now() ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationType, &j.ConversationID, &j.ReplyTo, &j.Text, &j.EventType, &partsRaw, &j.AppID, &j.SecretEnc, &j.Sequence, &j.Attempts, &j.Deadline)
+	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,c.id::text,c.type,c.platform_id,COALESCE(m.reply_to_message_id,''),m.content,m.event_type,m.parts,b.app_id,b.app_secret_enc,t.msg_seq,t.attempts,m.reply_deadline FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='pending' AND t.next_attempt_at<=now() ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationRecordID, &j.ConversationType, &j.ConversationID, &j.ReplyTo, &j.Text, &j.EventType, &partsRaw, &j.AppID, &j.SecretEnc, &j.Sequence, &j.Attempts, &j.Deadline)
 	if err != nil {
 		return j, err
 	}
@@ -460,6 +469,9 @@ func (a *App) processOutbox(ctx context.Context) error {
 	if j.Deadline != nil && time.Now().After(*j.Deadline) {
 		_, err = a.db.Exec(ctx, "UPDATE outbox_tasks SET status='expired',last_error='reply deadline exceeded',updated_at=now() WHERE id=$1", j.TaskID)
 		_, _ = a.db.Exec(ctx, "UPDATE messages SET status='expired' WHERE id=$1", j.MessageID)
+		if err == nil && j.EventType == "AI_RESPONSE" {
+			err = a.scheduleProcessingAckRetraction(ctx, j.BotID, j.ConversationRecordID, j.ReplyTo)
+		}
 		return err
 	}
 	secret, err := a.cipher.Decrypt(j.SecretEnc)
@@ -504,10 +516,24 @@ func (a *App) processOutbox(ctx context.Context) error {
 	if err == nil {
 		_, err = tx.Exec(ctx, "UPDATE messages SET status='sent',platform_message_id=$1 WHERE id=$2", nullString(pid), j.MessageID)
 	}
+	if err == nil && j.EventType == "AI_RESPONSE" {
+		_, err = tx.Exec(ctx, scheduleProcessingAckRetractionSQL, j.BotID, j.ConversationRecordID, j.ReplyTo)
+	}
 	if err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+const scheduleProcessingAckRetractionSQL = `INSERT INTO message_retractions(message_id)
+	SELECT id FROM messages
+	WHERE bot_id=$1 AND conversation_id=$2 AND reply_to_message_id=$3 AND event_type='PROCESSING_ACK'
+	ORDER BY created_at DESC LIMIT 1
+	ON CONFLICT(message_id) DO NOTHING`
+
+func (a *App) scheduleProcessingAckRetraction(ctx context.Context, botID, conversationID, replyTo string) error {
+	_, err := a.db.Exec(ctx, scheduleProcessingAckRetractionSQL, botID, conversationID, replyTo)
+	return err
 }
 
 func hasContentPart(parts []domain.ContentPart, partType string) bool {
@@ -527,7 +553,82 @@ func (a *App) retryOutbox(ctx context.Context, j outboxJob, cause error) error {
 	_, err := a.db.Exec(ctx, "UPDATE outbox_tasks SET status=$1,last_error=$2,next_attempt_at=now()+interval '5 seconds',updated_at=now() WHERE id=$3", status, cause.Error(), j.TaskID)
 	if status == "failed" {
 		_, _ = a.db.Exec(ctx, "UPDATE messages SET status='failed' WHERE id=$1", j.MessageID)
+		if err == nil && j.EventType == "AI_RESPONSE" {
+			err = a.scheduleProcessingAckRetraction(ctx, j.BotID, j.ConversationRecordID, j.ReplyTo)
+		}
 	}
+	return err
+}
+
+type retractionJob struct {
+	TaskID, MessageID, BotID, ConversationType, ConversationID, PlatformMessageID, AppID, SecretEnc string
+	Attempts                                                                                        int
+	ExpiresAt                                                                                       time.Time
+}
+
+func (a *App) claimRetraction(ctx context.Context) (retractionJob, error) {
+	_, _ = a.db.Exec(ctx, "UPDATE message_retractions SET status='expired',updated_at=now() WHERE status='pending' AND expires_at<=now()")
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return retractionJob{}, err
+	}
+	defer tx.Rollback(ctx)
+	var j retractionJob
+	err = tx.QueryRow(ctx, `SELECT r.id::text,m.id::text,m.bot_id::text,c.type,c.platform_id,m.platform_message_id,b.app_id,b.app_secret_enc,r.attempts,r.expires_at
+		FROM message_retractions r
+		JOIN messages m ON m.id=r.message_id
+		JOIN conversations c ON c.id=m.conversation_id
+		JOIN bots b ON b.id=m.bot_id
+		WHERE r.status='pending' AND r.next_attempt_at<=now() AND r.expires_at>now() AND m.platform_message_id IS NOT NULL
+		ORDER BY r.created_at FOR UPDATE OF r SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationType, &j.ConversationID, &j.PlatformMessageID, &j.AppID, &j.SecretEnc, &j.Attempts, &j.ExpiresAt)
+	if err != nil {
+		return j, err
+	}
+	if _, err = tx.Exec(ctx, "UPDATE message_retractions SET status='processing',attempts=attempts+1,locked_at=now(),updated_at=now() WHERE id=$1", j.TaskID); err != nil {
+		return j, err
+	}
+	return j, tx.Commit(ctx)
+}
+
+func (a *App) processRetraction(ctx context.Context) error {
+	j, err := a.claimRetraction(ctx)
+	if err != nil {
+		return err
+	}
+	secret, err := a.cipher.Decrypt(j.SecretEnc)
+	if err != nil {
+		return a.retryRetraction(ctx, j, err)
+	}
+	client := qq.NewClient(j.AppID, secret, a.cfg.QQAPIBaseURL, a.cfg.QQTokenURL)
+	retractCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	err = client.Retract(retractCtx, j.ConversationType, j.ConversationID, j.PlatformMessageID)
+	cancel()
+	if err != nil {
+		return a.retryRetraction(ctx, j, err)
+	}
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, "UPDATE message_retractions SET status='retracted',last_error=NULL,updated_at=now() WHERE id=$1", j.TaskID); err == nil {
+		_, err = tx.Exec(ctx, "UPDATE messages SET status='retracted' WHERE id=$1", j.MessageID)
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (a *App) retryRetraction(ctx context.Context, j retractionJob, cause error) error {
+	a.log.Warn("QQ processing ARK retraction failed", "bot_id", j.BotID, "conversation_type", j.ConversationType, "conversation_id", j.ConversationID, "attempt", j.Attempts+1, "error", cause)
+	status := "pending"
+	if j.Attempts+1 >= 3 {
+		status = "failed"
+	} else if time.Now().Add(2 * time.Second).After(j.ExpiresAt) {
+		status = "expired"
+	}
+	_, err := a.db.Exec(ctx, "UPDATE message_retractions SET status=$1,last_error=$2,next_attempt_at=now()+interval '2 seconds',updated_at=now() WHERE id=$3", status, cause.Error(), j.TaskID)
 	return err
 }
 func errorText(err error) any {
