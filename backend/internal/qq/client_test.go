@@ -110,6 +110,40 @@ func TestClientFallsBackWhenPassiveArkIsRejected(t *testing.T) {
 	}
 }
 
+func TestClientFallsBackWhenMarkdownIsRejected(t *testing.T) {
+	var bodies []map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "token"})
+		case "/v2/groups/group/messages":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			bodies = append(bodies, body)
+			if len(bodies) == 1 {
+				http.Error(w, "markdown unavailable", http.StatusForbidden)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "fallback-id"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer s.Close()
+
+	c := NewClient("app", "secret", s.URL, s.URL+"/token")
+	id, err := c.Send(context.Background(), domain.OutboundMessage{
+		ConversationType: "group", ConversationID: "group", ReplyToMessageID: "source",
+		Text: "## Markdown 回复", Format: "markdown", Sequence: 2,
+	})
+	if err != nil || id != "fallback-id" || len(bodies) != 2 {
+		t.Fatalf("id=%q bodies=%#v err=%v", id, bodies, err)
+	}
+	if bodies[0]["msg_type"] != float64(2) || bodies[1]["msg_type"] != float64(0) || bodies[1]["content"] != "## Markdown 回复" {
+		t.Fatalf("unexpected fallback bodies: %#v", bodies)
+	}
+}
+
 func TestClientSendGroupImage(t *testing.T) {
 	var uploadBody map[string]any
 	var messageBody map[string]any

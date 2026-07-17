@@ -587,6 +587,7 @@ func (a *App) listMessages(c *gin.Context) {
 		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
 		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END AS "knowledgeHits",
 		COALESCE(ot.status,CASE WHEN om.id IS NULL THEN 'pending' ELSE om.status END,'pending') AS "deliveryStatus",
+		COALESCE(ot.last_error,'') AS "deliveryError",
 		COALESCE(GREATEST(EXTRACT(EPOCH FROM (ot.updated_at-ot.created_at))*1000,0),0)::bigint AS "deliveryLatencyMs",
 		COALESCE(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ot.updated_at,ar.completed_at,t.updated_at)-t.created_at))*1000,0),0)::bigint AS "latencyMs",
 		m.id::text AS "traceId"
@@ -624,6 +625,7 @@ func (a *App) getMessage(c *gin.Context) {
 		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
 		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END AS "knowledgeHits",
 		COALESCE(ot.status,CASE WHEN om.id IS NULL THEN 'pending' ELSE om.status END,'pending') AS "deliveryStatus",
+		COALESCE(ot.last_error,'') AS "deliveryError",
 		COALESCE(GREATEST(EXTRACT(EPOCH FROM (ot.updated_at-ot.created_at))*1000,0),0)::bigint AS "deliveryLatencyMs",
 		COALESCE(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ot.updated_at,ar.completed_at,t.updated_at)-t.created_at))*1000,0),0)::bigint AS "latencyMs",
 		m.id::text AS "traceId"

@@ -77,6 +77,7 @@ export interface MessageRecord {
   outputTokens: number
   knowledgeHits: number
   deliveryStatus: Status
+  deliveryError?: string
   contextLatency: number
   retrievalLatency: number
   modelLatency: number

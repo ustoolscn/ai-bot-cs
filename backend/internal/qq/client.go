@@ -83,7 +83,19 @@ func (c *Client) Send(ctx context.Context, m domain.OutboundMessage) (string, er
 	id, err := c.sendPayload(ctx, token, prefix+"/messages", payload)
 	if err != nil && isAck {
 		fallback := map[string]any{"content": "👀", "msg_type": 0, "msg_id": m.ReplyToMessageID, "msg_seq": m.Sequence}
-		return c.sendPayload(ctx, token, prefix+"/messages", fallback)
+		fallbackID, fallbackErr := c.sendPayload(ctx, token, prefix+"/messages", fallback)
+		if fallbackErr != nil {
+			return "", fmt.Errorf("QQ ARK send failed (%v); text fallback failed: %w", err, fallbackErr)
+		}
+		return fallbackID, nil
+	}
+	if err != nil && m.Format == "markdown" {
+		fallback := map[string]any{"content": m.Text, "msg_type": 0, "msg_id": m.ReplyToMessageID, "msg_seq": m.Sequence}
+		fallbackID, fallbackErr := c.sendPayload(ctx, token, prefix+"/messages", fallback)
+		if fallbackErr != nil {
+			return "", fmt.Errorf("QQ markdown send failed (%v); text fallback failed: %w", err, fallbackErr)
+		}
+		return fallbackID, nil
 	}
 	return id, err
 }

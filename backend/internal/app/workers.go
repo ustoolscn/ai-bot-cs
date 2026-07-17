@@ -479,9 +479,16 @@ func (a *App) processOutbox(ctx context.Context) error {
 	if j.EventType == "AI_RESPONSE" {
 		format = "markdown"
 	}
-	pid, err := client.Send(ctx, domain.OutboundMessage{ID: j.MessageID, Channel: "qq", BotID: j.BotID, ConversationType: j.ConversationType, ConversationID: j.ConversationID, ReplyToMessageID: j.ReplyTo, Text: j.Text, Format: format, Parts: j.Parts, ReplyDeadline: j.Deadline, Sequence: j.Sequence})
+	sendCtx := ctx
+	cancelSend := func() {}
+	if hasContentPart(j.Parts, "ark_ack") {
+		sendCtx, cancelSend = context.WithTimeout(ctx, 5*time.Second)
+	}
+	pid, err := client.Send(sendCtx, domain.OutboundMessage{ID: j.MessageID, Channel: "qq", BotID: j.BotID, ConversationType: j.ConversationType, ConversationID: j.ConversationID, ReplyToMessageID: j.ReplyTo, Text: j.Text, Format: format, Parts: j.Parts, ReplyDeadline: j.Deadline, Sequence: j.Sequence})
+	cancelSend()
 	if err != nil {
 		if hasContentPart(j.Parts, "ark_ack") {
+			a.log.Warn("QQ processing ARK failed", "bot_id", j.BotID, "conversation_type", j.ConversationType, "conversation_id", j.ConversationID, "error", err)
 			_, _ = a.db.Exec(ctx, "UPDATE outbox_tasks SET status='failed',last_error=$1,updated_at=now() WHERE id=$2", err.Error(), j.TaskID)
 			_, _ = a.db.Exec(ctx, "UPDATE messages SET status='failed' WHERE id=$1", j.MessageID)
 			return nil
@@ -512,6 +519,7 @@ func hasContentPart(parts []domain.ContentPart, partType string) bool {
 	return false
 }
 func (a *App) retryOutbox(ctx context.Context, j outboxJob, cause error) error {
+	a.log.Warn("QQ reply delivery failed", "bot_id", j.BotID, "conversation_type", j.ConversationType, "conversation_id", j.ConversationID, "attempt", j.Attempts+1, "error", cause)
 	status := "pending"
 	if j.Attempts+1 >= 3 {
 		status = "failed"
