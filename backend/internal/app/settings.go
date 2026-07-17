@@ -35,8 +35,8 @@ func (a *App) seededRuntimeSettings() RuntimeSettings {
 	return RuntimeSettings{DefaultContextLimit: contextLimit, AIRequestTimeoutSeconds: timeout, MessageRetentionDays: retention, UpdatedAt: &now}
 }
 func validateRuntimeSettings(s RuntimeSettings) error {
-	if s.DefaultContextLimit < 4 || s.DefaultContextLimit > 100 {
-		return fmt.Errorf("默认上下文条数必须在 4 到 100 之间")
+	if s.DefaultContextLimit < 1 || s.DefaultContextLimit > 100 {
+		return fmt.Errorf("默认上下文条数必须在 1 到 100 之间")
 	}
 	if s.AIRequestTimeoutSeconds < 10 || s.AIRequestTimeoutSeconds > 600 {
 		return fmt.Errorf("AI 请求超时必须在 10 到 600 秒之间")

@@ -164,26 +164,29 @@ func (a *App) processInbox(ctx context.Context) error {
 		messages = append(messages, domain.ChatMessage{Role: "system", Content: "以下是知识库检索结果。仅在相关时使用，并优先忠于资料：\n" + kbContext})
 	}
 	contextStarted := time.Now()
-	rows, err := a.db.Query(ctx, `SELECT direction,content,sender_name FROM messages WHERE conversation_id=$1 AND id<>$2 AND content<>'' AND context_excluded=false ORDER BY event_at DESC LIMIT $3`, j.ConversationID, j.MessageID, j.ContextLimit)
-	if err == nil {
-		type hist struct{ dir, content, name string }
-		var hs []hist
-		for rows.Next() {
-			var h hist
-			_ = rows.Scan(&h.dir, &h.content, &h.name)
-			hs = append(hs, h)
-		}
-		rows.Close()
-		for i := len(hs) - 1; i >= 0; i-- {
-			role := "user"
-			if hs[i].dir == "outbound" {
-				role = "assistant"
+	historyLimit := contextHistoryLimit(j.ContextLimit)
+	if historyLimit > 0 {
+		rows, queryErr := a.db.Query(ctx, `SELECT direction,content,sender_name FROM messages WHERE conversation_id=$1 AND id<>$2 AND content<>'' AND context_excluded=false ORDER BY event_at DESC LIMIT $3`, j.ConversationID, j.MessageID, historyLimit)
+		if queryErr == nil {
+			type hist struct{ dir, content, name string }
+			var hs []hist
+			for rows.Next() {
+				var h hist
+				_ = rows.Scan(&h.dir, &h.content, &h.name)
+				hs = append(hs, h)
 			}
-			content := hs[i].content
-			if hs[i].name != "" && role == "user" {
-				content = hs[i].name + ": " + content
+			rows.Close()
+			for i := len(hs) - 1; i >= 0; i-- {
+				role := "user"
+				if hs[i].dir == "outbound" {
+					role = "assistant"
+				}
+				content := hs[i].content
+				if hs[i].name != "" && role == "user" {
+					content = hs[i].name + ": " + content
+				}
+				messages = append(messages, domain.ChatMessage{Role: role, Content: content})
 			}
-			messages = append(messages, domain.ChatMessage{Role: role, Content: content})
 		}
 	}
 	userContent := strings.TrimSpace(j.Content)
@@ -229,6 +232,13 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.retryInbox(ctx, j, err)
 	}
 	return tx.Commit(ctx)
+}
+
+func contextHistoryLimit(totalMessages int) int {
+	if totalMessages <= 1 {
+		return 0
+	}
+	return totalMessages - 1
 }
 
 func (a *App) excludeModeratedMessage(ctx context.Context, j inboxJob, cause error) error {
