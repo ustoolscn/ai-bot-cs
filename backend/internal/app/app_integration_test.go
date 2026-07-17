@@ -365,6 +365,101 @@ func TestGroupMentionQueuesWhenFullEventArrivesFirst(t *testing.T) {
 	}
 }
 
+func TestModel403ExcludesMessageFromFutureContext(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	pool := newIntegrationSchema(t, ctx, databaseURL)
+
+	var mu sync.Mutex
+	var chatBodies [][]byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/v1/chat/completions":
+			body, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			chatBodies = append(chatBodies, append([]byte(nil), body...))
+			mu.Unlock()
+			if bytes.Contains(body, []byte("触发审查的句子")) {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"error":{"message":"content moderation"}}`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": "正常回复"}}}})
+		case r.URL.Path == "/token":
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "token"})
+		case strings.HasSuffix(r.URL.Path, "/messages"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "sent"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	application, err := New(ctx, config.Config{
+		DataDir: t.TempDir(), MasterKey: []byte("0123456789abcdef0123456789abcdef"),
+		AdminUsername: "admin", AdminPassword: "integration-password", WorkerPoll: 10 * time.Millisecond,
+		AIRequestTimeout: 10 * time.Second, QQAPIBaseURL: upstream.URL, QQTokenURL: upstream.URL + "/token",
+	}, pool, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiKeyEnc, _ := application.cipher.Encrypt("model-key")
+	var profileID string
+	if err = pool.QueryRow(ctx, `INSERT INTO model_profiles(name,kind,base_url,api_key_enc,model,enabled,is_default) VALUES('审查模型','chat',$1,$2,'mock-chat',true,true) RETURNING id::text`, upstream.URL+"/v1", apiKeyEnc).Scan(&profileID); err != nil {
+		t.Fatal(err)
+	}
+	botSecret := "moderation-bot-secret"
+	botSecretEnc, _ := application.cipher.Encrypt(botSecret)
+	var botID string
+	if err = pool.QueryRow(ctx, `INSERT INTO bots(name,app_id,app_secret_enc,default_chat_profile_id) VALUES('审查测试机器人','app-id',$1,$2) RETURNING id::text`, botSecretEnc, profileID).Scan(&botID); err != nil {
+		t.Fatal(err)
+	}
+
+	workerCtx, stopWorkers := context.WithCancel(context.Background())
+	workersDone := make(chan struct{})
+	go func() { defer close(workersDone); application.RunWorkers(workerCtx) }()
+	defer func() {
+		stopWorkers()
+		select {
+		case <-workersDone:
+		case <-time.After(3 * time.Second):
+			t.Error("workers did not stop")
+		}
+	}()
+	server := httptest.NewServer(application.Router())
+	defer server.Close()
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, qqEventBody(t, "moderation-event", "GROUP_AT_MESSAGE_CREATE", "moderation-message", "触发审查的句子"))
+	eventually(t, 5*time.Second, "403 message excluded", func() (bool, error) {
+		var taskStatus string
+		var excluded bool
+		err := pool.QueryRow(ctx, `SELECT t.status,m.context_excluded FROM inbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.platform_message_id='moderation-message'`).Scan(&taskStatus, &excluded)
+		return taskStatus == "failed" && excluded, err
+	})
+
+	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, qqEventBody(t, "normal-event", "GROUP_AT_MESSAGE_CREATE", "normal-message", "这是后续正常问题"))
+	eventually(t, 5*time.Second, "normal message delivered after moderation failure", func() (bool, error) {
+		var sent int
+		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
+		return sent == 1, err
+	})
+	mu.Lock()
+	requests := append([][]byte(nil), chatBodies...)
+	mu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("403 request should not retry: requests=%d", len(requests))
+	}
+	if bytes.Contains(requests[1], []byte("触发审查的句子")) || !bytes.Contains(requests[1], []byte("这是后续正常问题")) {
+		t.Fatalf("future context still contains moderated message: %s", requests[1])
+	}
+}
+
 func newIntegrationSchema(t *testing.T, ctx context.Context, databaseURL string) *pgxpool.Pool {
 	t.Helper()
 	admin, err := pgxpool.New(ctx, databaseURL)

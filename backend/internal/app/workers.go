@@ -12,6 +12,7 @@ import (
 
 	"ai-bot/backend/internal/domain"
 	"ai-bot/backend/internal/knowledge"
+	"ai-bot/backend/internal/openai"
 	"ai-bot/backend/internal/qq"
 	"github.com/jackc/pgx/v5"
 )
@@ -163,7 +164,7 @@ func (a *App) processInbox(ctx context.Context) error {
 		messages = append(messages, domain.ChatMessage{Role: "system", Content: "以下是知识库检索结果。仅在相关时使用，并优先忠于资料：\n" + kbContext})
 	}
 	contextStarted := time.Now()
-	rows, err := a.db.Query(ctx, `SELECT direction,content,sender_name FROM messages WHERE conversation_id=$1 AND id<>$2 AND content<>'' ORDER BY event_at DESC LIMIT $3`, j.ConversationID, j.MessageID, j.ContextLimit)
+	rows, err := a.db.Query(ctx, `SELECT direction,content,sender_name FROM messages WHERE conversation_id=$1 AND id<>$2 AND content<>'' AND context_excluded=false ORDER BY event_at DESC LIMIT $3`, j.ConversationID, j.MessageID, j.ContextLimit)
 	if err == nil {
 		type hist struct{ dir, content, name string }
 		var hs []hist
@@ -199,6 +200,9 @@ func (a *App) processInbox(ctx context.Context) error {
 	_, _ = a.db.Exec(ctx, "INSERT INTO model_calls(agent_run_id,profile_id,kind,input_tokens,output_tokens,latency_ms,error) VALUES($1,$2,'chat',$3,$4,$5,$6)", runID, profileID, result.InputTokens, result.OutputTokens, latency, errorText(chatErr))
 	if chatErr != nil {
 		_, _ = a.db.Exec(ctx, "UPDATE agent_runs SET status='failed',error=$1,completed_at=now() WHERE id=$2", chatErr.Error(), runID)
+		if openai.IsHTTPStatus(chatErr, 403) {
+			return a.excludeModeratedMessage(ctx, j, chatErr)
+		}
 		return a.retryInbox(ctx, j, chatErr)
 	}
 	hitsJSON, _ := json.Marshal(hits)
@@ -223,6 +227,22 @@ func (a *App) processInbox(ctx context.Context) error {
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		return a.retryInbox(ctx, j, err)
+	}
+	return tx.Commit(ctx)
+}
+
+func (a *App) excludeModeratedMessage(ctx context.Context, j inboxJob, cause error) error {
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	reason := "模型返回 HTTP 403，已从后续会话上下文排除"
+	if _, err = tx.Exec(ctx, `UPDATE messages SET context_excluded=true,context_exclusion_reason=$1 WHERE id=$2`, reason, j.MessageID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE inbox_tasks SET status='failed',last_error=$1,next_attempt_at=now(),updated_at=now() WHERE id=$2`, cause.Error(), j.TaskID); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }

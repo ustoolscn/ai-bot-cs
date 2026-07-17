@@ -838,7 +838,8 @@ func (a *App) retryFailedTasks(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback(c)
-	inbox, err := tx.Exec(c, "UPDATE inbox_tasks SET status='pending',attempts=0,next_attempt_at=now(),locked_at=NULL,last_error=NULL,updated_at=now() WHERE status='failed'")
+	inbox, err := tx.Exec(c, `UPDATE inbox_tasks t SET status='pending',attempts=0,next_attempt_at=now(),locked_at=NULL,last_error=NULL,updated_at=now()
+		FROM messages m WHERE t.message_id=m.id AND t.status='failed' AND m.context_excluded=false`)
 	if err != nil {
 		fail(c, 500, "database_error", "重新入队失败")
 		return

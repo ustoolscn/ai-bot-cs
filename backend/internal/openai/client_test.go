@@ -73,6 +73,22 @@ func TestNonJSONResponseExplainsBaseURL(t *testing.T) {
 	}
 }
 
+func TestHTTPStatusErrorCanBeClassified(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":"content moderation"}`, http.StatusForbidden)
+	}))
+	defer s.Close()
+
+	c := New(s.URL, "", "test", time.Second)
+	_, err := c.Chat(context.Background(), []domain.ChatMessage{{Role: "user", Content: "blocked"}})
+	if err == nil || !IsHTTPStatus(err, http.StatusForbidden) {
+		t.Fatalf("expected classifiable 403 error, got %v", err)
+	}
+	if IsHTTPStatus(err, http.StatusTooManyRequests) {
+		t.Fatalf("403 error must not be classified as 429: %v", err)
+	}
+}
+
 func TestResponsesWebSearch(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/responses" {

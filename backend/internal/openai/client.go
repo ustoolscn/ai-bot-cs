@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,20 @@ type Client struct {
 	UseResponses           bool
 	ReasoningEffort        string
 	HTTP                   *http.Client
+}
+
+type HTTPError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("model API status %d: %s", e.StatusCode, e.Body)
+}
+
+func IsHTTPStatus(err error, status int) bool {
+	var apiErr *HTTPError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == status
 }
 
 func New(baseURL, apiKey, model string, timeout time.Duration) *Client {
@@ -49,7 +64,11 @@ func (c *Client) do(ctx context.Context, path string, payload any, out any) erro
 		return fmt.Errorf("读取模型接口响应失败: %w", readErr)
 	}
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("model API status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		body := strings.TrimSpace(string(data))
+		if len([]rune(body)) > 2048 {
+			body = string([]rune(body)[:2048]) + "…"
+		}
+		return &HTTPError{StatusCode: resp.StatusCode, Body: body}
 	}
 	if err := json.Unmarshal(data, out); err != nil {
 		snippet := strings.TrimSpace(string(data))
