@@ -12,6 +12,7 @@ import (
 )
 
 func TestClientSendGroupMessage(t *testing.T) {
+	var messageBody map[string]any
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/token":
@@ -20,6 +21,7 @@ func TestClientSendGroupMessage(t *testing.T) {
 			if r.Header.Get("Authorization") != "QQBot token" {
 				t.Errorf("bad auth")
 			}
+			_ = json.NewDecoder(r.Body).Decode(&messageBody)
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": "sent-id"})
 		default:
 			http.NotFound(w, r)
@@ -27,9 +29,84 @@ func TestClientSendGroupMessage(t *testing.T) {
 	}))
 	defer s.Close()
 	c := NewClient("app", "secret", s.URL, s.URL+"/token")
-	id, err := c.Send(context.Background(), domain.OutboundMessage{ConversationType: "group", ConversationID: "group", ReplyToMessageID: "m1", Text: "hello", Sequence: 1})
+	id, err := c.Send(context.Background(), domain.OutboundMessage{ConversationType: "group", ConversationID: "group", ReplyToMessageID: "m1", Text: "## 标题\n\n**加粗内容**", Format: "markdown", Sequence: 2})
 	if err != nil || id != "sent-id" {
 		t.Fatalf("id=%q err=%v", id, err)
+	}
+	if messageBody["msg_type"] != float64(2) || messageBody["msg_id"] != "m1" || messageBody["msg_seq"] != float64(2) {
+		t.Fatalf("unexpected markdown message body: %#v", messageBody)
+	}
+	markdown := messageBody["markdown"].(map[string]any)
+	if markdown["content"] != "## 标题\n\n**加粗内容**" {
+		t.Fatalf("unexpected markdown content: %#v", markdown)
+	}
+}
+
+func TestClientSendProcessingArk(t *testing.T) {
+	var bodies []map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "token"})
+		case "/v2/users/user/messages":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			bodies = append(bodies, body)
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "ark-id"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer s.Close()
+
+	c := NewClient("app", "secret", s.URL, s.URL+"/token")
+	id, err := c.Send(context.Background(), domain.OutboundMessage{
+		ConversationType: "private", ConversationID: "user", ReplyToMessageID: "source", Text: "👀", Sequence: 1,
+		Parts: []domain.ContentPart{{Type: "ark_ack"}},
+	})
+	if err != nil || id != "ark-id" || len(bodies) != 1 {
+		t.Fatalf("id=%q bodies=%#v err=%v", id, bodies, err)
+	}
+	if bodies[0]["msg_type"] != float64(3) || bodies[0]["msg_seq"] != float64(1) {
+		t.Fatalf("unexpected ark body: %#v", bodies[0])
+	}
+	ark := bodies[0]["ark"].(map[string]any)
+	if ark["template_id"] != float64(23) {
+		t.Fatalf("unexpected ark payload: %#v", ark)
+	}
+}
+
+func TestClientFallsBackWhenPassiveArkIsRejected(t *testing.T) {
+	var bodies []map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "token"})
+		case "/v2/groups/group/messages":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			bodies = append(bodies, body)
+			if len(bodies) == 1 {
+				http.Error(w, "ark permission denied", http.StatusForbidden)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "fallback-id"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer s.Close()
+
+	c := NewClient("app", "secret", s.URL, s.URL+"/token")
+	id, err := c.Send(context.Background(), domain.OutboundMessage{
+		ConversationType: "group", ConversationID: "group", ReplyToMessageID: "source", Text: "👀", Sequence: 1,
+		Parts: []domain.ContentPart{{Type: "ark_ack"}},
+	})
+	if err != nil || id != "fallback-id" || len(bodies) != 2 {
+		t.Fatalf("id=%q bodies=%#v err=%v", id, bodies, err)
+	}
+	if bodies[0]["msg_type"] != float64(3) || bodies[1]["msg_type"] != float64(0) || bodies[1]["content"] != "👀" {
+		t.Fatalf("unexpected fallback bodies: %#v", bodies)
 	}
 }
 

@@ -33,20 +33,20 @@ func (a *App) overview(c *gin.Context) {
 
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM bots").Scan(&bots)
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM conversations").Scan(&conversations)
-	_ = a.db.QueryRow(c, "SELECT count(*) FROM messages WHERE created_at>now()-interval '24 hours'").Scan(&messages24h)
+	_ = a.db.QueryRow(c, "SELECT count(*) FROM messages WHERE created_at>now()-interval '24 hours' AND event_type<>'PROCESSING_ACK'").Scan(&messages24h)
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM webhook_events WHERE created_at>now()-interval '24 hours'").Scan(&totalEvents)
 	_ = a.db.QueryRow(c, `SELECT count(*),count(*) FILTER(WHERE t.status='completed'),count(DISTINCT m.conversation_id) FROM inbox_tasks t JOIN messages m ON m.id=t.message_id WHERE t.created_at>now()-interval '24 hours'`).Scan(&triggered, &successful, &triggeredConversations)
 	_ = a.db.QueryRow(c, `SELECT COALESCE(avg(EXTRACT(EPOCH FROM (completed_at-started_at))*1000),0) FROM agent_runs WHERE completed_at IS NOT NULL AND started_at>now()-interval '24 hours'`).Scan(&averageLatencyMS)
 	_ = a.db.QueryRow(c, `SELECT count(*) FILTER(WHERE latency_ms>5000),count(*) FROM model_calls WHERE created_at>now()-interval '24 hours'`).Scan(&slowCalls, &modelCalls)
-	_ = a.db.QueryRow(c, `SELECT count(*) FILTER(WHERE status='sent'),count(*) FILTER(WHERE status IN ('sent','failed','expired')) FROM outbox_tasks WHERE created_at>now()-interval '24 hours'`).Scan(&sentDeliveries, &totalDeliveries)
+	_ = a.db.QueryRow(c, `SELECT count(*) FILTER(WHERE t.status='sent'),count(*) FILTER(WHERE t.status IN ('sent','failed','expired')) FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE t.created_at>now()-interval '24 hours' AND m.event_type<>'PROCESSING_ACK'`).Scan(&sentDeliveries, &totalDeliveries)
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM inbox_tasks WHERE status IN ('pending','processing')").Scan(&inboxPending)
-	_ = a.db.QueryRow(c, "SELECT count(*) FROM outbox_tasks WHERE status IN ('pending','processing')").Scan(&outboxPending)
+	_ = a.db.QueryRow(c, `SELECT count(*) FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE t.status IN ('pending','processing') AND m.event_type<>'PROCESSING_ACK'`).Scan(&outboxPending)
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents WHERE status='pending'").Scan(&documentPending)
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents WHERE status='processing'").Scan(&documentProcessing)
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents WHERE status='ready'").Scan(&readyDocuments)
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents WHERE status='failed'").Scan(&failedDocuments)
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents").Scan(&totalDocuments)
-	_ = a.db.QueryRow(c, `SELECT (SELECT count(*) FROM inbox_tasks WHERE status='failed')+(SELECT count(*) FROM outbox_tasks WHERE status='failed')+(SELECT count(*) FROM knowledge_documents WHERE status='failed')`).Scan(&failedTasks)
+	_ = a.db.QueryRow(c, `SELECT (SELECT count(*) FROM inbox_tasks WHERE status='failed')+(SELECT count(*) FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE t.status='failed' AND m.event_type<>'PROCESSING_ACK')+(SELECT count(*) FROM knowledge_documents WHERE status='failed')`).Scan(&failedTasks)
 
 	pipelines := a.overviewPipelines(c)
 	alerts := a.overviewAlerts(c)
@@ -82,7 +82,7 @@ func (a *App) overviewPipelines(c *gin.Context) []overviewPipeline {
 		LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true
 		LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY created_at DESC LIMIT 1) mc ON true
 		LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
-		LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true
+		LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true
 		LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
 		ORDER BY m.event_at DESC LIMIT 10`)
 	if err != nil {
@@ -148,7 +148,7 @@ func deliveryOverviewStatus(status string) string {
 }
 
 func (a *App) overviewAlerts(c *gin.Context) []map[string]any {
-	rows, err := a.db.Query(c, `SELECT id,time,bot,content,impact FROM (SELECT t.id::text AS id,t.updated_at AS time,b.name AS bot,'入口处理失败：'||COALESCE(t.last_error,'未知错误') AS content,'消息未生成回复' AS impact FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN bots b ON b.id=m.bot_id WHERE t.status='failed' UNION ALL SELECT t.id::text,t.updated_at,b.name,'QQ 投递失败：'||COALESCE(t.last_error,'未知错误'),'回复未送达' FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN bots b ON b.id=m.bot_id WHERE t.status IN ('failed','expired') UNION ALL SELECT d.id::text,d.updated_at,'知识索引',d.name||'：'||COALESCE(d.last_error,'索引失败'),'知识检索可能不完整' FROM knowledge_documents d WHERE d.status='failed') failures ORDER BY time DESC LIMIT 8`)
+	rows, err := a.db.Query(c, `SELECT id,time,bot,content,impact FROM (SELECT t.id::text AS id,t.updated_at AS time,b.name AS bot,'入口处理失败：'||COALESCE(t.last_error,'未知错误') AS content,'消息未生成回复' AS impact FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN bots b ON b.id=m.bot_id WHERE t.status='failed' UNION ALL SELECT t.id::text,t.updated_at,b.name,'QQ 投递失败：'||COALESCE(t.last_error,'未知错误'),'回复未送达' FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN bots b ON b.id=m.bot_id WHERE t.status IN ('failed','expired') AND m.event_type<>'PROCESSING_ACK' UNION ALL SELECT d.id::text,d.updated_at,'知识索引',d.name||'：'||COALESCE(d.last_error,'索引失败'),'知识检索可能不完整' FROM knowledge_documents d WHERE d.status='failed') failures ORDER BY time DESC LIMIT 8`)
 	if err != nil {
 		return []map[string]any{}
 	}

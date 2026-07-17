@@ -166,7 +166,7 @@ func (a *App) processInbox(ctx context.Context) error {
 	contextStarted := time.Now()
 	historyLimit := contextHistoryLimit(j.ContextLimit)
 	if historyLimit > 0 {
-		rows, queryErr := a.db.Query(ctx, `SELECT direction,content,sender_name FROM messages WHERE conversation_id=$1 AND id<>$2 AND content<>'' AND context_excluded=false ORDER BY event_at DESC LIMIT $3`, j.ConversationID, j.MessageID, historyLimit)
+		rows, queryErr := a.db.Query(ctx, `SELECT direction,content,sender_name FROM messages WHERE conversation_id=$1 AND id<>$2 AND content<>'' AND context_excluded=false AND event_type<>'PROCESSING_ACK' ORDER BY event_at DESC LIMIT $3`, j.ConversationID, j.MessageID, historyLimit)
 		if queryErr == nil {
 			type hist struct{ dir, content, name string }
 			var hs []hist
@@ -214,12 +214,13 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.retryInbox(ctx, j, err)
 	}
 	defer tx.Rollback(ctx)
-	responseText, responseParts := extractOutboundImage(result.Content)
+	responseText := strings.TrimSpace(result.Content)
+	_, responseParts := extractOutboundImage(result.Content)
 	partsJSON, _ := json.Marshal(responseParts)
 	var outID string
-	err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,content,parts,reply_to_message_id,status,event_at,reply_deadline) VALUES('qq',$1,$2,'outbound',$3,$4::jsonb,$5,'pending',now(),$6) RETURNING id::text`, j.BotID, j.ConversationID, responseText, string(partsJSON), j.PlatformMessageID, j.Deadline).Scan(&outID)
+	err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,content,parts,reply_to_message_id,status,event_at,reply_deadline) VALUES('qq',$1,$2,'outbound','AI_RESPONSE',$3,$4::jsonb,$5,'pending',now(),$6) RETURNING id::text`, j.BotID, j.ConversationID, responseText, string(partsJSON), j.PlatformMessageID, j.Deadline).Scan(&outID)
 	if err == nil {
-		_, err = tx.Exec(ctx, "INSERT INTO outbox_tasks(message_id) VALUES($1)", outID)
+		_, err = tx.Exec(ctx, "INSERT INTO outbox_tasks(message_id,msg_seq) VALUES($1,2)", outID)
 	}
 	if err == nil {
 		_, err = tx.Exec(ctx, "UPDATE agent_runs SET status='completed',retrieved_chunks=$1::jsonb,completed_at=now() WHERE id=$2", string(hitsJSON), runID)
@@ -426,10 +427,10 @@ func (a *App) retryDocumentJob(ctx context.Context, j documentJob, cause error) 
 }
 
 type outboxJob struct {
-	TaskID, MessageID, BotID, ConversationType, ConversationID, ReplyTo, Text, AppID, SecretEnc string
-	Sequence, Attempts                                                                          int
-	Deadline                                                                                    *time.Time
-	Parts                                                                                       []domain.ContentPart
+	TaskID, MessageID, BotID, ConversationType, ConversationID, ReplyTo, Text, EventType, AppID, SecretEnc string
+	Sequence, Attempts                                                                                     int
+	Deadline                                                                                               *time.Time
+	Parts                                                                                                  []domain.ContentPart
 }
 
 func (a *App) claimOutbox(ctx context.Context) (outboxJob, error) {
@@ -440,7 +441,7 @@ func (a *App) claimOutbox(ctx context.Context) (outboxJob, error) {
 	defer tx.Rollback(ctx)
 	var j outboxJob
 	var partsRaw []byte
-	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,c.type,c.platform_id,COALESCE(m.reply_to_message_id,''),m.content,m.parts,b.app_id,b.app_secret_enc,t.msg_seq,t.attempts,m.reply_deadline FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='pending' AND t.next_attempt_at<=now() ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationType, &j.ConversationID, &j.ReplyTo, &j.Text, &partsRaw, &j.AppID, &j.SecretEnc, &j.Sequence, &j.Attempts, &j.Deadline)
+	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,c.type,c.platform_id,COALESCE(m.reply_to_message_id,''),m.content,m.event_type,m.parts,b.app_id,b.app_secret_enc,t.msg_seq,t.attempts,m.reply_deadline FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='pending' AND t.next_attempt_at<=now() ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationType, &j.ConversationID, &j.ReplyTo, &j.Text, &j.EventType, &partsRaw, &j.AppID, &j.SecretEnc, &j.Sequence, &j.Attempts, &j.Deadline)
 	if err != nil {
 		return j, err
 	}
@@ -474,11 +475,23 @@ func (a *App) processOutbox(ctx context.Context) error {
 		}
 	}
 	client := qq.NewClient(j.AppID, secret, a.cfg.QQAPIBaseURL, a.cfg.QQTokenURL)
-	pid, err := client.Send(ctx, domain.OutboundMessage{ID: j.MessageID, Channel: "qq", BotID: j.BotID, ConversationType: j.ConversationType, ConversationID: j.ConversationID, ReplyToMessageID: j.ReplyTo, Text: j.Text, Parts: j.Parts, ReplyDeadline: j.Deadline, Sequence: j.Sequence})
+	format := ""
+	if j.EventType == "AI_RESPONSE" {
+		format = "markdown"
+	}
+	pid, err := client.Send(ctx, domain.OutboundMessage{ID: j.MessageID, Channel: "qq", BotID: j.BotID, ConversationType: j.ConversationType, ConversationID: j.ConversationID, ReplyToMessageID: j.ReplyTo, Text: j.Text, Format: format, Parts: j.Parts, ReplyDeadline: j.Deadline, Sequence: j.Sequence})
 	if err != nil {
+		if hasContentPart(j.Parts, "ark_ack") {
+			_, _ = a.db.Exec(ctx, "UPDATE outbox_tasks SET status='failed',last_error=$1,updated_at=now() WHERE id=$2", err.Error(), j.TaskID)
+			_, _ = a.db.Exec(ctx, "UPDATE messages SET status='failed' WHERE id=$1", j.MessageID)
+			return nil
+		}
 		return a.retryOutbox(ctx, j, err)
 	}
-	tx, _ := a.db.Begin(ctx)
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
 	defer tx.Rollback(ctx)
 	_, err = tx.Exec(ctx, "UPDATE outbox_tasks SET status='sent',platform_message_id=$1,updated_at=now() WHERE id=$2", pid, j.TaskID)
 	if err == nil {
@@ -488,6 +501,15 @@ func (a *App) processOutbox(ctx context.Context) error {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func hasContentPart(parts []domain.ContentPart, partType string) bool {
+	for _, part := range parts {
+		if part.Type == partType {
+			return true
+		}
+	}
+	return false
 }
 func (a *App) retryOutbox(ctx context.Context, j outboxJob, cause error) error {
 	status := "pending"

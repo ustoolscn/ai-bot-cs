@@ -59,7 +59,16 @@ func (c *Client) Send(ctx context.Context, m domain.OutboundMessage) (string, er
 		prefix = "/v2/groups/" + url.PathEscape(m.ConversationID)
 	}
 	payload := map[string]any{"content": m.Text, "msg_type": 0, "msg_id": m.ReplyToMessageID, "msg_seq": m.Sequence}
-	if image := firstImage(m.Parts); image != nil {
+	if m.Format == "markdown" {
+		payload["msg_type"] = 2
+		payload["markdown"] = map[string]any{"content": m.Text}
+	}
+	isAck := hasPartType(m.Parts, "ark_ack")
+	if isAck {
+		payload["msg_type"] = 3
+		payload["ark"] = processingArk()
+		delete(payload, "markdown")
+	} else if image := firstImage(m.Parts); image != nil && m.Format != "markdown" {
 		fileInfo, err := c.uploadImage(ctx, token, prefix+"/files", *image)
 		if err != nil {
 			return "", err
@@ -69,9 +78,19 @@ func (c *Client) Send(ctx context.Context, m domain.OutboundMessage) (string, er
 		if strings.TrimSpace(m.Text) == "" {
 			payload["content"] = "图片"
 		}
+		delete(payload, "markdown")
 	}
+	id, err := c.sendPayload(ctx, token, prefix+"/messages", payload)
+	if err != nil && isAck {
+		fallback := map[string]any{"content": "👀", "msg_type": 0, "msg_id": m.ReplyToMessageID, "msg_seq": m.Sequence}
+		return c.sendPayload(ctx, token, prefix+"/messages", fallback)
+	}
+	return id, err
+}
+
+func (c *Client) sendPayload(ctx context.Context, token, path string, payload map[string]any) (string, error) {
 	b, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.APIBase+prefix+"/messages", bytes.NewReader(b))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.APIBase+path, bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "QQBot "+token)
 	r, err := c.HTTP.Do(req)
@@ -84,10 +103,42 @@ func (c *Client) Send(ctx context.Context, m domain.OutboundMessage) (string, er
 		return "", fmt.Errorf("QQ send status %d: %s", r.StatusCode, string(data))
 	}
 	var out struct {
-		ID string `json:"id"`
+		ID      string `json:"id"`
+		Code    int    `json:"code"`
+		Message string `json:"message"`
 	}
-	_ = json.Unmarshal(data, &out)
+	if err := json.Unmarshal(data, &out); err != nil {
+		return "", fmt.Errorf("QQ send returned invalid JSON: %w", err)
+	}
+	if out.ID == "" {
+		return "", fmt.Errorf("QQ send returned no message id (code=%d message=%s)", out.Code, out.Message)
+	}
 	return out.ID, nil
+}
+
+func hasPartType(parts []domain.ContentPart, partType string) bool {
+	for _, part := range parts {
+		if part.Type == partType {
+			return true
+		}
+	}
+	return false
+}
+
+func processingArk() map[string]any {
+	return map[string]any{
+		"template_id": 23,
+		"kv": []map[string]any{
+			{"key": "#DESC#", "value": "👀"},
+			{"key": "#PROMPT#", "value": "👀 正在处理"},
+			{
+				"key": "#LIST#",
+				"obj": []map[string]any{
+					{"obj_kv": []map[string]string{{"key": "desc", "value": "已收到消息，正在思考…"}}},
+				},
+			},
+		},
+	}
 }
 
 func firstImage(parts []domain.ContentPart) *domain.ContentPart {

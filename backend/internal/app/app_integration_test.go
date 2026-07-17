@@ -173,7 +173,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	eventually(t, 8*time.Second, "RAG answer delivered to QQ", func() (bool, error) {
 		var sent int
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
-		return sent == 1 && mock.QQSendCount() == 1, err
+		return sent == 2 && mock.QQSendCount() == 2, err
 	})
 
 	chatRequests := mock.ChatRequests()
@@ -188,19 +188,22 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	}
 
 	sends := mock.QQSends()
-	if len(sends) != 1 {
-		t.Fatalf("expected one QQ send, got %d", len(sends))
+	if len(sends) != 2 {
+		t.Fatalf("expected processing ARK and final QQ send, got %d", len(sends))
 	}
 	if sends[0].Authorization != "QQBot mock-access-token" || sends[0].Path != "/v2/groups/group-open-id/messages" {
 		t.Fatalf("unexpected QQ request: %+v", sends[0])
 	}
-	if sends[0].Body["content"] != "根据知识库，退款期限是七天。" || sends[0].Body["msg_id"] != "message-mention" {
-		t.Fatalf("unexpected QQ message body: %#v", sends[0].Body)
+	if sends[0].Body["msg_type"] != float64(3) || sends[0].Body["msg_seq"] != float64(1) {
+		t.Fatalf("unexpected processing ARK body: %#v", sends[0].Body)
+	}
+	if sends[1].Body["content"] != "根据知识库，退款期限是七天。" || sends[1].Body["msg_id"] != "message-mention" || sends[1].Body["msg_type"] != float64(2) || sends[1].Body["msg_seq"] != float64(2) {
+		t.Fatalf("unexpected QQ markdown body: %#v", sends[1].Body)
 	}
 
 	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, mentionBody)
 	time.Sleep(250 * time.Millisecond)
-	if mock.ChatCount() != 1 || mock.QQSendCount() != 1 {
+	if mock.ChatCount() != 1 || mock.QQSendCount() != 2 {
 		t.Fatalf("duplicate event was processed again: chats=%d sends=%d", mock.ChatCount(), mock.QQSendCount())
 	}
 	var webhookEvents, inboundMessages, agentRuns, outboundMessages int
@@ -211,7 +214,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 		(SELECT count(*) FROM messages WHERE direction='outbound' AND reply_to_message_id='message-mention')`).Scan(&webhookEvents, &inboundMessages, &agentRuns, &outboundMessages); err != nil {
 		t.Fatal(err)
 	}
-	if webhookEvents != 1 || inboundMessages != 1 || agentRuns != 1 || outboundMessages != 1 {
+	if webhookEvents != 1 || inboundMessages != 1 || agentRuns != 1 || outboundMessages != 2 {
 		t.Fatalf("idempotency counts are wrong: events=%d inbound=%d runs=%d outbound=%d", webhookEvents, inboundMessages, agentRuns, outboundMessages)
 	}
 
@@ -225,7 +228,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	eventually(t, 8*time.Second, "always mode ordinary message delivered", func() (bool, error) {
 		var sent int
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
-		return sent == 2 && mock.QQSendCount() == 2, err
+		return sent == 4 && mock.QQSendCount() == 4, err
 	})
 
 	mock.SetNextChatContent("这是图片回复。\n![结果](https://example.com/result.png)")
@@ -234,22 +237,19 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	eventually(t, 8*time.Second, "image answer delivered to QQ", func() (bool, error) {
 		var sent int
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
-		return sent == 3 && mock.ChatCount() == 3 && mock.QQSendCount() == 3 && mock.QQUploadCount() == 1, err
+		return sent == 6 && mock.ChatCount() == 3 && mock.QQSendCount() == 6, err
 	})
 	imageChatPayload := string(mock.ChatRequests()[2])
 	if !strings.Contains(imageChatPayload, `"type":"image_url"`) || !strings.Contains(imageChatPayload, `"url":"data:image/png;base64,`) {
 		t.Fatalf("image was not sent to the multimodal model: %s", imageChatPayload)
 	}
-	imageUpload := mock.QQUploads()[0]
-	if imageUpload.Path != "/v2/groups/group-open-id/files" || imageUpload.Body["file_type"] != float64(1) || imageUpload.Body["url"] != "https://example.com/result.png" {
-		t.Fatalf("unexpected QQ image upload: %#v", imageUpload)
-	}
-	imageSend := mock.QQSends()[2]
-	if imageSend.Body["msg_type"] != float64(7) || imageSend.Body["msg_id"] != "message-image" {
+	imageSend := mock.QQSends()[5]
+	if imageSend.Body["msg_type"] != float64(2) || imageSend.Body["msg_id"] != "message-image" || imageSend.Body["msg_seq"] != float64(2) {
 		t.Fatalf("unexpected QQ image message: %#v", imageSend.Body)
 	}
-	if media, _ := imageSend.Body["media"].(map[string]any); media["file_info"] != "mock-file-info" {
-		t.Fatalf("unexpected QQ image media: %#v", imageSend.Body["media"])
+	markdown, _ := imageSend.Body["markdown"].(map[string]any)
+	if !strings.Contains(fmt.Sprint(markdown["content"]), "![结果](https://example.com/result.png)") || mock.QQUploadCount() != 0 {
+		t.Fatalf("image response should use QQ markdown without media upload: body=%#v uploads=%d", imageSend.Body, mock.QQUploadCount())
 	}
 	var imageMessageID string
 	if err := pool.QueryRow(ctx, `SELECT id::text FROM messages WHERE platform_message_id='message-image'`).Scan(&imageMessageID); err != nil {
@@ -282,7 +282,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 		t.Fatalf("message list should contain only triggered records with real usage: %s", messagesJSON)
 	}
 	messageDetail := requestJSON(t, client, http.MethodGet, server.URL+"/api/messages/"+mentionMessageID, nil, http.StatusOK)
-	if !bytes.Contains(messageDetail, []byte("七天内可以申请无理由退款")) || !bytes.Contains(messageDetail, []byte("今天的普通群消息只应作为上下文")) || !bytes.Contains(messageDetail, []byte(`"contextMessages":`)) || !bytes.Contains(messageDetail, []byte(`"status":"completed"`)) {
+	if !bytes.Contains(messageDetail, []byte(`"answer":"根据知识库，退款期限是七天。"`)) || bytes.Contains(messageDetail, []byte(`"answer":"👀"`)) || !bytes.Contains(messageDetail, []byte("七天内可以申请无理由退款")) || !bytes.Contains(messageDetail, []byte("今天的普通群消息只应作为上下文")) || !bytes.Contains(messageDetail, []byte(`"contextMessages":`)) || !bytes.Contains(messageDetail, []byte(`"status":"completed"`)) {
 		t.Fatalf("message detail does not expose the completed RAG trace: %s", messageDetail)
 	}
 	assertSecretNotReturned(t, messageDetail, chatAPIKey, embeddingAPIKey, botSecret)
@@ -360,8 +360,15 @@ func TestGroupMentionQueuesWhenFullEventArrivesFirst(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM inbox_tasks`).Scan(&tasks); err != nil {
 		t.Fatal(err)
 	}
+	var ackTasks, ackSequence int
+	if err = pool.QueryRow(ctx, `SELECT count(*),COALESCE(max(t.msg_seq),0) FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.event_type='PROCESSING_ACK'`).Scan(&ackTasks, &ackSequence); err != nil {
+		t.Fatal(err)
+	}
 	if messages != 1 || events != 2 || tasks != 1 || eventType != "GROUP_AT_MESSAGE_CREATE" {
 		t.Fatalf("duplicate group event reconciliation failed: messages=%d events=%d tasks=%d eventType=%q", messages, events, tasks, eventType)
+	}
+	if ackTasks != 1 || ackSequence != 1 {
+		t.Fatalf("processing ARK was not queued exactly once: tasks=%d seq=%d", ackTasks, ackSequence)
 	}
 }
 
@@ -376,6 +383,7 @@ func TestModel403ExcludesMessageFromFutureContext(t *testing.T) {
 
 	var mu sync.Mutex
 	var chatBodies [][]byte
+	var qqSendSequence int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -393,7 +401,11 @@ func TestModel403ExcludesMessageFromFutureContext(t *testing.T) {
 		case r.URL.Path == "/token":
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "token"})
 		case strings.HasSuffix(r.URL.Path, "/messages"):
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "sent"})
+			mu.Lock()
+			qqSendSequence++
+			sentID := fmt.Sprintf("sent-%d", qqSendSequence)
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": sentID})
 		default:
 			http.NotFound(w, r)
 		}
@@ -447,7 +459,24 @@ func TestModel403ExcludesMessageFromFutureContext(t *testing.T) {
 	eventually(t, 5*time.Second, "normal message delivered after moderation failure", func() (bool, error) {
 		var sent int
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
-		return sent == 1, err
+		if err != nil || sent == 3 {
+			return sent == 3, err
+		}
+		rows, queryErr := pool.Query(ctx, `SELECT m.event_type,t.msg_seq,t.status,COALESCE(t.last_error,'') FROM outbox_tasks t JOIN messages m ON m.id=t.message_id ORDER BY t.created_at`)
+		if queryErr != nil {
+			return false, queryErr
+		}
+		defer rows.Close()
+		var states []string
+		for rows.Next() {
+			var eventType, status, lastError string
+			var sequence int
+			if scanErr := rows.Scan(&eventType, &sequence, &status, &lastError); scanErr != nil {
+				return false, scanErr
+			}
+			states = append(states, fmt.Sprintf("%s(seq=%d,status=%s,error=%q)", eventType, sequence, status, lastError))
+		}
+		return false, fmt.Errorf("sent=%d outbox=%s", sent, strings.Join(states, ", "))
 	})
 	mu.Lock()
 	requests := append([][]byte(nil), chatBodies...)

@@ -27,6 +27,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -519,7 +520,7 @@ func (a *App) testModel(c *gin.Context) {
 }
 
 func (a *App) listConversations(c *gin.Context) {
-	queryList(c, a, `SELECT c.id::text,c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",b.name AS "botName",c.updated_at AS "updatedAt",COALESCE(ms.message_count,0) AS "messageCount",CASE WHEN c.type='private' THEN GREATEST(COALESCE(cm.member_count,0),1) ELSE COALESCE(cm.member_count,0) END AS "memberCount",COALESCE(ms.has_full_message_events,false) AS "hasFullMessageEvents" FROM conversations c JOIN bots b ON b.id=c.bot_id LEFT JOIN LATERAL (SELECT count(*) AS message_count,bool_or(event_type='GROUP_MESSAGE_CREATE') AS has_full_message_events FROM messages WHERE conversation_id=c.id) ms ON true LEFT JOIN LATERAL (SELECT count(*) AS member_count FROM conversation_members WHERE conversation_id=c.id AND active) cm ON true ORDER BY c.updated_at DESC`)
+	queryList(c, a, `SELECT c.id::text,c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",b.name AS "botName",c.updated_at AS "updatedAt",COALESCE(ms.message_count,0) AS "messageCount",CASE WHEN c.type='private' THEN GREATEST(COALESCE(cm.member_count,0),1) ELSE COALESCE(cm.member_count,0) END AS "memberCount",COALESCE(ms.has_full_message_events,false) AS "hasFullMessageEvents" FROM conversations c JOIN bots b ON b.id=c.bot_id LEFT JOIN LATERAL (SELECT count(*) FILTER(WHERE event_type<>'PROCESSING_ACK') AS message_count,bool_or(event_type='GROUP_MESSAGE_CREATE') AS has_full_message_events FROM messages WHERE conversation_id=c.id) ms ON true LEFT JOIN LATERAL (SELECT count(*) AS member_count FROM conversation_members WHERE conversation_id=c.id AND active) cm ON true ORDER BY c.updated_at DESC`)
 }
 func (a *App) getConversation(c *gin.Context) {
 	rows, err := a.db.Query(c, `SELECT c.id::text,c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",COALESCE(json_agg(ck.knowledge_base_id::text) FILTER(WHERE ck.knowledge_base_id IS NOT NULL),'[]') AS "knowledgeBaseIds" FROM conversations c LEFT JOIN conversation_knowledge_bases ck ON ck.conversation_id=c.id WHERE c.id=$1 GROUP BY c.id`, c.Param("id"))
@@ -596,7 +597,7 @@ func (a *App) listMessages(c *gin.Context) {
 	LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true
 	LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY created_at DESC LIMIT 1) mc ON true
 	LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
-	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true
+	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true
 	LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
 	ORDER BY m.event_at DESC LIMIT $1`
 	rows, err := a.db.Query(c, query, limit)
@@ -633,7 +634,7 @@ func (a *App) getMessage(c *gin.Context) {
 	LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true
 	LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY created_at DESC LIMIT 1) mc ON true
 	LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
-	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true
+	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true
 	LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
 	WHERE m.id=$1`, c.Param("id"))
 	if err == nil {
@@ -844,7 +845,8 @@ func (a *App) retryFailedTasks(c *gin.Context) {
 		fail(c, 500, "database_error", "重新入队失败")
 		return
 	}
-	outbox, err := tx.Exec(c, "UPDATE outbox_tasks SET status='pending',attempts=0,next_attempt_at=now(),locked_at=NULL,last_error=NULL,updated_at=now() WHERE status='failed'")
+	outbox, err := tx.Exec(c, `UPDATE outbox_tasks t SET status='pending',attempts=0,next_attempt_at=now(),locked_at=NULL,last_error=NULL,updated_at=now()
+		FROM messages m WHERE t.message_id=m.id AND t.status='failed' AND m.event_type<>'PROCESSING_ACK'`)
 	if err != nil {
 		fail(c, 500, "database_error", "重新入队失败")
 		return
@@ -957,7 +959,16 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 		return err
 	}
 	if !blocked && qq.ShouldQueue(msg.EventType, triggerMode) {
-		_, err = tx.Exec(ctx, "INSERT INTO inbox_tasks(message_id) VALUES($1) ON CONFLICT DO NOTHING", mid)
+		var taskTag pgconn.CommandTag
+		taskTag, err = tx.Exec(ctx, "INSERT INTO inbox_tasks(message_id) VALUES($1) ON CONFLICT DO NOTHING", mid)
+		if err == nil && taskTag.RowsAffected() > 0 {
+			var ackID string
+			err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,content,parts,reply_to_message_id,status,event_at,reply_deadline)
+				VALUES('qq',$1,$2,'outbound','PROCESSING_ACK','👀','[{"type":"ark_ack"}]'::jsonb,$3,'pending',now(),$4) RETURNING id::text`, msg.BotID, cid, msg.PlatformMessageID, msg.ReplyDeadline).Scan(&ackID)
+			if err == nil {
+				_, err = tx.Exec(ctx, "INSERT INTO outbox_tasks(message_id,msg_seq) VALUES($1,1)", ackID)
+			}
+		}
 	}
 	if err != nil {
 		return err
