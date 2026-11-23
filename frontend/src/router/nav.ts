@@ -1,5 +1,5 @@
 import { markRaw, type Component } from 'vue'
-import { ChatDotRound, ChatLineSquare, Collection, Connection, Cpu, DataAnalysis, Headset, MagicStick, Odometer, Reading, Setting } from '@element-plus/icons-vue'
+import { ChatDotRound, ChatLineSquare, Collection, Connection, Cpu, DataAnalysis, Headset, MagicStick, CircleClose, Odometer, Reading, Setting } from '@element-plus/icons-vue'
 
 export interface NavItem { path: string; label: string; description: string; icon: Component; badge?: 'handoffs' | 'candidates' }
 export interface NavGroup { title: string; items: NavItem[] }
@@ -15,6 +15,7 @@ export const navGroups: NavGroup[] = [
   { title: '运行记录', items: [
     { path: '/messages', label: '消息记录', description: '每条消息的回复和处理链路', icon: icon(ChatLineSquare) },
     { path: '/conversations', label: '群与会话', description: '每个群或私聊的触发方式、模型和知识库', icon: icon(ChatDotRound) },
+    { path: '/blacklist', label: '黑名单', description: '拉黑的群成员，机器人不理睬并自动踢出群', icon: icon(CircleClose) },
   ] },
   { title: '客服配置', items: [
     { path: '/agent', label: '智能体', description: '人设、回复长度、记忆、网站数据、技能与工具', icon: icon(MagicStick) },

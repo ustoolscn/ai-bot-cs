@@ -46,9 +46,29 @@
       <el-table-column label="成员" min-width="200"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.displayName || '未知昵称' }}</strong><span>{{ row.userId }}</span></div></template></el-table-column>
       <el-table-column prop="messageCount" label="消息" width="70" />
       <el-table-column label="记忆" width="70"><template #default="{ row }"><el-button v-if="Number(row.memoryCount) > 0" link type="primary" @click="showMemories(row)">{{ row.memoryCount }}</el-button><span v-else>0</span></template></el-table-column>
-      <el-table-column label="官方客服" width="90"><template #default="{ row }"><el-switch v-model="row.isStaff" @change="toggle(row)" /></template></el-table-column>
+      <el-table-column label="官方客服" width="90"><template #default="{ row }"><el-switch v-model="row.isStaff" :disabled="row.isBlocked" @change="toggle(row)" /></template></el-table-column>
+      <el-table-column label="黑名单" width="110"><template #default="{ row }">
+        <div v-if="row.isBlocked" class="blocked-cell"><el-tag size="small" type="danger" effect="light" round>已拉黑</el-tag><el-button link type="primary" size="small" @click="unblock(row)">解除</el-button></div>
+        <el-button v-else link type="danger" @click="openBlock(row)">拉黑</el-button>
+      </template></el-table-column>
     </el-table>
     <p class="muted gap">成员列表只包含系统见过发言的人，不是完整的 QQ 群成员名单。</p>
+    <el-dialog v-model="blockDialog" :title="`拉黑 · ${blockTarget?.displayName || blockTarget?.userId || ''}`" width="460px" append-to-body>
+      <el-form label-position="top">
+        <el-form-item label="拉黑范围">
+          <el-radio-group v-model="blockForm.scope">
+            <el-radio value="group">只在本群</el-radio>
+            <el-radio value="bot">{{ botName || '这个机器人' }} 所在的所有群</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="原因（可选）"><el-input v-model="blockForm.reason" type="textarea" :rows="2" maxlength="1000" placeholder="例如：发广告、骚扰其他群友" /></el-form-item>
+        <el-form-item>
+          <div class="kick-row"><el-switch v-model="blockForm.autoKick" /><div><strong>发现时自动踢出群</strong><small>需要群主给机器人开启“移除群成员”权限，没权限时会提醒你手动踢</small></div></div>
+        </el-form-item>
+      </el-form>
+      <p class="muted">拉黑后，机器人不再回复他，他的发言也不会进入上下文、记忆和学习。</p>
+      <template #footer><el-button @click="blockDialog = false">取消</el-button><el-button type="danger" :loading="blocking" @click="confirmBlock">拉黑</el-button></template>
+    </el-dialog>
     <el-dialog v-model="memDialog" :title="`记忆 · ${memUser}`" width="520px" append-to-body>
       <div v-for="m in mems" :key="m.id" class="content-box gap">{{ m.content }}<br /><small class="muted">{{ formatTime(m.updatedAt) }}</small></div>
     </el-dialog>
@@ -56,12 +76,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { agentApi, formatTime, type Member, type Memory, type StaffLearning } from '@/api/agent'
 
-const props = defineProps<{ modelValue: boolean; conversationId: string; conversationName: string }>()
+const props = defineProps<{ modelValue: boolean; conversationId: string; conversationName: string; botId?: string; botName?: string }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
 const router = useRouter()
 const members = ref<Member[]>([])
@@ -127,6 +147,36 @@ function openCandidates() {
   emit('update:modelValue', false)
   router.push({ path: '/learning', query: { conversationId: props.conversationId, conversationName: props.conversationName } })
 }
+const blockDialog = ref(false)
+const blocking = ref(false)
+const blockTarget = ref<Member | null>(null)
+const blockForm = reactive({ scope: 'group' as 'group' | 'bot', reason: '', autoKick: true })
+async function reloadMembers() { members.value = await agentApi.members.list(props.conversationId) }
+function openBlock(row: Member) {
+  if (!props.botId) { ElMessage.error('找不到这个群所属的机器人，请刷新后再试'); return }
+  blockTarget.value = row
+  Object.assign(blockForm, { scope: 'group', reason: '', autoKick: true })
+  blockDialog.value = true
+}
+async function confirmBlock() {
+  if (!blockTarget.value || !props.botId) return
+  blocking.value = true
+  try {
+    const res = await agentApi.blacklist.add({ botId: props.botId, conversationId: blockForm.scope === 'group' ? props.conversationId : undefined, userId: blockTarget.value.userId, reason: blockForm.reason.trim() || undefined, autoKick: blockForm.autoKick })
+    ElMessage.success(res.autoKick ? '已拉黑，正在尝试踢出群' : '已拉黑')
+    blockDialog.value = false
+    await reloadMembers()
+    loadLearning()
+  } catch (e) { ElMessage.error(e instanceof Error ? e.message : '拉黑失败') } finally { blocking.value = false }
+}
+async function unblock(row: Member) {
+  const ids = row.blockedUserIds || []
+  if (!ids.length) return
+  try {
+    await ElMessageBox.confirm(`解除对“${row.displayName || row.userId}”的拉黑？${ids.length > 1 ? '他同时在本群和机器人范围的黑名单里，会一起解除。' : ''}已被踢出的人不会自动拉回群。`, '解除拉黑', { confirmButtonText: '解除', cancelButtonText: '取消', type: 'warning' })
+  } catch { return }
+  try { await Promise.all(ids.map(id => agentApi.blacklist.remove(id))); ElMessage.success('已解除'); await reloadMembers() } catch (e) { ElMessage.error(e instanceof Error ? e.message : '解除失败') }
+}
 async function showMemories(row: Member) { memUser.value = row.displayName || row.userId; mems.value = await agentApi.memories.list({ userId: row.userId }); memDialog.value = true }
 </script>
 
@@ -152,5 +202,9 @@ async function showMemories(row: Member) { memUser.value = row.displayName || ro
 .learn-error { margin: 8px 0 0; color: var(--danger); font-size: 12px; }
 .learn-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
 .learn-actions { display: flex; align-items: center; gap: 12px; }
+.blocked-cell { display: flex; align-items: center; gap: 4px; }
+.kick-row { display: flex; gap: 10px; align-items: flex-start; }
+.kick-row strong { display: block; font-size: 13px; color: var(--text); line-height: 1.4; }
+.kick-row small { display: block; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .learn-note { margin: 12px 0 0; padding-top: 10px; border-top: 1px dashed var(--line-strong); color: var(--faint); font-size: 12px; line-height: 1.6; }
 </style>

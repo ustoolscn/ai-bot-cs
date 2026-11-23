@@ -83,7 +83,9 @@ export interface Memory { id: string; botId: string; botName: string; userId: st
 export interface LearningStats { pendingCandidates: number; publishedEntries: number; openGaps: number; feedback7d: number; negativeFeedback7d: number; activeMemories: number; openHandoffs: number }
 export interface HandoffMessage { id: string; direction: string; senderName: string; content: string; eventType: string; eventAt: string; status?: string; deliveryError?: string }
 export interface Handoff { id: string; conversationName: string; conversationType: string; userId: string; displayName: string; messageId?: string; messageContent: string; reason: string; status: string; pausedUntil?: string; createdAt: string; resolvedAt?: string; recent: HandoffMessage[] }
-export interface Member { userId: string; displayName: string; active: boolean; isStaff: boolean; lastSeenAt: string; memoryCount: number; messageCount: number }
+export interface Member { userId: string; displayName: string; active: boolean; isStaff: boolean; isBlocked?: boolean; blockedUserIds?: string[]; lastSeenAt: string; memoryCount: number; messageCount: number }
+export interface BlockedAction { id: string; conversationId: string; status: 'pending' | 'kicked' | 'failed' | 'disabled'; attempts: number; error: string; lastAttemptAt: string | null; updatedAt: string }
+export interface BlockedUser { id: string; botId: string; botName: string; conversationId: string | null; userId: string; displayName: string; reason: string; autoKick: boolean; createdAt: string; actions: BlockedAction[] }
 export interface StaffLearningJob { id: string; status: 'pending' | 'processing' | 'completed' | 'failed'; attempts: number; error: string; updatedAt: string }
 export interface StaffLearning { staff: Array<{ userId: string; displayName: string; availableMessages: number }>; style: string; sampleCount: number; sourceMessageIds: string[]; learnedAt: string | null; source: string; job: StaffLearningJob | null }
 export interface EvalCase { id?: string; question: string; expected: string; source?: string; enabled: boolean }
@@ -156,6 +158,11 @@ export const agentApi = {
     staffLearning: (conversationId: string) => request<StaffLearning>({ url: `/conversations/${conversationId}/staff-learning` }),
     startStaffLearning: (conversationId: string) => request<{ jobId: string; source: string; maxMessages: number }>({ method: 'POST', url: `/conversations/${conversationId}/staff-learning`, data: {} }),
     summaries: (conversationId: string) => request<Array<{ scope: string; summary: string; updatedAt: string }>>({ url: `/conversations/${conversationId}/summaries` }),
+  },
+  blacklist: {
+    list: (params: { botId?: string; conversationId?: string } = {}) => request<BlockedUser[]>({ url: '/blocked-users', params }),
+    add: (data: { botId: string; conversationId?: string; userId: string; reason?: string; autoKick?: boolean }) => request<{ id: string; autoKick: boolean; identityType: string }>({ method: 'POST', url: '/blocked-users', data }),
+    remove: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/blocked-users/${id}` }),
   },
   eval: {
     cases: () => request<EvalCase[]>({ url: '/eval/cases' }, mock.mockEvalCases),

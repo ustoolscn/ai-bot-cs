@@ -44,7 +44,7 @@
       </el-form>
       <template #footer><el-button @click="drawer = false">取消</el-button><el-button type="primary" @click="save">保存</el-button></template>
     </el-drawer>
-    <MembersDrawer v-model="membersOpen" :conversation-id="membersConv.id" :conversation-name="membersConv.name" />
+    <MembersDrawer v-model="membersOpen" :conversation-id="membersConv.id" :conversation-name="membersConv.name" :bot-id="membersConv.botId" :bot-name="membersConv.botName" />
   </div>
 </template>
 
@@ -55,6 +55,6 @@ const filtered = computed(() => conversations.value.filter(c => (!search.value |
 onMounted(load); async function load() { const [items,kbs,modelItems]=await Promise.all([api.conversations.list(),api.knowledge.list(),api.models.list()]);knowledgeBases.value=kbs;models.value=modelItems;await Promise.all(items.map(async item=>{try{const detail=await api.conversations.detail(item.id);item.knowledgeBaseIds=detail.knowledgeBaseIds||[];item.knowledgeBaseNames=item.knowledgeBaseIds.map(id=>kbs.find(kb=>kb.id===id)?.name||id);item.chatProfileId=detail.chatProfileId||'';item.systemPrompt=detail.systemPrompt||item.systemPrompt}catch{/* mock data already contains detail */}}));conversations.value=items }
 function triggerText(value: string) { return ({ mention_only: '被 @ 时回复', always: '每条都回复', disabled: '已停用' } as Record<string,string>)[value] }
 function edit(row: Conversation) { Object.assign(editing, row, { knowledgeBaseNames: [...row.knowledgeBaseNames], knowledgeBaseIds: [...row.knowledgeBaseIds] }); drawer.value = true }
-const membersOpen = ref(false); const membersConv = reactive({ id: '', name: '' }); function openMembers(row: Conversation) { membersConv.id = row.id; membersConv.name = row.name; membersOpen.value = true }
+const membersOpen = ref(false); const membersConv = reactive({ id: '', name: '', botId: '', botName: '' }); function openMembers(row: Conversation) { Object.assign(membersConv, { id: row.id, name: row.name, botId: row.botId, botName: row.botName }); membersOpen.value = true }
 async function save() { editing.enabled=editing.triggerMode!=='disabled';await api.conversations.save(editing.id, editing); await load(); drawer.value = false; ElMessage.success('会话配置已保存') }
 </script>
