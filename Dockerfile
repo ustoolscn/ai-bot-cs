@@ -10,6 +10,7 @@ RUN npm install --global pnpm@${PNPM_VERSION} --registry=${PNPM_REGISTRY} && pnp
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY frontend/ ./
+COPY backend/internal/statuscard/templates/ /src/backend/internal/statuscard/templates/
 RUN pnpm build
 
 FROM ${GO_IMAGE} AS backend-build
