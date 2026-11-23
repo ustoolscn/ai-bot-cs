@@ -135,6 +135,14 @@ func textPayload(m domain.OutboundMessage) map[string]any {
 }
 
 func (c *Client) Retract(ctx context.Context, conversationType, conversationID, messageID string) error {
+	return c.retract(ctx, conversationType, conversationID, messageID, true)
+}
+
+func (c *Client) RetractMemberMessage(ctx context.Context, group, messageID string) error {
+	return c.retract(ctx, "group", group, messageID, false)
+}
+
+func (c *Client) retract(ctx context.Context, conversationType, conversationID, messageID string, allowMissing bool) error {
 	token, err := c.token(ctx)
 	if err != nil {
 		return err
@@ -155,7 +163,7 @@ func (c *Client) Retract(ctx context.Context, conversationType, conversationID, 
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode == http.StatusNotFound {
+	if allowMissing && resp.StatusCode == http.StatusNotFound {
 		return nil
 	}
 	if resp.StatusCode/100 != 2 {

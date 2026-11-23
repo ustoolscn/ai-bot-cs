@@ -1,6 +1,6 @@
 <template>
   <div class="content-page">
-    <PageHeader title="智能体" description="决定客服怎么说话、记住什么、能查哪些实时数据、能调用哪些工具。改完点底部的“保存”。">
+    <PageHeader title="通用设置" description="管理所有客服共享的回复、记忆和工具设置。未分配 AI 客服的会话使用默认人设。">
       <el-button :icon="Refresh" @click="reload">重新加载</el-button>
     </PageHeader>
     <el-alert v-if="loadError" class="page-error-alert" type="error" :closable="false" show-icon :title="`设置加载失败：${loadError}`" />
@@ -12,7 +12,7 @@
 
       <div class="settings-sections">
         <section id="persona" class="settings-section">
-          <header><h2>人设与风格</h2><p>客服叫什么、用什么语气说话。</p></header>
+          <header><h2>人设与风格</h2><p>未分配 AI 客服时使用这里的名称和说话风格。示例对话由所有客服共享。</p></header>
           <div class="settings-card">
             <el-form label-position="top">
               <el-form-item label="客服名称"><el-input v-model="settings.personaName" maxlength="20" style="max-width: 320px" /></el-form-item>
@@ -65,8 +65,10 @@
         <section id="aux" class="settings-section">
           <header><h2>辅助模型</h2><p>改写问题、摘要、质检、记忆提取这些后台工作用哪个模型。</p></header>
           <div class="settings-card">
-            <div class="setting-row"><div><strong>辅助对话模型</strong><span>建议选便宜、快的模型。不选则使用各群的对话模型</span></div>
-              <el-select v-model="settings.auxChatProfileId" clearable placeholder="跟随各群的对话模型"><el-option v-for="m in chatModels" :key="m.id" :label="`${m.name} · ${m.model}`" :value="m.id" /></el-select></div>
+            <div class="setting-row"><div><strong>简单辅助模型</strong><span>建议选便宜、快的模型。不选则使用接待客服的对话模型</span></div>
+              <el-select v-model="settings.auxChatProfileId" clearable placeholder="跟随接待客服的对话模型"><el-option v-for="m in chatModels" :key="m.id" :label="`${m.name} · ${m.model}`" :value="m.id" /></el-select></div>
+            <div class="setting-row"><div><strong>群消息判断模型</strong><span>逐条判断群消息是否需要回复，留空使用简单辅助模型</span></div>
+              <el-select v-model="settings.decisionProfileId" clearable placeholder="使用简单辅助模型"><el-option v-for="m in chatModels" :key="m.id" :label="m.name" :value="m.id" :disabled="m.status === 'offline'" /></el-select></div>
             <div class="setting-row"><div><strong>Embedding 模型</strong><span>用于记忆召回和“没答上的问题”归类</span></div>
               <el-select v-model="settings.embeddingProfileId" clearable placeholder="使用默认 Embedding 配置"><el-option v-for="m in embeddingModels" :key="m.id" :label="`${m.name} · ${m.model}`" :value="m.id" /></el-select></div>
           </div>

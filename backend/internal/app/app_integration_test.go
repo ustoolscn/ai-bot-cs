@@ -147,6 +147,9 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 		return status == "ready" && chunks > 0, err
 	})
 
+	if _, err := pool.Exec(ctx, "INSERT INTO conversations(channel,bot_id,platform_id,type,trigger_mode) VALUES('qq',$1,'group-open-id','group','mention_only')", botID); err != nil {
+		t.Fatal(err)
+	}
 	ordinaryBody := qqEventBody(t, "event-ordinary", "GROUP_MESSAGE_CREATE", "message-ordinary", "今天的普通群消息只应作为上下文")
 	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, ordinaryBody)
 
@@ -348,6 +351,9 @@ func TestGroupMentionQueuesWhenFullEventArrivesFirst(t *testing.T) {
 	defer server.Close()
 	client := &http.Client{Timeout: 5 * time.Second}
 
+	if _, err := pool.Exec(ctx, "INSERT INTO conversations(channel,bot_id,platform_id,type,trigger_mode) VALUES('qq',$1,'group-open-id','group','mention_only')", botID); err != nil {
+		t.Fatal(err)
+	}
 	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, qqEventBody(t, "shared-event-id", "GROUP_MESSAGE_CREATE", "same-group-message", "@机器人 请回复"))
 	var tasks int
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM inbox_tasks`).Scan(&tasks); err != nil || tasks != 0 {
@@ -505,6 +511,9 @@ func TestModel403ExcludesMessageFromFutureContext(t *testing.T) {
 	defer server.Close()
 	client := &http.Client{Timeout: 5 * time.Second}
 
+	if _, err := pool.Exec(ctx, "INSERT INTO conversations(channel,bot_id,platform_id,type,trigger_mode) VALUES('qq',$1,'group-open-id','group','mention_only')", botID); err != nil {
+		t.Fatal(err)
+	}
 	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, qqEventBody(t, "moderation-event", "GROUP_AT_MESSAGE_CREATE", "moderation-message", "触发审查的句子"))
 	eventually(t, 5*time.Second, "403 message excluded", func() (bool, error) {
 		var taskStatus string
@@ -654,6 +663,9 @@ func (m *upstreamMock) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			m.nextChatContent = ""
 		}
 		m.mu.Unlock()
+		if bytes.Contains(body, []byte("判断这条群消息")) {
+			content = `{"reply":true}`
+		}
 		if content == "" {
 			content = "根据知识库，退款期限是七天。"
 		}

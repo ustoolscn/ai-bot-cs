@@ -4,9 +4,9 @@ import { mockBots, mockConversations, mockKnowledgeBases, mockMessages, mockMode
 import type { Bot, Conversation, KnowledgeBase, KnowledgeDocument, MessageAttachment, MessageRecord, ModelProfile, ModelTestInput, ModelTestResult, Status, SystemOverview, SystemSettings } from '@/types'
 import { createEmptyOverview } from '@/utils/overview'
 
-type BackendBot = { id: string; name: string; appId: string; enabled: boolean; status: string; lastEventAt?: string; hasSecret: boolean; defaultChatProfileId?: string }
+type BackendBot = { id: string; name: string; appId: string; enabled: boolean; status: string; lastEventAt?: string; hasSecret: boolean }
 type BackendModel = { id: string; name: string; kind: 'chat' | 'embedding'; baseUrl: string; model: string; dimension?: number; enabled: boolean; isDefault: boolean; hasApiKey: boolean; webSearchMode?: 'disabled' | 'qwen' | 'openai' | 'responses' | 'custom'; reasoningEffort?: 'default' | 'none' | 'minimal' | 'low' | 'medium' | 'high'; extraBody?: Record<string, unknown> }
-type BackendConversation = { id: string; channel: string; platformId: string; type: 'group' | 'private'; name: string; enabled: boolean; triggerMode: 'mention_only' | 'always'; contextLimit: number; systemPrompt: string; chatProfileId?: string; botName: string; updatedAt?: string; messageCount?: number | string; memberCount?: number | string; hasFullMessageEvents?: boolean }
+type BackendConversation = { id: string; botId: string; serviceId?: string; channel: string; platformId: string; type: 'group' | 'private'; name: string; enabled: boolean; triggerMode: 'mention_only' | 'always' | 'smart'; contextLimit: number; systemPrompt: string; chatProfileId?: string; botName: string; updatedAt?: string; messageCount?: number | string; memberCount?: number | string; hasFullMessageEvents?: boolean }
 type BackendMessagePart = { type: string; text?: string; filename?: string; contentType?: string; sizeBytes?: number; width?: number; height?: number; previewUrl?: string; url?: string }
 type BackendContextMessage = { role?: string; Role?: string; content?: string; Content?: string; parts?: unknown; Parts?: unknown }
 type BackendAgentRun = { contextMessages?: BackendContextMessage[]; retrievedChunks?: Array<{ content?: string; score?: number; documentId?: string; id?: string }> }
@@ -38,13 +38,13 @@ async function loadOrMock<T>(loader: () => Promise<T>, fallback: T): Promise<T> 
 }
 
 function mapBot(item: BackendBot): Bot {
-  return { id: item.id, name: item.name, appId: item.appId, enabled: item.enabled, status: asStatus(item.status, item.enabled), callbackPath: `/callbacks/qq/${item.id}`, lastEventAt: dateText(item.lastEventAt), modelProfileId: item.defaultChatProfileId || '' }
+  return { id: item.id, name: item.name, appId: item.appId, enabled: item.enabled, status: asStatus(item.status, item.enabled), callbackPath: `/callbacks/qq/${item.id}`, lastEventAt: dateText(item.lastEventAt) }
 }
 function mapModel(item: BackendModel): ModelProfile {
   return { id: item.id, name: item.name, kind: item.kind, provider: 'OpenAI Compatible', model: item.model, baseUrl: item.baseUrl, maskedKey: item.hasApiKey ? '••••••••••••' : '未配置', status: item.enabled ? 'online' : 'offline', latency: 0, dimension: item.dimension, webSearchMode: item.webSearchMode || 'disabled', reasoningEffort: item.reasoningEffort || 'default', extraBody: item.extraBody || {} }
 }
 function mapConversation(item: BackendConversation): Conversation {
-  return { id: item.id, botId: '', platformId: item.platformId, botName: item.botName, name: item.name || item.platformId, platform: 'QQ', type: item.type === 'private' ? 'c2c' : 'group', triggerMode: item.enabled ? item.triggerMode : 'disabled', messageCount: Number(item.messageCount || 0), memberCount: Number(item.memberCount || 0), hasFullMessageEvents: Boolean(item.hasFullMessageEvents), contextLimit: item.contextLimit, knowledgeBaseNames: [], knowledgeBaseIds: [], chatProfileId: item.chatProfileId || '', systemPrompt: item.systemPrompt, lastActiveAt: dateText(item.updatedAt), enabled: item.enabled }
+  return { id: item.id, botId: item.botId, serviceId: item.serviceId || '', platformId: item.platformId, botName: item.botName, name: item.name || item.platformId, platform: 'QQ', type: item.type === 'private' ? 'c2c' : 'group', triggerMode: item.enabled ? (item.triggerMode === 'always' && item.type === 'group' ? 'smart' : item.triggerMode) : 'disabled', messageCount: Number(item.messageCount || 0), memberCount: Number(item.memberCount || 0), hasFullMessageEvents: Boolean(item.hasFullMessageEvents), contextLimit: item.contextLimit, knowledgeBaseNames: [], knowledgeBaseIds: [], chatProfileId: item.chatProfileId || '', systemPrompt: item.systemPrompt, lastActiveAt: dateText(item.updatedAt), enabled: item.enabled }
 }
 function mapMessage(item: BackendMessage): MessageRecord {
   const inputTokens = Number(item.inputTokens || 0)
@@ -130,7 +130,7 @@ export const api = {
   bots: {
     list: () => loadOrMock(async () => (await request<BackendBot[]>({ url: '/bots' })).map(mapBot), mockBots),
     save: async (bot: Partial<Bot>, appSecret = '') => {
-      const result = await request<{ id: string }>({ method: bot.id ? 'PUT' : 'POST', url: bot.id ? `/bots/${bot.id}` : '/bots', data: { name: bot.name, appId: bot.appId, appSecret, enabled: bot.enabled, modelProfileId: bot.modelProfileId } }, { id: bot.id || `bot-${Date.now()}` })
+      const result = await request<{ id: string }>({ method: bot.id ? 'PUT' : 'POST', url: bot.id ? `/bots/${bot.id}` : '/bots', data: { name: bot.name, appId: bot.appId, appSecret, enabled: bot.enabled } }, { id: bot.id || `bot-${Date.now()}` })
       return result
     },
     remove: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/bots/${id}` }),
@@ -143,7 +143,7 @@ export const api = {
   conversations: {
     list: () => loadOrMock(async () => (await request<BackendConversation[]>({ url: '/conversations' })).map(mapConversation), mockConversations),
     detail: (id: string) => request<BackendConversation & { knowledgeBaseIds: string[] }>({ url: `/conversations/${id}` }),
-    save: (id: string, data: Partial<Conversation>) => request<{ id: string }>({ method: 'PUT', url: `/conversations/${id}`, data: { name: data.name, enabled: data.triggerMode !== 'disabled', triggerMode: data.triggerMode === 'disabled' ? 'mention_only' : data.triggerMode, contextLimit: data.contextLimit, systemPrompt: data.systemPrompt || '', chatProfileId: data.chatProfileId || '', knowledgeBaseIds: data.knowledgeBaseIds || [] } }, { id }),
+    save: (id: string, data: Partial<Conversation>) => request<{ id: string }>({ method: 'PUT', url: `/conversations/${id}`, data: { name: data.name, enabled: data.triggerMode !== 'disabled', triggerMode: data.triggerMode === 'disabled' ? 'mention_only' : data.triggerMode, contextLimit: data.contextLimit, serviceId: data.serviceId, systemPrompt: data.systemPrompt || '', chatProfileId: data.chatProfileId || '', knowledgeBaseIds: data.knowledgeBaseIds || [] } }, { id }),
   },
   messages: {
     list: () => loadOrMock(async () => (await request<BackendMessage[]>({ url: '/messages' })).map(mapMessage), mockMessages),

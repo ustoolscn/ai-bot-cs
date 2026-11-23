@@ -17,7 +17,7 @@ import (
 
 func (a *App) RunWorkers(ctx context.Context) {
 	var wg sync.WaitGroup
-	for name, fn := range map[string]func(context.Context) error{"inbox": a.processInbox, "documents": a.processDocument, "outbox": a.processOutbox, "retractions": a.processRetraction, "agent-jobs": a.processAgentJob, "eval": a.processEvalJob} {
+	for name, fn := range map[string]func(context.Context) error{"group-actions": a.processGuardAction, "group-reviews": a.processGuardReview, "inbox": a.processInbox, "documents": a.processDocument, "outbox": a.processOutbox, "retractions": a.processRetraction, "agent-jobs": a.processAgentJob, "eval": a.processEvalJob} {
 		name, fn := name, fn
 		wg.Add(1)
 		go func() { defer wg.Done(); a.workerLoop(ctx, name, fn) }()
@@ -31,6 +31,9 @@ func (a *App) RunWorkers(ctx context.Context) {
 }
 func (a *App) maintenanceLoop(ctx context.Context) {
 	run := func() {
+		if err := a.queueScheduledPosts(ctx, time.Now()); err != nil && !errors.Is(err, context.Canceled) {
+			a.log.Error("scheduled posts", "error", err)
+		}
 		if err := a.processMaintenance(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			a.log.Error("maintenance error", "error", err)
 		}
@@ -51,6 +54,12 @@ func (a *App) processMaintenance(ctx context.Context) error {
 	settings, err := a.runtimeSettings(ctx)
 	if err != nil {
 		return fmt.Errorf("读取消息保留设置失败: %w", err)
+	}
+	if _, err = a.db.Exec(ctx, "UPDATE agent_jobs SET status='pending' WHERE kind='group_review' AND status='processing' AND locked_at<now()-interval '5 minutes'"); err != nil {
+		return err
+	}
+	if _, err = a.db.Exec(ctx, "UPDATE group_guard_actions SET status='unknown',detail='处理被中断，请核实 QQ 里的实际状态' WHERE status='processing' AND updated_at<now()-interval '5 minutes'"); err != nil {
+		return err
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -settings.MessageRetentionDays)
 	tx, err := a.db.Begin(ctx)
@@ -97,11 +106,11 @@ func (a *App) workerLoop(ctx context.Context, name string, fn func(context.Conte
 }
 
 type inboxJob struct {
-	TaskID, MessageID, BotID, ConversationID, ConversationType, PlatformConversationID, PlatformMessageID, Content, SystemPrompt, EventType string
-	ContextLimit, Attempts                                                                                                                  int
-	Enabled                                                                                                                                 bool
-	Deadline                                                                                                                                *time.Time
-	ChatProfileID                                                                                                                           *string
+	TaskID, MessageID, BotID, ConversationID, ConversationType, PlatformConversationID, PlatformMessageID, Content, SystemPrompt, EventType, TriggerMode string
+	HasImage                                                                                                                                             bool
+	ContextLimit, Attempts                                                                                                                               int
+	Enabled                                                                                                                                              bool
+	Deadline                                                                                                                                             *time.Time
 }
 
 func (a *App) claimInbox(ctx context.Context) (inboxJob, error) {
@@ -111,7 +120,7 @@ func (a *App) claimInbox(ctx context.Context) (inboxJob, error) {
 	}
 	defer tx.Rollback(ctx)
 	var j inboxJob
-	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,m.conversation_id::text,c.type,c.platform_id,COALESCE(m.platform_message_id,''),m.content,c.system_prompt,c.context_limit,c.enabled,m.reply_deadline,t.attempts,c.chat_profile_id::text,m.event_type FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id WHERE t.status='pending' AND t.next_attempt_at<=now() ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationID, &j.ConversationType, &j.PlatformConversationID, &j.PlatformMessageID, &j.Content, &j.SystemPrompt, &j.ContextLimit, &j.Enabled, &j.Deadline, &j.Attempts, &j.ChatProfileID, &j.EventType)
+	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,m.conversation_id::text,c.type,c.platform_id,COALESCE(m.platform_message_id,''),m.content,c.system_prompt,c.context_limit,c.enabled,m.reply_deadline,t.attempts,m.event_type,c.trigger_mode,m.parts @> '[{"type":"image"}]'::jsonb FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id WHERE t.status='pending' AND t.next_attempt_at<=now() ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationID, &j.ConversationType, &j.PlatformConversationID, &j.PlatformMessageID, &j.Content, &j.SystemPrompt, &j.ContextLimit, &j.Enabled, &j.Deadline, &j.Attempts, &j.EventType, &j.TriggerMode, &j.HasImage)
 	if err != nil {
 		return inboxJob{}, err
 	}
@@ -318,6 +327,16 @@ func (a *App) processOutbox(ctx context.Context) error {
 			return err
 		}
 	}
+	if j.EventType == "SCHEDULED_POST" || j.EventType == "DAILY_REPORT" {
+		var enabled bool
+		if err = a.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM scheduled_posts s JOIN conversations c ON c.id=s.conversation_id JOIN bots b ON b.id=c.bot_id WHERE s.last_message_id=$1 AND s.enabled AND c.enabled AND b.enabled)", j.MessageID).Scan(&enabled); err != nil {
+			return a.retryOutbox(ctx, j, err)
+		}
+		if !enabled {
+			_, err = a.db.Exec(ctx, "UPDATE outbox_tasks SET status='expired',updated_at=now() WHERE id=$1", j.TaskID)
+			return err
+		}
+	}
 	if j.EventType == "PROCESSING_ACK" {
 		_, err = a.db.Exec(ctx, "UPDATE outbox_tasks SET status='expired',updated_at=now() WHERE id=$1", j.TaskID)
 		return err
@@ -344,7 +363,7 @@ func (a *App) processOutbox(ctx context.Context) error {
 	}
 	client := qq.NewClient(j.AppID, secret, a.cfg.QQAPIBaseURL, a.cfg.QQTokenURL)
 	format := ""
-	if j.EventType == "AI_RESPONSE" {
+	if j.EventType == "AI_RESPONSE" && !hasStoredImage(j.Parts) {
 		format = "markdown"
 	}
 	sendCtx := ctx
@@ -353,7 +372,7 @@ func (a *App) processOutbox(ctx context.Context) error {
 		sendCtx, cancelSend = context.WithTimeout(ctx, 5*time.Second)
 	}
 	replyTo := j.ReplyTo
-	active := humanReplyNeedsActive(j, time.Now())
+	active := j.EventType == "SCHEDULED_POST" || humanReplyNeedsActive(j, time.Now())
 	if active {
 		replyTo = ""
 	}

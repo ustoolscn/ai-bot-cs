@@ -1,9 +1,9 @@
 import type { AlertItem, Bot, Conversation, KnowledgeBase, MessageRecord, ModelProfile, SystemOverview } from '@/types'
 
 export const mockBots: Bot[] = [
-  { id: 'bot-qq-service', name: '客服小Q', appId: '102*******31', status: 'online', enabled: true, callbackPath: '/callbacks/qq/bot-qq-service', lastEventAt: '刚刚', modelProfileId: 'chat-qwen-plus' },
-  { id: 'bot-knowledge', name: '知识助手', appId: '102*******86', status: 'online', enabled: true, callbackPath: '/callbacks/qq/bot-knowledge', lastEventAt: '2 分钟前', modelProfileId: 'chat-qwen-max' },
-  { id: 'bot-campaign', name: '活动小助手', appId: '102*******12', status: 'warning', enabled: true, callbackPath: '/callbacks/qq/bot-campaign', lastEventAt: '18 分钟前', modelProfileId: 'chat-qwen-plus' },
+  { id: 'bot-qq-service', name: '客服小Q', appId: '102*******31', status: 'online', enabled: true, callbackPath: '/callbacks/qq/bot-qq-service', lastEventAt: '刚刚' },
+  { id: 'bot-knowledge', name: '知识助手', appId: '102*******86', status: 'online', enabled: true, callbackPath: '/callbacks/qq/bot-knowledge', lastEventAt: '2 分钟前' },
+  { id: 'bot-campaign', name: '活动小助手', appId: '102*******12', status: 'warning', enabled: true, callbackPath: '/callbacks/qq/bot-campaign', lastEventAt: '18 分钟前' },
 ]
 
 export const mockModels: ModelProfile[] = [

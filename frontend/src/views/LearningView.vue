@@ -73,6 +73,9 @@
             <el-table-column label="用户" width="170"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.displayName || '—' }}</strong><span>{{ row.userId }}</span></div></template></el-table-column>
             <el-table-column label="记忆" min-width="320"><template #default="{ row }"><el-icon v-if="row.pinned" class="pin"><StarFilled /></el-icon>{{ row.content }}</template></el-table-column>
             <el-table-column label="类型" width="80"><template #default="{ row }">{{ kindText[row.kind] || row.kind }}</template></el-table-column>
+            <el-table-column label="记忆向量" width="105">
+              <template #default="{ row }">{{ row.hasEmbedding === true ? '已生成' : row.hasEmbedding === false ? '未生成' : '未知' }}</template>
+            </el-table-column>
             <el-table-column label="来源" width="80"><template #default="{ row }">{{ memorySourceText[row.source] || row.source }}</template></el-table-column>
             <el-table-column label="更新" width="150"><template #default="{ row }">{{ formatTime(row.updatedAt) }}</template></el-table-column>
             <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="editMemory(row)">编辑</el-button><el-button link type="danger" @click="removeMemory(row)">删除</el-button></template></el-table-column>

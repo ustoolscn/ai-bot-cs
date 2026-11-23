@@ -16,3 +16,4 @@ When implementing from a selected generated mock, treat that image as the source
 - 颜色和形状统一用 `src/styles/index.css` 顶部的 CSS 变量；Element Plus 主题变量也在那里覆盖。正文 14px、次要 13px。
 - 空状态写清下一步；后端断开时只在顶部显示一条提示（`src/utils/connection.ts`）。
 - 智能体设置：一页滚动 + 左侧目录 + 底部保存条；有未保存修改时禁止“立即同步”网站数据。
+- 客服配置以 QQ 机器人为入口。机器人下可添加多个 AI 客服，群定时推送按任务配置北京时间、内容指令和文字或网页截图格式。每个客服独立选择对话模型并指定智能体，智能体引用在性格模块维护的可复用预设。

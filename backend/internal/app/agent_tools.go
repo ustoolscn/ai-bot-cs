@@ -35,6 +35,7 @@ type turnRuntime struct {
 	handoff          bool
 	hits             []map[string]any
 	toolsUsed        []string
+	screenshot       *domain.ContentPart
 }
 
 type builtinTool struct {
@@ -44,8 +45,15 @@ type builtinTool struct {
 }
 
 var builtinTools = []builtinTool{
+	{spec: domain.ToolSpec{Name: "render_html_image", Description: "把你编写的静态 HTML/CSS 排版成 PNG，直接作为本次 QQ 回复发送。适用于用户要求图片、海报、表格或网页截图。使用内联样式或 style，按 1000px 宽排版，不使用脚本和外部资源。", Parameters: objSchema(map[string]any{"html": strProp("完整 HTML 网页或片段")}, "html")}},
 	{spec: domain.ToolSpec{Name: "search_knowledge", Description: "在知识库中检索资料。当预先提供的知识库结果不足以回答、或用户换了话题时使用。", Parameters: objSchema(map[string]any{"query": strProp("要检索的完整问题")}, "query")}, needsKB: true},
 	{spec: domain.ToolSpec{Name: "get_model_price", Description: "查询网站上模型的实时价格（美元）。支持模糊模型名，如 4o、claude sonnet、deepseek。", Parameters: objSchema(map[string]any{"model": strProp("模型名称或关键词"), "group": strProp("分组名，可选，默认 default")}, "model")}, needsLive: true},
+	{spec: domain.ToolSpec{Name: "get_service_status", Description: "按全站、模型或计费分组查询成功率（%）、请求数、首个 Token 延迟中位数（毫秒）和趋势。无数据时不要推断故障。", Parameters: objSchema(map[string]any{
+		"scope":       map[string]any{"type": "string", "enum": []string{"overall", "model", "group"}},
+		"name":        strProp("模型或分组名称，可模糊匹配"),
+		"granularity": map[string]any{"type": "string", "enum": []string{"hour", "day"}, "description": "hour 为最近24小时（默认），day 为最近90天"},
+		"recent":      map[string]any{"type": "integer", "minimum": 1, "maximum": 24, "description": "附带最近几个小时或天的逐段统计，可选"},
+	}, "scope")}, needsLive: true},
 	{spec: domain.ToolSpec{Name: "get_group_status", Description: "查询网站分组列表（倍率）和各分组/服务的实时可用状态。", Parameters: objSchema(map[string]any{"group": strProp("分组或服务名称，可选；为空返回全部")})}, needsLive: true},
 	{spec: domain.ToolSpec{Name: "get_announcements", Description: "获取网站最新公告和通知全文。", Parameters: objSchema(map[string]any{"limit": map[string]any{"type": "integer", "description": "返回条数，默认 3"}})}, needsLive: true},
 	{spec: domain.ToolSpec{Name: "remember_user_fact", Description: "记住关于当前用户的一条长期有用的信息（如常用分组、接入方式、偏好）。不要记录密钥、密码等敏感信息。", Parameters: objSchema(map[string]any{"content": strProp("一句话描述的事实"), "kind": map[string]any{"type": "string", "enum": []string{"fact", "preference", "issue"}}}, "content")}},
@@ -155,6 +163,16 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 	str := func(k string) string { v, _ := args[k].(string); return strings.TrimSpace(v) }
 	rt.toolsUsed = append(rt.toolsUsed, call.Name)
 	switch call.Name {
+	case "render_html_image":
+		if rt.dryRun {
+			return jsonString(map[string]any{"preview": true}), nil
+		}
+		part, err := a.htmlImage(ctx, str("html"))
+		if err != nil {
+			return "", err
+		}
+		rt.screenshot = &part
+		return jsonString(map[string]any{"ready": true}), nil
 	case "search_knowledge":
 		q := str("query")
 		if q == "" {
@@ -181,7 +199,33 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		for _, m := range models {
 			quotes = append(quotes, rt.snapshot.Quote(m, str("group")))
 		}
-		return jsonString(map[string]any{"found": true, "unit": "美元；按量计费为每百万 tokens 价格，按次计费为每次价格", "quotes": quotes, "dataTime": rt.snapshot.FetchedAt, "possiblyStale": rt.snapshotStale, "note": rt.settings.LiveData.PriceNote}), nil
+		return jsonString(map[string]any{"found": true, "unit": "美元。Token 单价按百万计。阶梯公式 baseBillingExpr 中 p/c/cr/cc 分别为输入、输出、缓存读取、缓存写入，系数为分组倍率前单价；按原条件选档并应用服务或时段系数，结果再乘 groupRatio 一次。视频费用为对应分辨率生成秒数乘输出秒价，加输入视频秒数乘输入秒价。视频、普通 Token 和按次单价已含分组倍率。unknown 表示价格待同步或规则不明。", "quotes": quotes, "dataTime": rt.snapshot.FetchedAt, "possiblyStale": rt.snapshotStale, "note": rt.settings.LiveData.PriceNote}), nil
+	case "get_service_status":
+		g := str("granularity")
+		if g == "" {
+			g = "hour"
+		}
+		if g != "hour" && g != "day" {
+			return "", fmt.Errorf("granularity 必须为 hour 或 day")
+		}
+		w := rt.snapshot.ServiceStatus[g]
+		if !rt.snapshotOK || w == nil || w.Overall == nil {
+			return "", fmt.Errorf("该时间范围的服务状态暂无可用数据")
+		}
+		recent := 0
+		if v, ok := args["recent"]; ok {
+			n, ok := v.(float64)
+			if !ok || n < 1 || n > 24 || float64(int(n)) != n {
+				return "", fmt.Errorf("recent 必须是 1 到 24 之间的整数")
+			}
+			recent = int(n)
+		}
+		result, err := w.Query(str("scope"), str("name"), recent)
+		if err != nil {
+			return "", err
+		}
+		result["possiblyStale"] = rt.snapshotStale
+		return jsonString(result), nil
 	case "get_group_status":
 		if !rt.snapshotOK {
 			return "", fmt.Errorf("网站数据暂不可用")

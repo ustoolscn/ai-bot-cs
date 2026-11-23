@@ -20,6 +20,7 @@ export const mockAgentSettings: AgentSettings = {
   summaryEnabled: true,
   memoryEnabled: true,
   maxMemories: 8,
+  decisionProfileId: '',
   auxChatProfileId: '',
   embeddingProfileId: '',
   toolsEnabled: true,
@@ -39,6 +40,10 @@ export const mockLiveData: LiveData = {
   announcements: [{ content: '今晚 23:00 维护 10 分钟', publishDate: ago(120) }],
   monitors: [{ category: '分组', name: 'default', status: 1, uptime: 99.9 }, { category: '分组', name: 'vip', status: 1, uptime: 99.7 }, { category: '分组', name: 'claude', status: 2, uptime: 92.1 }],
   groups: [{ group: 'default', ratio: 1 }, { group: 'vip', ratio: 0.8, description: '会员分组' }],
+  serviceStatus: {
+    hour: { generatedAt: ago(3), overall: { request_count: 1000, success_count: 997, success_rate: 99.7, median_ttft_ms: 900 } },
+    day: { generatedAt: ago(3), overall: { request_count: 80000, success_count: 79600, success_rate: 99.5, median_ttft_ms: 1050 } },
+  },
   modelCount: 64, models: [], promptPreview: '【公告】今晚 23:00 维护 10 分钟\n【异常分组】claude',
 }
 
@@ -72,7 +77,7 @@ export const mockFeedback: Feedback[] = [
   { id: 'f1', source: 'admin', rating: 'too_long', comment: '太啰嗦', correctedAnswer: '', createdAt: ago(200), answer: '您好，关于这个问题……', question: '怎么改密码', conversationName: '产品运营交流群' },
 ]
 export const mockMemories: Memory[] = [
-  { id: 'm1', botId: 'bot-qq-service', botName: '客服小Q', userId: 'u1', displayName: '林晓', kind: 'profile', content: '使用 vip 分组，主要调用 Claude', confidence: 0.9, pinned: false, source: 'auto', updatedAt: ago(100) },
+  { id: 'm1', botId: 'bot-qq-service', botName: '客服小Q', userId: 'u1', displayName: '林晓', kind: 'profile', content: '使用 vip 分组，主要调用 Claude', hasEmbedding: true, confidence: 0.9, pinned: false, source: 'auto', updatedAt: ago(100) },
 ]
 export const mockHandoffs: Handoff[] = [
   { id: 'h1', conversationName: '售后服务群', conversationType: 'group', userId: 'u2', displayName: '周周', messageId: 'msg-2', messageContent: '我充值了 200 还没到账，急用', reason: '用户要求人工', status: 'open', createdAt: ago(6), recent: [

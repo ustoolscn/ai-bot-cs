@@ -80,6 +80,7 @@ type ChatOptions struct {
 	Tools            []ToolSpec
 	MaxOutputTokens  int
 	DisableWebSearch bool
+	RequireWebSearch bool
 }
 
 type ChannelAdapter interface {

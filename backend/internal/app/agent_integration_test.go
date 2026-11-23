@@ -43,6 +43,28 @@ func (m *agentMock) serve(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/v1/chat/completions":
 		body, _ := io.ReadAll(r.Body)
 		m.handleChat(w, body)
+	case r.URL.Path == "/v1/responses":
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		content := "查证后的测试资讯"
+		output := []any{}
+		if req["tool_choice"] == "required" {
+			output = append(output, map[string]any{"type": "web_search_call", "status": "completed"})
+		} else {
+			content = "<html><body><h1>AI 资讯</h1><p>查证后的测试资讯</p></body></html>"
+		}
+		output = append(output, map[string]any{"type": "message", "content": []any{map[string]any{"type": "output_text", "text": content}}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"output": output})
+	case strings.HasSuffix(r.URL.Path, "/files"):
+		var payload struct {
+			Data []byte `json:"file_data"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if !bytes.HasPrefix(payload.Data, []byte{137, 80, 78, 71}) {
+			http.Error(w, "expected PNG", 400)
+			return
+		}
+		w.Write([]byte(`{"file_info":"screenshot"}`))
 	case r.URL.Path == "/api/notice":
 		w.Write([]byte(`{"success":true,"data":"今晚 23:00 维护 10 分钟"}`))
 	case r.URL.Path == "/api/status":
@@ -90,6 +112,14 @@ func (m *agentMock) handleChat(w http.ResponseWriter, body []byte) {
 		m.mu.Unlock()
 	}
 	switch {
+	case bytes.Contains(body, []byte("判断这条群消息")):
+		aux("reply_decision")
+		if bytes.Contains(body, []byte("那价格多少")) || bytes.Contains(body, []byte("发成网页截图")) || bytes.Contains(body, []byte("我要人工")) {
+			reply(`{"reply":true}`, nil)
+		} else {
+			reply(`{"reply":false}`, nil)
+		}
+		return
 	case bytes.Contains(body, []byte("分析客服样本的表达风格")):
 		aux("staff_style")
 		reply("语气自然亲切，先说结论，再补充一步操作。", nil)
@@ -128,6 +158,8 @@ func (m *agentMock) handleChat(w http.ResponseWriter, body []byte) {
 		}
 	}
 	switch {
+	case strings.Contains(lastUser, "发成网页截图"):
+		reply("", []map[string]any{{"id": "shot", "type": "function", "function": map[string]any{"name": "render_html_image", "arguments": `{"html":"<h1>说明图</h1><p>第一步</p>"}`}}})
 	case hasTool && strings.Contains(lastUser, "人工"):
 		reply("好的，已经帮你叫人工客服了，稍等～", nil)
 	case hasTool:
@@ -241,11 +273,23 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT id::text FROM conversations WHERE platform_id='agent-group'`).Scan(&convID); err != nil {
 		t.Fatal(err)
 	}
+	create := func(path string, fields map[string]any) string {
+		return createdID(t, requestJSON(t, client, http.MethodPost, server.URL+"/api/"+path, fields, http.StatusOK))
+	}
+	presetID := create("personalities", map[string]any{"name": "测试性格", "prompt": "初始表达习惯"})
+	agentID := create("support-agents", map[string]any{"name": "接入顾问", "personalityId": presetID, "instructions": "解答接入流程问题"})
+	serviceProfileID := create("model-profiles", map[string]any{"name": "客服专用", "kind": "chat", "baseUrl": mock.URL + "/v1", "apiKey": "k", "model": "service-chat", "enabled": true})
+	requestJSON(t, client, http.MethodPost, server.URL+"/api/bots/"+botID+"/services", map[string]any{"name": "接入小助手", "agentId": agentID, "chatProfileId": embID}, http.StatusBadRequest)
+	serviceID := create("bots/"+botID+"/services", map[string]any{"name": "接入小助手", "agentId": agentID, "chatProfileId": serviceProfileID, "decisionProfileId": chatID, "simpleProfileId": chatID})
+	otherBotID := createdID(t, requestJSON(t, client, http.MethodPost, server.URL+"/api/bots", map[string]any{"name": "另一个机器人", "appId": "another", "appSecret": botSecret, "enabled": true}, http.StatusCreated))
+	otherServiceID := create("bots/"+otherBotID+"/services", map[string]any{"name": "其他客服", "agentId": agentID})
+	requestJSON(t, client, http.MethodPut, server.URL+"/api/conversations/"+convID, map[string]any{"triggerMode": "mention_only", "contextLimit": 20, "serviceId": otherServiceID}, http.StatusBadRequest)
 	requestJSON(t, client, http.MethodPut, server.URL+"/api/conversations/"+convID, map[string]any{
-		"name": "群", "triggerMode": "mention_only", "systemPrompt": "你是客服。", "chatProfileId": chatID, "enabled": true, "contextLimit": 20, "knowledgeBaseIds": []string{kbID},
+		"name": "群", "serviceId": serviceID, "triggerMode": "smart", "systemPrompt": "你是客服。", "chatProfileId": chatID, "enabled": true, "contextLimit": 20, "knowledgeBaseIds": []string{kbID},
 	}, http.StatusOK)
 
-	postQQWebhook(t, client, hook, botSecret, groupEventBody(t, "e3", "GROUP_AT_MESSAGE_CREATE", "m3", "alice", "Alice", "那价格多少"))
+	requestJSON(t, client, http.MethodPut, server.URL+"/api/personalities/"+presetID, map[string]any{"name": "测试性格", "prompt": "使用更新后的表达习惯"}, http.StatusOK)
+	postQQWebhook(t, client, hook, botSecret, groupEventBody(t, "e3", "GROUP_MESSAGE_CREATE", "m3", "alice", "Alice", "那价格多少"))
 	eventually(t, 10*time.Second, "split price reply delivered", func() (bool, error) {
 		var n int
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.reply_to_message_id='m3' AND m.event_type='AI_RESPONSE' AND t.status='sent'`).Scan(&n)
@@ -256,6 +300,11 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 		t.Fatalf("expected tool round trip (2 main calls), got %d", len(calls))
 	}
 	first := string(calls[0])
+	for _, want := range []string{`"model":"service-chat"`, "接入小助手", "解答接入流程问题", "使用更新后的表达习惯"} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("missing selected agent prompt %q", want)
+		}
+	}
 	if !strings.Contains(first, "vip 分组") || !strings.Contains(first, "BOB_SECRET") || !strings.Contains(first, "get_model_price") || !strings.Contains(first, "vip：异常") {
 		t.Fatalf("thread context / tools / live snapshot wrong: %s", first)
 	}
@@ -383,6 +432,56 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 		err := pool.QueryRow(ctx, `SELECT status FROM eval_runs WHERE id=$1`, runID).Scan(&status)
 		return status == "completed", err
 	})
+	var skipped int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM inbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.platform_message_id IN ('m1','m2') AND t.status='skipped'").Scan(&skipped); err != nil || skipped != 2 {
+		t.Fatalf("skipped casual messages=%d err=%v", skipped, err)
+	}
+	profile := create("model-profiles", map[string]any{"name": "联网推送", "kind": "chat", "baseUrl": mock.URL + "/v1", "apiKey": "k", "model": "search-model", "enabled": true, "webSearchMode": "responses"})
+	scheduledService := create("bots/"+botID+"/services", map[string]any{"name": "资讯客服", "agentId": agentID, "chatProfileId": profile})
+	url := "conversations/" + convID + "/schedules"
+	format := "text"
+	if browserPath() != "" {
+		format = "image"
+	}
+	create(url, map[string]any{"serviceId": scheduledService, "sendTime": "09:17", "instruction": "整理最新 AI 资讯", "source": "web", "format": format, "enabled": true})
+	tomorrow := time.Now().In(chinaLocation).AddDate(0, 0, 1)
+	at := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 9, 17, 0, 0, chinaLocation)
+	for _, when := range []time.Time{at.Add(-time.Minute), at, at} {
+		if err := application.queueScheduledPosts(ctx, when); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, 35*time.Second, "one generated scheduled post delivered", func() (bool, error) {
+		var n, sent int
+		err := pool.QueryRow(ctx, "SELECT count(*),count(*) FILTER(WHERE status='sent' AND reply_to_message_id IS NULL AND (content='查证后的测试资讯' OR parts->0->>'contentType'='image/png')) FROM messages WHERE event_type='SCHEDULED_POST' AND conversation_id=$1", convID).Scan(&n, &sent)
+		if sent == 0 {
+			var reason string
+			_ = pool.QueryRow(ctx, "SELECT COALESCE(last_error,'') FROM agent_jobs WHERE kind='scheduled_post' LIMIT 1").Scan(&reason)
+			if reason != "" {
+				return false, fmt.Errorf("%s", reason)
+			}
+		}
+		return n == 1 && sent == 1, err
+	})
+	if browserPath() != "" {
+		postQQWebhook(t, client, hook, botSecret, groupEventBody(t, "image-skill", "GROUP_AT_MESSAGE_CREATE", "m8", "visitor", "用户", "把说明发成网页截图"))
+		eventually(t, 30*time.Second, "HTML tool replied with QQ image", func() (bool, error) {
+			var count int
+			err := pool.QueryRow(ctx, "SELECT count(*) FROM messages WHERE reply_to_message_id='m8' AND status='sent' AND parts->0->>'contentType'='image/png'").Scan(&count)
+			return count == 1, err
+		})
+		mock.mu.Lock()
+		richReplies := 0
+		for _, payload := range mock.qqSends {
+			if payload["msg_type"] == float64(7) {
+				richReplies++
+			}
+		}
+		mock.mu.Unlock()
+		if richReplies < 2 {
+			t.Fatalf("expected scheduled and interactive QQ image payloads, got %d", richReplies)
+		}
+	}
 	results := requestJSON(t, client, http.MethodGet, server.URL+"/api/eval/runs/"+runID+"/results", nil, http.StatusOK)
 	if !bytes.Contains(results, []byte("get_model_price")) {
 		t.Fatalf("eval results: %s", results)

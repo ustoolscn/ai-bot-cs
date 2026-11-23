@@ -109,6 +109,9 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 		ToolCallID string     `json:"tool_call_id,omitempty"`
 	}
 	type responseMsg struct {
+		Annotations []struct {
+			Type string `json:"type"`
+		} `json:"annotations"`
 		Role      string     `json:"role"`
 		Content   string     `json:"content"`
 		ToolCalls []toolCall `json:"tool_calls"`
@@ -142,10 +145,25 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 		}
 		req["tools"] = tools
 	}
+	if opts.DisableWebSearch {
+		delete(req, "enable_search")
+		delete(req, "web_search_options")
+		delete(req, "search_options")
+	}
 	if opts.MaxOutputTokens > 0 {
 		req["max_tokens"] = opts.MaxOutputTokens
 	}
+	if opts.RequireWebSearch {
+		if req["enable_search"] == true {
+			req["search_options"] = map[string]any{"forced_search": true, "enable_source": true}
+		} else if req["web_search_options"] == nil {
+			return domain.ChatResult{}, fmt.Errorf("请为此客服配置支持联网检索的对话模型")
+		}
+	}
 	var resp struct {
+		SearchInfo struct {
+			Results []json.RawMessage `json:"search_results"`
+		} `json:"search_info"`
 		Choices []struct {
 			Message responseMsg `json:"message"`
 		} `json:"choices"`
@@ -167,6 +185,18 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 		return domain.ChatResult{}, fmt.Errorf("model returned no choices")
 	}
 	msg := resp.Choices[0].Message
+	if opts.RequireWebSearch && len(resp.SearchInfo.Results) == 0 {
+		cited := false
+		for _, a := range msg.Annotations {
+			if a.Type == "url_citation" {
+				cited = true
+				break
+			}
+		}
+		if !cited {
+			return domain.ChatResult{}, fmt.Errorf("联网模型未返回检索来源")
+		}
+	}
 	result := domain.ChatResult{Content: msg.Content, InputTokens: resp.Usage.Prompt, OutputTokens: resp.Usage.Completion}
 	for _, tc := range msg.ToolCalls {
 		if tc.Function.Name == "" {
@@ -229,6 +259,9 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 		}
 		payload[key] = value
 	}
+	if opts.RequireWebSearch {
+		payload["tool_choice"] = "required"
+	}
 	if c.ReasoningEffort != "" && c.ReasoningEffort != "default" {
 		payload["reasoning"] = map[string]any{"effort": c.ReasoningEffort}
 	}
@@ -238,6 +271,7 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 	var resp struct {
 		OutputText string `json:"output_text"`
 		Output     []struct {
+			Status    string `json:"status"`
 			Type      string `json:"type"`
 			CallID    string `json:"call_id"`
 			Name      string `json:"name"`
@@ -257,7 +291,11 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 	}
 	parts := make([]string, 0, 2)
 	var calls []domain.ToolCall
+	searched := false
 	for _, output := range resp.Output {
+		if output.Type == "web_search_call" && output.Status == "completed" {
+			searched = true
+		}
 		if output.Type == "function_call" && output.Name != "" {
 			calls = append(calls, domain.ToolCall{ID: output.CallID, Name: output.Name, Arguments: output.Arguments})
 			continue
@@ -270,6 +308,9 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 				parts = append(parts, content.Text)
 			}
 		}
+	}
+	if opts.RequireWebSearch && !searched {
+		return domain.ChatResult{}, fmt.Errorf("联网模型未完成检索")
 	}
 	content := strings.TrimSpace(strings.Join(parts, "\n"))
 	if content == "" {

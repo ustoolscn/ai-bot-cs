@@ -79,16 +79,22 @@ func (s Snapshot) FindModels(query string, limit int) []ModelPrice {
 
 // PriceQuote is a computed price for one model in one group.
 type PriceQuote struct {
-	Model            string   `json:"model"`
-	Group            string   `json:"group"`
-	GroupName        string   `json:"groupName,omitempty"`
-	GroupRatio       float64  `json:"groupRatio"`
-	Billing          string   `json:"billing"` // per_token | per_call
-	InputPerMillion  *float64 `json:"inputUsdPerMillionTokens,omitempty"`
-	OutputPerMillion *float64 `json:"outputUsdPerMillionTokens,omitempty"`
-	PerCall          *float64 `json:"usdPerCall,omitempty"`
-	AvailableGroups  []string `json:"availableGroups,omitempty"`
-	Note             string   `json:"note,omitempty"`
+	Model            string             `json:"model"`
+	Group            string             `json:"group"`
+	GroupName        string             `json:"groupName,omitempty"`
+	GroupRatio       float64            `json:"groupRatio"`
+	Billing          string             `json:"billing"`
+	InputPerMillion  *float64           `json:"inputUsdPerMillionTokens,omitempty"`
+	OutputPerMillion *float64           `json:"outputUsdPerMillionTokens,omitempty"`
+	PerCall          *float64           `json:"usdPerCall,omitempty"`
+	CacheRead        *float64           `json:"cacheReadUsdPerMillionTokens,omitempty"`
+	CacheWrite       *float64           `json:"cacheWriteUsdPerMillionTokens,omitempty"`
+	BillingExpr      string             `json:"baseBillingExpr,omitempty"`
+	VideoRates       map[string]float64 `json:"outputUsdPerSecond,omitempty"`
+	VideoInput       *float64           `json:"inputUsdPerSecond,omitempty"`
+	BaseFPS          int                `json:"baseFps,omitempty"`
+	AvailableGroups  []string           `json:"availableGroups,omitempty"`
+	Note             string             `json:"note,omitempty"`
 }
 
 // Quote computes a model's price in a group using new-api conventions:
@@ -106,13 +112,37 @@ func (s Snapshot) Quote(m ModelPrice, group string) PriceQuote {
 	if len(m.EnableGroups) > 0 && !contains(m.EnableGroups, group) && !contains(m.EnableGroups, "all") {
 		q.Note = fmt.Sprintf("该模型不在 %s 分组中可用", group)
 	}
-	if m.QuotaType == 1 {
-		q.Billing = "per_call"
+	q.Billing = m.BillingMode
+	switch m.BillingMode {
+	case "tiered_expr":
+		if m.BillingExpr == "" {
+			q.Billing = "unknown"
+		}
+		q.BillingExpr = m.BillingExpr
+		return q
+	case "video_seconds":
+		if m.VideoPrice == nil || len(m.VideoPrice.Prices) == 0 {
+			q.Billing = "unknown"
+			return q
+		}
+		q.BaseFPS = m.VideoPrice.BaseFPS
+		q.VideoInput = scaled(m.VideoPrice.InputPerSecond, ratio)
+		q.VideoRates = make(map[string]float64, len(m.VideoPrice.Prices))
+		for resolution, rate := range m.VideoPrice.Prices {
+			q.VideoRates[resolution] = round(rate * ratio)
+		}
+		return q
+	case "per_call":
 		v := round(m.ModelPrice * ratio)
 		q.PerCall = &v
 		return q
+	case "per_token":
+		q.CacheRead = scaled(m.CacheRatio, m.ModelRatio*2*ratio)
+		q.CacheWrite = scaled(m.CreateCacheRatio, m.ModelRatio*2*ratio)
+	default:
+		q.Billing = "unknown"
+		return q
 	}
-	q.Billing = "per_token"
 	in := round(m.ModelRatio * 2 * ratio)
 	out := round(m.ModelRatio * 2 * m.CompletionRatio * ratio)
 	q.InputPerMillion, q.OutputPerMillion = &in, &out
@@ -154,4 +184,12 @@ func contains(list []string, v string) bool {
 	return false
 }
 
-func round(v float64) float64 { return math.Round(v*10000) / 10000 }
+func scaled(price *float64, factor float64) *float64 {
+	if price == nil {
+		return nil
+	}
+	value := round(*price * factor)
+	return &value
+}
+
+func round(v float64) float64 { return math.Round(v*1e12) / 1e12 }

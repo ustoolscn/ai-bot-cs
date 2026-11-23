@@ -6,12 +6,12 @@
       <div v-for="bot in bots" :key="bot.id" class="entity-row">
         <div class="entity-name"><span class="entity-icon"><el-icon><Connection /></el-icon></span><div><strong>{{ bot.name }} <StatusBadge :status="bot.enabled ? bot.status : 'offline'" :text="bot.enabled ? undefined : '已停用'" /></strong><small>AppID {{ bot.appId }}</small></div></div>
         <div class="entity-facts">
-          <div><span>默认模型</span><strong>{{ modelName(bot.modelProfileId) }}</strong></div>
           <div><span>最近收到消息</span><strong>{{ bot.lastEventAt || '—' }}</strong></div>
           <div><span>回调地址</span><strong class="mono" :title="bot.callbackPath">{{ bot.callbackPath }}</strong></div>
         </div>
         <div class="entity-actions">
           <el-tooltip :content="bot.enabled ? '停用后不再回复任何消息' : '启用'"><el-switch v-model="bot.enabled" @change="toggle(bot)" /></el-tooltip>
+          <el-button @click="$router.push({ name: 'bot-services', params: { id: bot.id } })">AI 客服</el-button>
           <el-button :icon="CopyDocument" @click="copy(bot.callbackPath)">复制回调</el-button>
           <el-button type="primary" plain @click="edit(bot)">配置</el-button>
         </div>
@@ -20,7 +20,7 @@
     <div v-else class="panel"><EmptyState mood="wave" title="还没有接入机器人" description="在 QQ 开放平台创建机器人后，把 AppID 和 AppSecret 填进来，再把回调地址配置到开放平台。"><el-button type="primary" :icon="Plus" @click="openCreate">添加机器人</el-button></EmptyState></div>
 
     <el-dialog v-model="dialogVisible" :title="form.id ? '配置机器人' : '添加 QQ 机器人'" width="620px">
-      <el-form label-position="top"><div class="form-grid"><el-form-item label="机器人名称"><el-input v-model="form.name" placeholder="例如：客服小Q" /></el-form-item><el-form-item label="AppID"><el-input v-model="form.appId" placeholder="QQ 开放平台 AppID" /></el-form-item></div><el-form-item label="AppSecret"><el-input v-model="secret" type="password" show-password :placeholder="form.id ? '留空则不覆盖现有密钥' : '请输入 AppSecret'" /><small class="form-tip">保存后不会再显示。修改时留空表示不变。</small></el-form-item><el-form-item label="默认对话模型"><el-select v-model="form.modelProfileId"><el-option v-for="model in chatModels" :key="model.id" :label="`${model.name} · ${model.model}`" :value="model.id" /></el-select></el-form-item></el-form>
+      <el-form label-position="top"><div class="form-grid"><el-form-item label="机器人名称"><el-input v-model="form.name" placeholder="例如：客服小Q" /></el-form-item><el-form-item label="AppID"><el-input v-model="form.appId" placeholder="QQ 开放平台 AppID" /></el-form-item></div><el-form-item label="AppSecret"><el-input v-model="secret" type="password" show-password :placeholder="form.id ? '留空则不覆盖现有密钥' : '请输入 AppSecret'" /><small class="form-tip">保存后不会再显示。修改时留空表示不变。</small></el-form-item></el-form>
       <template #footer><el-button @click="dialogVisible = false">取消</el-button><el-button type="primary" @click="save">保存机器人</el-button></template>
     </el-dialog>
   </div>
@@ -34,16 +34,14 @@ import CountUp from '@/components/fx/CountUp.vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'; import StatusBadge from '@/components/StatusBadge.vue'
-import type { Bot, ModelProfile, SystemOverview } from '@/types'
+import type { Bot, SystemOverview } from '@/types'
 import { createEmptyOverview } from '@/utils/overview'
-const bots = ref<Bot[]>([]); const models = ref<ModelProfile[]>([]); const overview = ref<SystemOverview>(createEmptyOverview()); const dialogVisible = ref(false); const secret = ref(''); const form = reactive<Partial<Bot>>({})
-const chatModels = computed(() => models.value.filter(m => m.kind === 'chat'))
+const bots = ref<Bot[]>([]); const overview = ref<SystemOverview>(createEmptyOverview()); const dialogVisible = ref(false); const secret = ref(''); const form = reactive<Partial<Bot>>({})
 const todayMessages = computed(() => overview.value.messages24h === null ? '—' : overview.value.messages24h.toLocaleString())
 const averageSuccessRate = computed(() => overview.value.successRate === null ? '—' : `${overview.value.successRate.toFixed(1)}%`)
 onMounted(load)
-async function load() { [bots.value, models.value, overview.value] = await Promise.all([api.bots.list(), api.models.list(), api.overview()]) }
-function modelName(id: string) { return models.value.find(m => m.id === id)?.model || id || '未设置' }
-function openCreate() { Object.assign(form, { id: '', name: '', appId: '', modelProfileId: chatModels.value[0]?.id, enabled: true }); secret.value = ''; dialogVisible.value = true }
+async function load() { [bots.value, overview.value] = await Promise.all([api.bots.list(), api.overview()]) }
+function openCreate() { Object.assign(form, { id: '', name: '', appId: '', enabled: true }); secret.value = ''; dialogVisible.value = true }
 function edit(bot: Bot) { Object.assign(form, bot); secret.value = ''; dialogVisible.value = true }
 async function save() { await api.bots.save(form, secret.value); await load(); dialogVisible.value = false; ElMessage.success('机器人配置已保存') }
 function copy(value: string) { navigator.clipboard?.writeText(`${location.origin}${value}`); ElMessage.success('回调地址已复制') }

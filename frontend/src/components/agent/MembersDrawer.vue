@@ -41,9 +41,10 @@
       <p class="learn-note">只能学习机器人进群后、系统收到并保存的消息。QQ 不提供补拉历史记录的接口，进群前的聊天学不到。</p>
     </section>
 
+    <div v-if="isGroup" class="gap"><el-button :loading="syncing" @click="sync(true)">同步 QQ 群成员</el-button> <small>{{ rosterStatus }}</small></div>
     <el-input v-model="filter" class="gap" placeholder="搜索昵称或 ID" clearable />
     <el-table v-loading="loading" :data="filtered" max-height="480">
-      <el-table-column label="成员" min-width="200"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.displayName || '未知昵称' }}</strong><span>{{ row.userId }}</span></div></template></el-table-column>
+      <el-table-column label="成员" min-width="200"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.displayName || '未知昵称' }} {{ row.role === 'owner' ? '· 群主' : row.role === 'admin' ? '· 管理员' : '' }} {{ row.isBot ? '· 机器人' : '' }}</strong><span>{{ row.userId }}</span></div></template></el-table-column>
       <el-table-column prop="messageCount" label="消息" width="70" />
       <el-table-column label="记忆" width="70"><template #default="{ row }"><el-button v-if="Number(row.memoryCount) > 0" link type="primary" @click="showMemories(row)">{{ row.memoryCount }}</el-button><span v-else>0</span></template></el-table-column>
       <el-table-column label="官方客服" width="90"><template #default="{ row }"><el-switch v-model="row.isStaff" :disabled="row.isBlocked" @change="toggle(row)" /></template></el-table-column>
@@ -52,7 +53,6 @@
         <el-button v-else link type="danger" @click="openBlock(row)">拉黑</el-button>
       </template></el-table-column>
     </el-table>
-    <p class="muted gap">成员列表只包含系统见过发言的人，不是完整的 QQ 群成员名单。</p>
     <el-dialog v-model="blockDialog" :title="`拉黑 · ${blockTarget?.displayName || blockTarget?.userId || ''}`" width="460px" append-to-body>
       <el-form label-position="top">
         <el-form-item label="拉黑范围">
@@ -81,10 +81,28 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { agentApi, formatTime, type Member, type Memory, type StaffLearning } from '@/api/agent'
 
-const props = defineProps<{ modelValue: boolean; conversationId: string; conversationName: string; botId?: string; botName?: string }>()
-const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
+const props = defineProps<{ modelValue: boolean; isGroup?:boolean; conversationId: string; conversationName: string; botId?: string; botName?: string }>()
+const emit = defineEmits<{ 'update:modelValue': [value: boolean]; synced: [] }>()
 const router = useRouter()
 const members = ref<Member[]>([])
+const syncing=ref(false)
+const rosterStatus=ref('')
+let version=0
+async function sync(force:boolean){
+  const current=version
+  const id=props.conversationId
+  syncing.value=true
+  try{
+    const result=await agentApi.members.sync(id,force)
+    if(current!==version)return
+    const list=await agentApi.members.list(id)
+    if(current!==version)return
+    members.value=list
+    rosterStatus.value='QQ 名单同步于 '+formatTime(result.syncedAt)
+    emit('synced')
+  }catch(e){if(current===version)rosterStatus.value=(e instanceof Error?e.message:'同步失败')+'。当前显示本地已知成员。'}
+  finally{if(current===version)syncing.value=false}
+}
 const loading = ref(false)
 const filter = ref('')
 const memDialog = ref(false)
@@ -107,12 +125,15 @@ const jobStatus = computed(() => {
 })
 
 watch(() => [props.modelValue, props.conversationId], async () => {
+  const current=++version
+  syncing.value=false; rosterStatus.value=''; members.value=[]
   stopPolling()
   if (!props.modelValue || !props.conversationId) return
   loading.value = true
   learning.value = null
   loadLearning(true)
-  try { members.value = await agentApi.members.list(props.conversationId) } catch (e) { ElMessage.error(e instanceof Error ? e.message : '加载失败') } finally { loading.value = false }
+  try { const list=await agentApi.members.list(props.conversationId);if(current===version)members.value=list } catch (e) { if(current===version)ElMessage.error(e instanceof Error ? e.message : '加载失败') } finally { if(current===version) loading.value = false }
+ if(current===version && props.isGroup)void sync(false)
 }, { immediate: true })
 onBeforeUnmount(stopPolling)
 

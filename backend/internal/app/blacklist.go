@@ -196,7 +196,7 @@ func (a *App) jobBlacklistKick(ctx context.Context, actionID string) error {
 	if _, err = tx.Exec(ctx, `UPDATE blacklist_actions SET status='kicked',last_error='',updated_at=now() WHERE id=$1`, actionID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE conversation_members SET active=false WHERE conversation_id=$1 AND platform_user_id=$2`, convID, userID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE conversation_members SET active=false,membership_updated_at=clock_timestamp() WHERE conversation_id=$1 AND platform_user_id=$2`, convID, userID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

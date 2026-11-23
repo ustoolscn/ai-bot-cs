@@ -225,7 +225,14 @@ func (a *App) getLiveData(c *gin.Context) {
 	var snap newapi.Snapshot
 	_ = json.Unmarshal(raw, &snap)
 	stale := lastErr != "" && !strings.HasPrefix(lastErr, "部分")
+	serviceStatus := map[string]any{}
+	for g, w := range snap.ServiceStatus {
+		if w != nil && w.Overall != nil {
+			serviceStatus[g] = gin.H{"generatedAt": time.Unix(w.GeneratedAt, 0).UTC(), "overall": w.Overall.ServiceMetrics}
+		}
+	}
 	ok(c, gin.H{
+		"serviceStatus": serviceStatus,
 		"enabled":       s.LiveData.Enabled,
 		"fetchedAt":     fetchedAt,
 		"lastAttemptAt": attemptAt,

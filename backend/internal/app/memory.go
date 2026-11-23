@@ -114,7 +114,7 @@ func (a *App) listMemories(c *gin.Context) {
 		n := itoa(len(args))
 		where = append(where, "(m.content ILIKE $"+n+" OR m.display_name ILIKE $"+n+")")
 	}
-	queryList(c, a, `SELECT m.id::text,m.bot_id::text AS "botId",b.name AS "botName",m.platform_user_id AS "userId",m.display_name AS "displayName",m.kind,m.content,m.confidence,m.pinned,m.source,m.source_message_id::text AS "sourceMessageId",m.expires_at AS "expiresAt",m.last_used_at AS "lastUsedAt",m.created_at AS "createdAt",m.updated_at AS "updatedAt"
+	queryList(c, a, `SELECT m.id::text,m.bot_id::text AS "botId",b.name AS "botName",m.platform_user_id AS "userId",m.display_name AS "displayName",m.kind,m.content,(m.embedding IS NOT NULL) AS "hasEmbedding",m.confidence,m.pinned,m.source,m.source_message_id::text AS "sourceMessageId",m.expires_at AS "expiresAt",m.last_used_at AS "lastUsedAt",m.created_at AS "createdAt",m.updated_at AS "updatedAt"
 		FROM user_memories m JOIN bots b ON b.id=m.bot_id WHERE `+strings.Join(where, " AND ")+` ORDER BY m.updated_at DESC LIMIT 300`, args...)
 }
 

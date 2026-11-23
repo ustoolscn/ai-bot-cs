@@ -30,6 +30,7 @@ type Settings struct {
 	SummaryEnabled     bool   `json:"summaryEnabled"`
 	MemoryEnabled      bool   `json:"memoryEnabled"`
 	MaxMemories        int    `json:"maxMemories"`
+	DecisionProfileID  string `json:"decisionProfileId"`
 	AuxChatProfileID   string `json:"auxChatProfileId"`
 	EmbeddingProfileID string `json:"embeddingProfileId"`
 	// Tools

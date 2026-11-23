@@ -75,35 +75,56 @@ type Monitor struct {
 	Uptime   float64 `json:"uptime"`
 }
 
+type VideoPrice struct {
+	BaseFPS        int                `json:"base_fps,omitempty"`
+	Prices         map[string]float64 `json:"prices"`
+	InputPerSecond *float64           `json:"input_video_price_per_second,omitempty"`
+}
+
 // ModelPrice is one model entry from /api/pricing.
 type ModelPrice struct {
-	ModelName       string   `json:"model_name"`
-	QuotaType       int      `json:"quota_type"` // 0 per-token ratio, 1 per-call price
-	ModelRatio      float64  `json:"model_ratio"`
-	ModelPrice      float64  `json:"model_price"`
-	CompletionRatio float64  `json:"completion_ratio"`
-	OwnerBy         string   `json:"owner_by,omitempty"`
-	EnableGroups    []string `json:"enable_groups,omitempty"`
-	Description     string   `json:"description,omitempty"`
+	BillingMode      string      `json:"billing_mode,omitempty"`
+	BillingExpr      string      `json:"billing_expr,omitempty"`
+	VideoPrice       *VideoPrice `json:"video_price,omitempty"`
+	CacheRatio       *float64    `json:"cache_ratio,omitempty"`
+	CreateCacheRatio *float64    `json:"create_cache_ratio,omitempty"`
+	ModelName        string      `json:"model_name"`
+	QuotaType        int         `json:"quota_type"` // 0 per-token ratio, 1 per-call price
+	ModelRatio       float64     `json:"model_ratio"`
+	ModelPrice       float64     `json:"model_price"`
+	CompletionRatio  float64     `json:"completion_ratio"`
+	OwnerBy          string      `json:"owner_by,omitempty"`
+	EnableGroups     []string    `json:"enable_groups,omitempty"`
+	Description      string      `json:"description,omitempty"`
 }
 
 // Snapshot is all live data at one point in time.
 type Snapshot struct {
-	SystemName    string             `json:"systemName,omitempty"`
-	Notice        string             `json:"notice,omitempty"`
-	Announcements []Announcement     `json:"announcements,omitempty"`
-	Monitors      []Monitor          `json:"monitors,omitempty"`
-	Models        []ModelPrice       `json:"models,omitempty"`
-	GroupRatio    map[string]float64 `json:"groupRatio,omitempty"`
-	UsableGroups  map[string]string  `json:"usableGroups,omitempty"`
-	FetchedAt     time.Time          `json:"fetchedAt"`
-	Errors        map[string]string  `json:"errors,omitempty"`
+	ServiceStatus map[string]*ServiceWindow `json:"serviceStatus,omitempty"`
+	SystemName    string                    `json:"systemName,omitempty"`
+	Notice        string                    `json:"notice,omitempty"`
+	Announcements []Announcement            `json:"announcements,omitempty"`
+	Monitors      []Monitor                 `json:"monitors,omitempty"`
+	Models        []ModelPrice              `json:"models,omitempty"`
+	GroupRatio    map[string]float64        `json:"groupRatio,omitempty"`
+	UsableGroups  map[string]string         `json:"usableGroups,omitempty"`
+	FetchedAt     time.Time                 `json:"fetchedAt"`
+	Errors        map[string]string         `json:"errors,omitempty"`
 }
 
 // Fetch loads every source; a failing source is recorded in Errors and does
 // not prevent the others from loading. It errors only if all sources fail.
 func (c *Client) Fetch(ctx context.Context) (Snapshot, error) {
 	s := Snapshot{FetchedAt: time.Now().UTC(), Errors: map[string]string{}}
+	type serviceResult struct {
+		granularity string
+		window      *ServiceWindow
+		err         error
+	}
+	results := make(chan serviceResult, 2)
+	for _, g := range []string{"hour", "day"} {
+		go func(g string) { w, err := c.fetchServiceWindow(ctx, g); results <- serviceResult{g, w, err} }(g)
+	}
 	ok := 0
 	if body, err := c.get(ctx, "/api/notice"); err != nil {
 		s.Errors["notice"] = err.Error()
@@ -135,6 +156,18 @@ func (c *Client) Fetch(ctx context.Context) (Snapshot, error) {
 		s.Errors["pricing"] = err.Error()
 	} else {
 		s.Models, s.GroupRatio, s.UsableGroups = models, ratio, usable
+		ok++
+	}
+	for i := 0; i < 2; i++ {
+		r := <-results
+		if r.err != nil {
+			s.Errors["service-status/"+r.granularity] = r.err.Error()
+			continue
+		}
+		if s.ServiceStatus == nil {
+			s.ServiceStatus = map[string]*ServiceWindow{}
+		}
+		s.ServiceStatus[r.granularity] = r.window
 		ok++
 	}
 	if len(s.Errors) == 0 {
@@ -239,6 +272,16 @@ func ParsePricing(body []byte) ([]ModelPrice, map[string]float64, map[string]str
 		return nil, nil, nil, fmt.Errorf("价格接口返回失败: %s", d.Message)
 	}
 	for i := range d.Data {
+		if d.Data[i].BillingMode == "" {
+			switch d.Data[i].QuotaType {
+			case 0:
+				d.Data[i].BillingMode = "per_token"
+			case 1:
+				d.Data[i].BillingMode = "per_call"
+			default:
+				d.Data[i].BillingMode = "unknown"
+			}
+		}
 		if d.Data[i].CompletionRatio == 0 {
 			d.Data[i].CompletionRatio = 1
 		}
@@ -306,6 +349,9 @@ func (s Snapshot) PromptSummary(stale bool) string {
 			}
 			b.WriteString("\n其余正常。\n")
 		}
+	}
+	if len(s.ServiceStatus) > 0 {
+		b.WriteString("服务成功率、请求数、首个 Token 延迟及趋势请调用 get_service_status 查询。\n")
 	}
 	if len(s.Models) > 0 {
 		b.WriteString("模型价格请调用 get_model_price 查询，不要凭记忆回答。")

@@ -73,7 +73,7 @@ func (a *App) createEvalRun(c *gin.Context) {
 		return
 	}
 	if in.ChatProfileID == "" {
-		in.ChatProfileID = a.resolveChatProfile(c, nil, "")
+		in.ChatProfileID = a.defaultChatProfile(c)
 	}
 	if in.ChatProfileID == "" {
 		fail(c, 400, "no_model", "请先配置对话模型")

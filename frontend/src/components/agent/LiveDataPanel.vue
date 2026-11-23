@@ -17,6 +17,21 @@
       <el-alert v-if="data.lastError" class="gap" :title="data.lastError" type="warning" :closable="false" show-icon />
       <h3>注入提示词的内容</h3>
       <div class="content-box">{{ data.promptPreview || '暂无数据' }}</div>
+      <h3>全站服务状态</h3>
+      <dl v-if="data.serviceStatus?.hour || data.serviceStatus?.day" class="detail-list">
+        <template v-for="g in serviceWindows" :key="g.key">
+          <div v-if="data.serviceStatus[g.key]">
+            <dt>{{ g.label }}</dt>
+            <dd>
+              成功 {{ data.serviceStatus[g.key]!.overall.success_count }} / {{ data.serviceStatus[g.key]!.overall.request_count }} 次 ·
+              成功率 {{ metric(data.serviceStatus[g.key]!.overall.success_rate, '%') }} ·
+              首个 Token 延迟中位数 {{ metric(data.serviceStatus[g.key]!.overall.median_ttft_ms, ' ms') }}
+              <small>（{{ formatTime(data.serviceStatus[g.key]!.generatedAt) }} 更新）</small>
+            </dd>
+          </div>
+        </template>
+      </dl>
+      <span v-else class="muted">暂无服务状态统计</span>
       <h3>分组状态</h3>
       <div class="chips">
         <el-tag v-for="m in data.monitors || []" :key="m.category + m.name" :type="m.status === 1 ? 'success' : m.status === 3 ? 'info' : 'danger'" effect="plain">{{ m.name }} · {{ statusText(m.status) }}</el-tag>
@@ -30,9 +45,28 @@
       <el-input v-model="filter" size="small" placeholder="筛选模型" clearable class="gap" />
       <el-table :data="filteredModels" size="small" max-height="320">
         <el-table-column prop="model" label="模型" min-width="180" />
-        <el-table-column label="输入 / 1M" width="100"><template #default="{ row }">{{ row.billing === 'per_call' ? '—' : row.inputUsdPerMillionTokens }}</template></el-table-column>
-        <el-table-column label="输出 / 1M" width="100"><template #default="{ row }">{{ row.billing === 'per_call' ? '—' : row.outputUsdPerMillionTokens }}</template></el-table-column>
-        <el-table-column label="按次" width="80"><template #default="{ row }">{{ row.billing === 'per_call' ? row.usdPerCall : '—' }}</template></el-table-column>
+        <el-table-column label="计费规则与单价" min-width="260">
+          <template #default="{ row }">
+            <template v-if="row.billing === 'per_token'">
+              输入 {{ row.inputUsdPerMillionTokens }} · 输出 {{ row.outputUsdPerMillionTokens }}
+              <span v-if="row.cacheReadUsdPerMillionTokens != null"> · 缓存读取 {{ row.cacheReadUsdPerMillionTokens }}</span>
+              <span v-if="row.cacheWriteUsdPerMillionTokens != null"> · 缓存写入 {{ row.cacheWriteUsdPerMillionTokens }}</span>
+              美元 / 百万 Token
+            </template>
+            <span v-else-if="row.billing === 'per_call'">{{ row.usdPerCall }} 美元 / 次</span>
+            <details v-else-if="row.billing === 'tiered_expr'">
+              <summary>阶梯计费 · 查看单价与条件</summary>
+              <div>输入 p、输出 c、缓存读取 cr、缓存写入 cc 的系数单位为美元 / 百万 Token。公式结果乘分组倍率 {{ row.groupRatio }}。</div>
+              <code class="price-expression">{{ row.baseBillingExpr }}</code>
+            </details>
+            <template v-else-if="row.billing === 'video_seconds'">
+              <div v-for="(rate, resolution) in row.outputUsdPerSecond" :key="resolution">{{ resolution }} 输出 {{ rate }} 美元 / 秒</div>
+              <div v-if="row.inputUsdPerSecond != null">输入视频另计 {{ row.inputUsdPerSecond }} 美元 / 秒</div>
+              <div v-if="row.baseFps">基准帧率 {{ row.baseFps }} FPS</div>
+            </template>
+            <span v-else>暂无可用报价</span>
+          </template>
+        </el-table-column>
       </el-table>
       <h3>最新公告</h3>
       <div v-for="(a, i) in (data.announcements || []).slice(0, 5)" :key="i" class="content-box gap"><small class="muted">{{ formatTime(a.publishDate) }}</small><br />{{ a.content }}</div>
@@ -50,6 +84,8 @@ import { agentApi, formatTime, type LiveData } from '@/api/agent'
 // blockedReason：设置有未保存的修改或实时数据未启用时，先不允许同步，避免后端按旧配置同步失败（400）。
 const props = defineProps<{ blockedReason?: string }>()
 
+const serviceWindows = [{ key: 'hour', label: '最近 24 小时' }, { key: 'day', label: '最近 90 天' }] as const
+function metric(value: number | null, unit: string) { return value == null ? '暂无数据' : value + unit }
 const data = ref<LiveData | null>(null)
 const loading = ref(false)
 const refreshing = ref(false)
@@ -70,6 +106,7 @@ defineExpose({ load })
 </script>
 
 <style scoped>
+.price-expression { overflow-wrap: anywhere; white-space: pre-wrap; }
 .panel-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .panel-title h2 { margin: 0; }
 h3 { font-size: 14px; font-weight: 600; margin: 20px 0 8px; }

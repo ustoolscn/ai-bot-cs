@@ -32,24 +32,55 @@ type MessageData struct {
 	OpenID      string `json:"openid"`
 	MsgType     int    `json:"msg_type"`
 	Author      struct {
-		ID           string `json:"id"`
-		MemberOpenID string `json:"member_openid"`
-		UserOpenID   string `json:"user_openid"`
-		Username     string `json:"username"`
-		Nickname     string `json:"nickname"`
-		Bot          bool   `json:"bot"`
+		ID             string `json:"id"`
+		MemberOpenID   string `json:"member_openid"`
+		UserOpenID     string `json:"user_openid"`
+		Username       string `json:"username"`
+		MemberNickname string `json:"member_nickname"`
+		Nickname       string `json:"nickname"`
+		Bot            bool   `json:"bot"`
 	} `json:"author"`
 	Mentions []struct {
 		IsYou bool `json:"is_you"`
 	} `json:"mentions"`
-	Attachments []struct {
-		URL         string `json:"url"`
-		ContentType string `json:"content_type"`
-		Filename    string `json:"filename"`
-		Size        int64  `json:"size"`
-		Width       int    `json:"width"`
-		Height      int    `json:"height"`
-	} `json:"attachments"`
+	MessageElement
+}
+
+type MessageAttachment struct {
+	URL         string `json:"url"`
+	ContentType string `json:"content_type"`
+	Filename    string `json:"filename"`
+	Size        int64  `json:"size"`
+	Width       int    `json:"width"`
+	Height      int    `json:"height"`
+}
+type MessageElement struct {
+	Attachments []MessageAttachment `json:"attachments"`
+	Elements    []MessageElement    `json:"msg_elements"`
+	Card        struct {
+		Type   string `json:"ark_type"`
+		Fields struct {
+			Preview string `json:"preview"`
+		} `json:"fields"`
+	} `json:"ark_data"`
+}
+
+func (e MessageElement) collectAttachments(out *[]MessageAttachment, seen map[string]bool) {
+	add := func(item MessageAttachment) {
+		if item.URL != "" && !seen[item.URL] {
+			*out = append(*out, item)
+			seen[item.URL] = true
+		}
+	}
+	for _, item := range e.Attachments {
+		add(item)
+	}
+	if e.Card.Type == "picture" {
+		add(MessageAttachment{URL: e.Card.Fields.Preview, ContentType: "image/unknown"})
+	}
+	for _, child := range e.Elements {
+		child.collectAttachments(out, seen)
+	}
 }
 
 func privateKey(secret string) ed25519.PrivateKey {
@@ -125,6 +156,9 @@ func Parse(body []byte, botID string) (Envelope, *domain.InboundMessage, error) 
 	if senderName == "" {
 		senderName = strings.TrimSpace(d.Author.Nickname)
 	}
+	if ct == "group" && strings.TrimSpace(d.Author.MemberNickname) != "" {
+		senderName = strings.TrimSpace(d.Author.MemberNickname)
+	}
 	conversationName := strings.TrimSpace(d.GroupName)
 	if ct == "private" {
 		conversationName = senderName
@@ -133,7 +167,9 @@ func Parse(body []byte, botID string) (Envelope, *domain.InboundMessage, error) 
 	if text := strings.TrimSpace(d.Content); text != "" {
 		parts = append(parts, domain.ContentPart{Type: "text", Text: text})
 	}
-	for _, a := range d.Attachments {
+	var attachments []MessageAttachment
+	d.collectAttachments(&attachments, map[string]bool{})
+	for _, a := range attachments {
 		partType := "attachment"
 		if strings.HasPrefix(strings.ToLower(a.ContentType), "image/") {
 			partType = "image"
@@ -150,7 +186,7 @@ func Parse(body []byte, botID string) (Envelope, *domain.InboundMessage, error) 
 	for _, mention := range d.Mentions {
 		mentionsBot = mentionsBot || mention.IsYou
 	}
-	deadline := eventTime.Add(5 * time.Minute)
+	deadline := eventTime.Add(time.Hour)
 	return e, &domain.InboundMessage{MentionsBot: mentionsBot, EventID: e.ID, Channel: "qq", BotID: botID, ConversationType: ct, ConversationID: cid,
 		ConversationName: conversationName, SenderID: sender, SenderName: senderName, PlatformMessageID: d.ID, EventType: e.T, Text: strings.TrimSpace(d.Content),
 		Parts: parts, EventTime: eventTime, ReplyDeadline: &deadline, Raw: body}, nil
@@ -163,5 +199,5 @@ func ShouldReply(t string, mentionsBot bool) bool {
 	return t == "GROUP_AT_MESSAGE_CREATE" || t == "C2C_MESSAGE_CREATE" || (t == "GROUP_MESSAGE_CREATE" && mentionsBot)
 }
 func ShouldQueue(t, triggerMode string, mentionsBot bool) bool {
-	return ShouldReply(t, mentionsBot) || (t == "GROUP_MESSAGE_CREATE" && triggerMode == "always")
+	return ShouldReply(t, mentionsBot) || (t == "GROUP_MESSAGE_CREATE" && (triggerMode == "always" || triggerMode == "smart"))
 }

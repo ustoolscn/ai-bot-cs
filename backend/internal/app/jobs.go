@@ -56,7 +56,7 @@ func (a *App) claimAgentJob(ctx context.Context, kinds []string, exclude bool) (
 }
 
 func (a *App) processAgentJob(ctx context.Context) error {
-	j, err := a.claimAgentJob(ctx, []string{"eval_run"}, true)
+	j, err := a.claimAgentJob(ctx, []string{"eval_run", "group_review"}, true)
 	if err != nil {
 		return err
 	}
@@ -75,6 +75,10 @@ func (a *App) runJob(ctx context.Context, j agentJob) error {
 	var err error
 	str := func(k string) string { v, _ := j.Payload[k].(string); return v }
 	switch j.Kind {
+	case "group_review":
+		err = a.reviewGroupMessage(ctx, str("messageId"))
+	case "scheduled_post":
+		err = a.generateScheduledPost(ctx, j.ID)
 	case "blacklist_kick":
 		err = a.jobBlacklistKick(ctx, str("actionId"))
 	case "evaluate":
@@ -108,7 +112,7 @@ func (a *App) runJob(ctx context.Context, j agentJob) error {
 }
 
 // auxJSON runs the auxiliary model with a system prompt and decodes JSON output.
-func (a *App) auxJSON(ctx context.Context, s agent.Settings, fallbackProfile, runID, kind, system, user string, out any) error {
+func (a *App) auxJSON(ctx context.Context, s agent.Settings, fallbackProfile, runID, kind, system, user string, out any, images ...domain.ChatContentPart) error {
 	cl, pid, err := a.auxModel(ctx, s, fallbackProfile)
 	if err != nil {
 		return fmt.Errorf("辅助模型不可用: %w", err)
@@ -116,7 +120,7 @@ func (a *App) auxJSON(ctx context.Context, s agent.Settings, fallbackProfile, ru
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	started := time.Now()
-	res, err := cl.ChatWith(cctx, []domain.ChatMessage{{Role: "system", Content: system}, {Role: "user", Content: user}}, domain.ChatOptions{DisableWebSearch: true})
+	res, err := cl.ChatWith(cctx, []domain.ChatMessage{{Role: "system", Content: system}, {Role: "user", Content: user, Parts: images}}, domain.ChatOptions{DisableWebSearch: true})
 	a.recordModelCall(ctx, runID, pid, kind, res, time.Since(started).Milliseconds(), err)
 	if err != nil {
 		return err
@@ -164,12 +168,15 @@ func (a *App) jobEvaluate(ctx context.Context, runID, messageID, profileID strin
 	} else if excluded {
 		return nil
 	}
-	s := a.agentSettings(ctx)
 	var botID, convID, convType, senderID, senderName, question, platformID string
 	var eventAt time.Time
 	if err := a.db.QueryRow(ctx, `SELECT m.bot_id::text,m.conversation_id::text,c.type,m.sender_id,m.sender_name,m.content,COALESCE(m.platform_message_id,''),m.event_at FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=$1`, messageID).
 		Scan(&botID, &convID, &convType, &senderID, &senderName, &question, &platformID, &eventAt); err != nil {
 		return nil // message deleted
+	}
+	s, _, _, err := a.conversationAgent(ctx, convID, a.agentSettings(ctx))
+	if err != nil {
+		return err
 	}
 	var answer string
 	_ = a.db.QueryRow(ctx, `SELECT COALESCE(string_agg(content, E'\n' ORDER BY event_at),'') FROM messages WHERE conversation_id=$1 AND direction='outbound' AND event_type='AI_RESPONSE' AND reply_to_message_id=$2`, convID, platformID).Scan(&answer)
@@ -271,7 +278,10 @@ func (a *App) jobSummarize(ctx context.Context, conversationID, scope, until, pr
 	if err != nil {
 		return nil
 	}
-	s := a.agentSettings(ctx)
+	s, _, _, err := a.conversationAgent(ctx, conversationID, a.agentSettings(ctx))
+	if err != nil {
+		return err
+	}
 	var summary string
 	coveredUntil := time.Unix(0, 0).UTC()
 	_ = a.db.QueryRow(ctx, "SELECT summary,covered_until FROM conversation_summaries WHERE conversation_id=$1 AND scope_key=$2", conversationID, scope).Scan(&summary, &coveredUntil)
@@ -346,9 +356,9 @@ func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool
 	if !s.StaffMiningEnabled && !forced {
 		return nil
 	}
-	var convID, botID, content, source string
+	var convID, content, source string
 	var eventAt time.Time
-	if err := a.db.QueryRow(ctx, "SELECT conversation_id::text,bot_id::text,content,event_type,event_at FROM messages WHERE id=$1", messageID).Scan(&convID, &botID, &content, &source, &eventAt); err != nil {
+	if err := a.db.QueryRow(ctx, "SELECT conversation_id::text,content,event_type,event_at FROM messages WHERE id=$1", messageID).Scan(&convID, &content, &source, &eventAt); err != nil {
 		return nil
 	}
 	var mined bool
@@ -396,7 +406,11 @@ func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool
 	}
 	input := strings.Join(lines, "\n") + "\n" + label + "：" + agent.TruncateRunes(content, 1000)
 	var res staffMining
-	if err := a.auxJSON(ctx, s, a.resolveChatProfile(ctx, nil, botID), "", "staff_mining", agent.StaffMiningPrompt, input, &res); err != nil {
+	_, _, profile, err := a.conversationAgent(ctx, convID, s)
+	if err != nil {
+		return err
+	}
+	if err := a.auxJSON(ctx, s, profile, "", "staff_mining", agent.StaffMiningPrompt, input, &res); err != nil {
 		return err
 	}
 	if !res.Reusable || strings.TrimSpace(res.Question) == "" || strings.TrimSpace(res.Answer) == "" {

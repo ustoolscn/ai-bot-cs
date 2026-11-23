@@ -27,6 +27,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -109,6 +110,9 @@ func (a *App) Router() http.Handler {
 	auth.Use(a.requireAuth())
 	auth.GET("/auth/me", a.me)
 	auth.PUT("/auth/password", a.changePassword)
+	a.supportRoutes(auth)
+	a.scheduledPostRoutes(auth)
+	a.guardRoutes(auth)
 	auth.GET("/bots", a.listBots)
 	auth.POST("/bots", a.saveBot)
 	auth.PUT("/bots/:id", a.saveBot)
@@ -157,6 +161,7 @@ func (a *App) Router() http.Handler {
 	auth.DELETE("/blocked-users/:id", a.deleteBlockedUser)
 	auth.GET("/conversations/:id/staff-learning", a.getStaffLearning)
 	auth.POST("/conversations/:id/staff-learning", a.startStaffLearning)
+	auth.POST("/conversations/:id/members/sync", a.syncGroupMembers)
 	auth.GET("/conversations/:id/members", a.listMembers)
 	auth.PUT("/conversations/:id/members/:userId", a.updateMember)
 	auth.GET("/conversations/:id/summaries", a.getSummary)
@@ -323,15 +328,15 @@ func queryList(c *gin.Context, a *App, sql string, args ...any) {
 }
 
 func (a *App) listBots(c *gin.Context) {
-	queryList(c, a, `SELECT id::text,name,channel,app_id AS "appId",enabled,status,last_event_at AS "lastEventAt",created_at AS "createdAt",app_secret_enc<>'' AS "hasSecret",COALESCE(default_chat_profile_id::text,'') AS "defaultChatProfileId" FROM bots ORDER BY created_at DESC`)
+	queryList(c, a, `SELECT id::text,name,channel,app_id AS "appId",enabled,status,last_event_at AS "lastEventAt",created_at AS "createdAt",app_secret_enc<>'' AS "hasSecret" FROM bots ORDER BY created_at DESC`)
 }
 func (a *App) saveBot(c *gin.Context) {
 	var in struct {
-		Name           string `json:"name"`
-		AppID          string `json:"appId"`
-		AppSecret      string `json:"appSecret"`
-		ModelProfileID string `json:"modelProfileId"`
-		Enabled        *bool  `json:"enabled"`
+		Name      string `json:"name"`
+		AppID     string `json:"appId"`
+		AppSecret string `json:"appSecret"`
+
+		Enabled *bool `json:"enabled"`
 	}
 	if c.ShouldBindJSON(&in) != nil || in.Name == "" || in.AppID == "" {
 		fail(c, 400, "invalid_request", "名称和 AppID 必填")
@@ -348,7 +353,7 @@ func (a *App) saveBot(c *gin.Context) {
 			return
 		}
 		enc, _ := a.cipher.Encrypt(in.AppSecret)
-		err := a.db.QueryRow(c, "INSERT INTO bots(name,app_id,app_secret_enc,enabled,default_chat_profile_id) VALUES($1,$2,$3,$4,$5) RETURNING id::text", in.Name, in.AppID, enc, enabled, nullString(in.ModelProfileID)).Scan(&id)
+		err := a.db.QueryRow(c, "INSERT INTO bots(name,app_id,app_secret_enc,enabled) VALUES($1,$2,$3,$4) RETURNING id::text", in.Name, in.AppID, enc, enabled).Scan(&id)
 		if err != nil {
 			fail(c, 500, "database_error", "保存机器人失败")
 			return
@@ -359,12 +364,12 @@ func (a *App) saveBot(c *gin.Context) {
 	var err error
 	if in.AppSecret != "" {
 		enc, _ := a.cipher.Encrypt(in.AppSecret)
-		_, err = a.db.Exec(c, "UPDATE bots SET name=$1,app_id=$2,app_secret_enc=$3,enabled=$4,default_chat_profile_id=$5,updated_at=now() WHERE id=$6", in.Name, in.AppID, enc, enabled, nullString(in.ModelProfileID), id)
+		_, err = a.db.Exec(c, "UPDATE bots SET name=$1,app_id=$2,app_secret_enc=$3,enabled=$4,updated_at=now() WHERE id=$5", in.Name, in.AppID, enc, enabled, id)
 	} else {
-		_, err = a.db.Exec(c, "UPDATE bots SET name=$1,app_id=$2,enabled=$3,default_chat_profile_id=$4,updated_at=now() WHERE id=$5", in.Name, in.AppID, enabled, nullString(in.ModelProfileID), id)
+		_, err = a.db.Exec(c, "UPDATE bots SET name=$1,app_id=$2,enabled=$3,updated_at=now() WHERE id=$4", in.Name, in.AppID, enabled, id)
 	}
 	if err != nil {
-		fail(c, 400, "invalid_model_profile", "默认对话模型无效")
+		fail(c, 500, "database_error", "保存机器人失败")
 		return
 	}
 	ok(c, gin.H{"id": id})
@@ -573,10 +578,10 @@ func (a *App) testModel(c *gin.Context) {
 }
 
 func (a *App) listConversations(c *gin.Context) {
-	queryList(c, a, `SELECT c.id::text,c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",b.name AS "botName",c.updated_at AS "updatedAt",COALESCE(ms.message_count,0) AS "messageCount",CASE WHEN c.type='private' THEN GREATEST(COALESCE(cm.member_count,0),1) ELSE COALESCE(cm.member_count,0) END AS "memberCount",COALESCE(ms.has_full_message_events,false) AS "hasFullMessageEvents" FROM conversations c JOIN bots b ON b.id=c.bot_id LEFT JOIN LATERAL (SELECT count(*) FILTER(WHERE event_type<>'PROCESSING_ACK') AS message_count,bool_or(event_type='GROUP_MESSAGE_CREATE') AS has_full_message_events FROM messages WHERE conversation_id=c.id) ms ON true LEFT JOIN LATERAL (SELECT count(*) AS member_count FROM conversation_members WHERE conversation_id=c.id AND active) cm ON true ORDER BY c.updated_at DESC`)
+	queryList(c, a, `SELECT c.id::text,c.bot_id::text AS "botId",c.service_id::text AS "serviceId",c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",b.name AS "botName",c.updated_at AS "updatedAt",COALESCE(ms.message_count,0) AS "messageCount",CASE WHEN c.type='private' THEN GREATEST(COALESCE(cm.member_count,0),1) ELSE COALESCE(cm.member_count,0) END AS "memberCount",COALESCE(ms.has_full_message_events,false) AS "hasFullMessageEvents" FROM conversations c JOIN bots b ON b.id=c.bot_id LEFT JOIN LATERAL (SELECT count(*) FILTER(WHERE event_type<>'PROCESSING_ACK') AS message_count,bool_or(event_type='GROUP_MESSAGE_CREATE') AS has_full_message_events FROM messages WHERE conversation_id=c.id) ms ON true LEFT JOIN LATERAL (SELECT count(*) AS member_count FROM conversation_members WHERE conversation_id=c.id AND active) cm ON true ORDER BY c.updated_at DESC`)
 }
 func (a *App) getConversation(c *gin.Context) {
-	rows, err := a.db.Query(c, `SELECT c.id::text,c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",COALESCE(json_agg(ck.knowledge_base_id::text) FILTER(WHERE ck.knowledge_base_id IS NOT NULL),'[]') AS "knowledgeBaseIds" FROM conversations c LEFT JOIN conversation_knowledge_bases ck ON ck.conversation_id=c.id WHERE c.id=$1 GROUP BY c.id`, c.Param("id"))
+	rows, err := a.db.Query(c, `SELECT c.id::text,c.bot_id::text AS "botId",c.service_id::text AS "serviceId",c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",COALESCE(json_agg(ck.knowledge_base_id::text) FILTER(WHERE ck.knowledge_base_id IS NOT NULL),'[]') AS "knowledgeBaseIds" FROM conversations c LEFT JOIN conversation_knowledge_bases ck ON ck.conversation_id=c.id WHERE c.id=$1 GROUP BY c.id`, c.Param("id"))
 	if err != nil {
 		fail(c, 500, "database_error", "读取失败")
 		return
@@ -597,22 +602,32 @@ func (a *App) updateConversation(c *gin.Context) {
 		Enabled          bool     `json:"enabled"`
 		ContextLimit     int      `json:"contextLimit"`
 		KnowledgeBaseIDs []string `json:"knowledgeBaseIds"`
+		ServiceID        *string  `json:"serviceId"`
 	}
 	if c.ShouldBindJSON(&in) != nil || in.ContextLimit < 1 || in.ContextLimit > 100 {
 		fail(c, 400, "invalid_request", "会话配置无效")
 		return
 	}
-	if in.TriggerMode != "mention_only" && in.TriggerMode != "always" {
+	if in.TriggerMode != "mention_only" && in.TriggerMode != "always" && in.TriggerMode != "smart" {
 		fail(c, 400, "invalid_request", "触发模式无效")
 		return
 	}
-	tx, _ := a.db.Begin(c)
+	tx, err := a.db.Begin(c)
+	if err != nil {
+		fail(c, 500, "database_error", "更新失败")
+		return
+	}
 	defer tx.Rollback(c)
 	var profile any = nil
 	if in.ChatProfileID != "" {
 		profile = in.ChatProfileID
 	}
-	_, err := tx.Exec(c, "UPDATE conversations SET name=$1,enabled=$2,trigger_mode=$3,context_limit=$4,system_prompt=$5,chat_profile_id=$6,updated_at=now() WHERE id=$7", in.Name, in.Enabled, in.TriggerMode, in.ContextLimit, in.SystemPrompt, profile, c.Param("id"))
+	_, err = tx.Exec(c, "UPDATE conversations SET name=$1,enabled=$2,trigger_mode=$3,context_limit=$4,system_prompt=$5,chat_profile_id=$6,service_id=CASE WHEN $8::text IS NULL THEN service_id ELSE NULLIF($8,'')::uuid END,updated_at=now() WHERE id=$7", in.Name, in.Enabled, in.TriggerMode, in.ContextLimit, in.SystemPrompt, profile, c.Param("id"), in.ServiceID)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && (pgErr.ConstraintName == "conversation_bot_service" || pgErr.Code == "22P02") {
+		fail(c, 400, "invalid_reference", "请选择当前机器人的客服")
+		return
+	}
 	if err == nil {
 		_, err = tx.Exec(c, "DELETE FROM conversation_knowledge_bases WHERE conversation_id=$1", c.Param("id"))
 	}
@@ -996,13 +1011,14 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 		return tx.Commit(ctx)
 	}
 	conversationName := inboundConversationName(msg)
+	var guardEnabled bool
 	var cid, triggerMode string
-	err = tx.QueryRow(ctx, `INSERT INTO conversations(channel,bot_id,platform_id,type,name,context_limit) VALUES('qq',$1,$2,$3,$4,$5) ON CONFLICT(channel,bot_id,platform_id) DO UPDATE SET updated_at=now(),name=CASE WHEN conversations.name='' OR conversations.name=conversations.platform_id OR conversations.name LIKE 'QQ 群聊 · %' OR conversations.name LIKE 'QQ 用户 · %' THEN EXCLUDED.name ELSE conversations.name END RETURNING id::text,trigger_mode`, msg.BotID, msg.ConversationID, msg.ConversationType, conversationName, settings.DefaultContextLimit).Scan(&cid, &triggerMode)
+	err = tx.QueryRow(ctx, `INSERT INTO conversations(channel,bot_id,platform_id,type,name,context_limit,trigger_mode) VALUES('qq',$1,$2,$3,$4,$5,CASE WHEN $3='group' THEN 'smart' ELSE 'mention_only' END) ON CONFLICT(channel,bot_id,platform_id) DO UPDATE SET updated_at=now(),name=CASE WHEN conversations.name='' OR conversations.name=conversations.platform_id OR conversations.name LIKE 'QQ 群聊 · %' OR conversations.name LIKE 'QQ 用户 · %' THEN EXCLUDED.name ELSE conversations.name END RETURNING id::text,trigger_mode,enabled AND COALESCE((guard_policy->>'enabled')::bool,false)`, msg.BotID, msg.ConversationID, msg.ConversationType, conversationName, settings.DefaultContextLimit).Scan(&cid, &triggerMode, &guardEnabled)
 	if err != nil {
 		return err
 	}
 	if msg.SenderID != "" {
-		_, err = tx.Exec(ctx, `INSERT INTO conversation_members(conversation_id,platform_user_id,display_name,active,last_seen_at) VALUES($1,$2,$3,true,$4) ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET display_name=CASE WHEN EXCLUDED.display_name<>'' THEN EXCLUDED.display_name ELSE conversation_members.display_name END,active=true,last_seen_at=EXCLUDED.last_seen_at`, cid, msg.SenderID, msg.SenderName, msg.EventTime)
+		_, err = tx.Exec(ctx, `INSERT INTO conversation_members(conversation_id,platform_user_id,display_name,active,last_seen_at) VALUES($1,$2,$3,true,$4) ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET display_name=CASE WHEN EXCLUDED.display_name<>'' THEN EXCLUDED.display_name ELSE conversation_members.display_name END,active=true,membership_updated_at=clock_timestamp(),last_seen_at=EXCLUDED.last_seen_at`, cid, msg.SenderID, msg.SenderName, msg.EventTime)
 		if err != nil {
 			return err
 		}
@@ -1039,7 +1055,14 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 			}
 		}
 	}
-	if !blocked && qq.ShouldQueue(msg.EventType, triggerMode, msg.MentionsBot) {
+	needsReview := !blocked && guardEnabled && msg.ConversationType == "group"
+	queue := qq.ShouldQueue(msg.EventType, triggerMode, msg.MentionsBot)
+	if needsReview {
+		err = a.queueReview(ctx, tx, mid, queue)
+		if err == nil {
+			_, err = tx.Exec(ctx, "UPDATE messages SET context_excluded=true,context_exclusion_reason='pending_review' WHERE id=$1 AND NOT context_excluded AND EXISTS(SELECT 1 FROM group_reviews WHERE message_id=$1 AND status='pending')", mid)
+		}
+	} else if !blocked && queue {
 		_, err = tx.Exec(ctx, "INSERT INTO inbox_tasks(message_id) VALUES($1) ON CONFLICT DO NOTHING", mid)
 	}
 	if err != nil {
@@ -1048,7 +1071,7 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 	if err = tx.Commit(ctx); err != nil {
 		return err
 	}
-	if !blocked && senderIsStaff && strings.TrimSpace(msg.Text) != "" {
+	if !blocked && !needsReview && senderIsStaff && strings.TrimSpace(msg.Text) != "" {
 		a.enqueueJob(ctx, "staff_answer", map[string]any{"messageId": mid}, "staff_answer:"+mid)
 	}
 	return nil
@@ -1074,6 +1097,9 @@ func shortPlatformID(id string) string {
 }
 
 func (a *App) persistQQGroupEvent(ctx context.Context, tx pgx.Tx, botID string, env qq.Envelope, contextLimit int) error {
+	if env.T == "GROUP_JOIN_REQUEST" {
+		return a.queueJoinApproval(ctx, tx, botID, env.D)
+	}
 	if env.T != "GROUP_ADD_ROBOT" && env.T != "GROUP_DEL_ROBOT" && env.T != "GROUP_MEMBER_ADD" && env.T != "GROUP_MEMBER_REMOVE" && env.T != "GROUP_MSG_RECEIVE" && env.T != "GROUP_MSG_REJECT" {
 		return nil
 	}
@@ -1086,7 +1112,7 @@ func (a *App) persistQQGroupEvent(ctx context.Context, tx pgx.Tx, botID string, 
 		return err
 	}
 	var conversationID string
-	err := tx.QueryRow(ctx, `INSERT INTO conversations(channel,bot_id,platform_id,type,name,context_limit) VALUES('qq',$1,$2,'group',$3,$4) ON CONFLICT(channel,bot_id,platform_id) DO UPDATE SET updated_at=now() RETURNING id::text`, botID, event.GroupOpenID, "QQ 群聊 · "+shortPlatformID(event.GroupOpenID), contextLimit).Scan(&conversationID)
+	err := tx.QueryRow(ctx, `INSERT INTO conversations(channel,bot_id,platform_id,type,name,context_limit,trigger_mode) VALUES('qq',$1,$2,'group',$3,$4,'smart') ON CONFLICT(channel,bot_id,platform_id) DO UPDATE SET updated_at=now() RETURNING id::text`, botID, event.GroupOpenID, "QQ 群聊 · "+shortPlatformID(event.GroupOpenID), contextLimit).Scan(&conversationID)
 	if err != nil {
 		return err
 	}
@@ -1100,7 +1126,7 @@ func (a *App) persistQQGroupEvent(ctx context.Context, tx pgx.Tx, botID string, 
 	}
 	if memberID != "" {
 		active := env.T != "GROUP_MEMBER_REMOVE"
-		_, err = tx.Exec(ctx, `INSERT INTO conversation_members(conversation_id,platform_user_id,active,last_seen_at) VALUES($1,$2,$3,now()) ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET active=EXCLUDED.active,last_seen_at=now()`, conversationID, memberID, active)
+		_, err = tx.Exec(ctx, `INSERT INTO conversation_members(conversation_id,platform_user_id,active,last_seen_at) VALUES($1,$2,$3,now()) ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET active=EXCLUDED.active,membership_updated_at=clock_timestamp(),last_seen_at=now()`, conversationID, memberID, active)
 	}
 	if err == nil && env.T == "GROUP_MEMBER_ADD" && event.MemberOpenID != "" {
 		err = a.queueBlockedKick(ctx, tx, botID, conversationID, memberID)

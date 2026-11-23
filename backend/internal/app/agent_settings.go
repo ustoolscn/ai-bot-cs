@@ -87,18 +87,9 @@ func (a *App) audit(c *gin.Context, action, targetType, targetID string, detail 
 	_, _ = a.db.Exec(c, "INSERT INTO audit_logs(user_id,action,target_type,target_id,detail) VALUES($1,$2,$3,$4,$5::jsonb)", user, action, targetType, targetID, string(b))
 }
 
-// resolveChatProfile picks conversation → bot default → global default chat profile.
-func (a *App) resolveChatProfile(ctx context.Context, conversationProfile *string, botID string) string {
-	if conversationProfile != nil && *conversationProfile != "" {
-		return *conversationProfile
-	}
+func (a *App) defaultChatProfile(ctx context.Context) string {
 	var id string
-	if botID != "" {
-		_ = a.db.QueryRow(ctx, "SELECT COALESCE(default_chat_profile_id::text,'') FROM bots WHERE id=$1", botID).Scan(&id)
-	}
-	if id == "" {
-		_ = a.db.QueryRow(ctx, "SELECT id::text FROM model_profiles WHERE kind='chat' AND enabled ORDER BY is_default DESC,created_at LIMIT 1").Scan(&id)
-	}
+	_ = a.db.QueryRow(ctx, "SELECT id::text FROM model_profiles WHERE kind='chat' AND enabled ORDER BY is_default DESC,created_at LIMIT 1").Scan(&id)
 	return id
 }
 
@@ -110,11 +101,11 @@ func (a *App) auxModel(ctx context.Context, s agent.Settings, fallbackProfile st
 		id = fallbackProfile
 	}
 	if id == "" {
-		id = a.resolveChatProfile(ctx, nil, "")
+		id = a.defaultChatProfile(ctx)
 	}
 	cl, kind, err := a.loadModel(ctx, id)
 	if err == nil && kind != "chat" {
-		cl, _, err = a.loadModel(ctx, a.resolveChatProfile(ctx, nil, ""))
+		cl, _, err = a.loadModel(ctx, a.defaultChatProfile(ctx))
 	}
 	return cl, id, err
 }

@@ -11,7 +11,6 @@ export interface Bot {
   enabled: boolean
   callbackPath: string
   lastEventAt: string
-  modelProfileId: string
 }
 
 export interface ModelProfile {
@@ -40,6 +39,7 @@ export type ModelTestResult =
   | { kind: 'embedding'; model: string; dimensions: number; vectorPreview: number[]; latencyMs: number }
 
 export interface Conversation {
+  serviceId?: string
   id: string
   botId: string
   platformId: string
@@ -47,7 +47,7 @@ export interface Conversation {
   name: string
   platform: 'QQ'
   type: 'group' | 'c2c'
-  triggerMode: 'mention_only' | 'always' | 'disabled'
+  triggerMode: 'mention_only' | 'always' | 'smart' | 'disabled'
   messageCount: number
   memberCount: number
   hasFullMessageEvents: boolean

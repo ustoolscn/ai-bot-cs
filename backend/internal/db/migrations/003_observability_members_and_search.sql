@@ -21,10 +21,7 @@ SELECT conversation_id, sender_id, max(sender_name), true, min(event_at), max(ev
 FROM messages
 WHERE direction='inbound' AND sender_id<>''
 GROUP BY conversation_id, sender_id
-ON CONFLICT(conversation_id, platform_user_id) DO UPDATE SET
-  display_name=CASE WHEN EXCLUDED.display_name<>'' THEN EXCLUDED.display_name ELSE conversation_members.display_name END,
-  active=true,
-  last_seen_at=GREATEST(conversation_members.last_seen_at, EXCLUDED.last_seen_at);
+ON CONFLICT(conversation_id, platform_user_id) DO NOTHING;
 
 UPDATE conversations
 SET name=CASE

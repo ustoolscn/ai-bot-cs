@@ -29,6 +29,7 @@ export interface AgentSettings {
   summaryEnabled: boolean
   memoryEnabled: boolean
   maxMemories: number
+  decisionProfileId: string
   auxChatProfileId: string
   embeddingProfileId: string
   toolsEnabled: boolean
@@ -45,8 +46,30 @@ export interface AgentSettings {
 
 export interface Announcement { content: string; publishDate: string; type?: string }
 export interface Monitor { category: string; name: string; status: number; uptime: number }
-export interface PriceQuote { model: string; group: string; groupRatio: number; billing: 'per_token' | 'per_call'; inputUsdPerMillionTokens?: number; outputUsdPerMillionTokens?: number; usdPerCall?: number; availableGroups?: string[] }
+export interface PriceQuote {
+  model: string
+  group: string
+  groupRatio: number
+  billing: 'per_token' | 'per_call' | 'tiered_expr' | 'video_seconds' | 'unknown'
+  inputUsdPerMillionTokens?: number
+  outputUsdPerMillionTokens?: number
+  cacheReadUsdPerMillionTokens?: number
+  cacheWriteUsdPerMillionTokens?: number
+  usdPerCall?: number
+  baseBillingExpr?: string
+  outputUsdPerSecond?: Record<string, number>
+  inputUsdPerSecond?: number
+  baseFps?: number
+  availableGroups?: string[]
+}
+export interface ServiceMetrics {
+  request_count: number
+  success_count: number
+  success_rate: number | null
+  median_ttft_ms: number | null
+}
 export interface LiveData {
+  serviceStatus?: Partial<Record<'hour' | 'day', { generatedAt: string; overall: ServiceMetrics }>>
   enabled: boolean
   fetchedAt?: string
   lastAttemptAt?: string
@@ -79,7 +102,7 @@ export interface Candidate { id: string; knowledgeBaseId?: string; knowledgeBase
 export interface Entry { id: string; knowledgeBaseId: string; knowledgeBaseName: string; question: string; aliases: string[]; answer: string; source: string; status: string; indexStatus: string; indexError: string; version: number; hitCount: number; helpfulCount: number; unhelpfulCount: number; updatedAt: string }
 export interface Gap { id: string; question: string; occurrences: number; status: string; firstSeenAt: string; lastSeenAt: string }
 export interface Feedback { id: string; source: string; rating: string; comment: string; correctedAnswer: string; createdAt: string; answer: string; question: string; messageId?: string; conversationName: string }
-export interface Memory { id: string; botId: string; botName: string; userId: string; displayName: string; kind: string; content: string; confidence: number; pinned: boolean; source: string; updatedAt: string; lastUsedAt?: string }
+export interface Memory { id: string; botId: string; botName: string; userId: string; displayName: string; kind: string; content: string; hasEmbedding: boolean; confidence: number; pinned: boolean; source: string; updatedAt: string; lastUsedAt?: string }
 export interface LearningStats { pendingCandidates: number; publishedEntries: number; openGaps: number; feedback7d: number; negativeFeedback7d: number; activeMemories: number; openHandoffs: number }
 export interface HandoffMessage { id: string; direction: string; senderName: string; content: string; eventType: string; eventAt: string; status?: string; deliveryError?: string }
 export interface Handoff { id: string; conversationName: string; conversationType: string; userId: string; displayName: string; messageId?: string; messageContent: string; reason: string; status: string; pausedUntil?: string; createdAt: string; resolvedAt?: string; recent: HandoffMessage[] }
@@ -153,6 +176,7 @@ export const agentApi = {
     feedback: (id: string, data: { rating: string; comment?: string; correctedAnswer?: string; publish?: boolean; knowledgeBaseId?: string; question?: string }) => request<{ saved: boolean; entryId?: string; candidateId?: string }>({ method: 'POST', url: `/messages/${id}/feedback`, data }),
   },
   members: {
+    sync:(id:string,refresh:boolean)=>request<{syncedAt:string}>({url:`/conversations/${id}/members/sync`,method:'POST',params:{refresh},timeout:600000}),
     list: (conversationId: string) => request<Member[]>({ url: `/conversations/${conversationId}/members` }),
     setStaff: (conversationId: string, userId: string, isStaff: boolean) => request<{ updated: boolean }>({ method: 'PUT', url: `/conversations/${conversationId}/members/${encodeURIComponent(userId)}`, data: { isStaff } }),
     staffLearning: (conversationId: string) => request<StaffLearning>({ url: `/conversations/${conversationId}/staff-learning` }),
