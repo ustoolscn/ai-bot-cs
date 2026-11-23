@@ -1,30 +1,30 @@
 <template>
   <div class="content-page">
-    <PageHeader title="消息记录" description="仅展示实际触发机器人处理的消息，以及对应的模型、上下文和投递链路。">
+    <PageHeader title="消息记录" description="每条触发了机器人的消息都在这里。点任意一行，查看它从接收到发出回复的完整过程。">
       <el-button :icon="Download" @click="exportRows">导出记录</el-button>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
     </PageHeader>
     <div class="toolbar">
       <el-input v-model="search" placeholder="搜索问题、回复、发送者或消息 ID" :prefix-icon="Search" clearable />
-      <el-select v-model="status"><el-option label="全部状态" value="all" /><el-option label="处理成功" value="success" /><el-option label="处理失败" value="failed" /></el-select>
+      <el-segmented v-model="status" :options="[{ label: '全部', value: 'all' }, { label: '成功', value: 'success' }, { label: '失败', value: 'failed' }]" />
       <el-date-picker v-model="date" type="date" placeholder="选择日期" />
     </div>
     <el-alert v-if="loadError" class="page-error-alert" type="error" :closable="false" show-icon :title="loadError" />
     <section class="table-panel">
-      <el-table v-loading="loading" :data="filtered" empty-text="暂无触发机器人处理的消息">
-        <el-table-column prop="time" label="时间" width="170" />
+      <el-table v-loading="loading" class="clickable-rows" :data="filtered" empty-text="还没有触发机器人的消息。机器人在群里被 @ 或收到私聊后会出现在这里。" @row-click="open">
+        <el-table-column prop="time" label="时间" width="175" />
         <el-table-column label="消息" min-width="340"><template #default="{ row }"><div class="message-preview"><strong>{{ row.question }}</strong><span>{{ row.attachments?.length ? `包含 ${row.attachments.length} 张图片 · ` : '' }}{{ row.answer || '未生成回复' }}</span></div></template></el-table-column>
         <el-table-column label="机器人 / 会话" min-width="180"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.botName }}</strong><span>{{ row.conversationName }}</span></div></template></el-table-column>
         <el-table-column prop="sender" label="发送者" width="100" />
-        <el-table-column label="模型" width="160"><template #default="{ row }"><el-button class="model-detail-link" link type="primary" @click="open(row)">{{ row.model || '查看详情' }}</el-button><small class="table-sub">{{ row.tokens }} tokens</small></template></el-table-column>
+        <el-table-column label="模型" width="150"><template #default="{ row }"><div class="stacked-cell"><strong class="truncate">{{ row.model || '—' }}</strong><span>{{ row.tokens }} tokens</span></div></template></el-table-column>
         <el-table-column label="知识命中" width="100"><template #default="{ row }">{{ row.knowledgeHits }} 条</template></el-table-column>
         <el-table-column label="耗时" width="100"><template #default="{ row }">{{ formatDuration(row.latency) }}</template></el-table-column>
         <el-table-column label="状态" width="100"><template #default="{ row }"><StatusBadge :status="row.status" /></template></el-table-column>
-        <el-table-column label="操作" width="90" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="open(row)">详情</el-button></template></el-table-column>
+        <el-table-column width="44" fixed="right"><template #default><el-icon class="faint"><ArrowRight /></el-icon></template></el-table-column>
       </el-table>
     </section>
 
-    <el-drawer v-model="drawer" title="消息处理详情" size="680px">
+    <el-drawer v-model="drawer" title="消息处理详情" size="720px">
       <div v-if="selected" v-loading="detailLoading">
         <div class="trace-summary">
           <StatusBadge :status="selected.status" />
@@ -45,9 +45,10 @@
               <div><pre>{{ message.content }}</pre><div v-if="message.parts?.length" class="message-image-grid compact"><el-image v-for="(image,imageIndex) in message.parts" :key="image.previewUrl || imageIndex" :src="image.previewUrl" :preview-src-list="previewUrls(message.parts)" fit="cover" loading="lazy" /></div></div>
             </article>
           </div>
-          <el-empty v-else :image-size="54" description="历史记录没有上下文快照；新版本处理的消息会在这里完整展示" />
+          <EmptyState v-else compact mood="thinking" title="这条消息没有保存上下文" description="比较早的消息没有记录当时发给模型的内容，新消息会完整显示。" />
         </div>
 
+        <PipelineFlow compact class="detail-flow" :stages="flowStages" />
         <div class="trace-flow">
           <div v-for="(step,index) in traceSteps" :key="step.title" class="trace-step" :class="step.status"><span>{{ index + 1 }}</span><div><strong>{{ step.title }}</strong><p>{{ step.description }}</p></div><em>{{ step.duration }}</em></div>
         </div>
@@ -66,7 +67,10 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Download, Refresh, Search } from '@element-plus/icons-vue'
+import { ArrowRight, Download, Refresh, Search } from '@element-plus/icons-vue'
+import { connection } from '@/utils/connection'
+import PipelineFlow from '@/components/fx/PipelineFlow.vue'
+import EmptyState from '@/components/EmptyState.vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
@@ -85,6 +89,13 @@ const selected = ref<MessageRecord>()
 const loading = ref(false)
 const loadError = ref('')
 const filtered = computed(() => messages.value.filter(m => (!search.value || `${m.question}${m.answer}${m.sender}${m.traceId}`.includes(search.value)) && (status.value === 'all' || m.status === status.value)))
+const flowStages = computed(() => {
+  const m = selected.value
+  if (!m) return []
+  const labels = ['接收', '上下文', '检索', '模型', '投递']
+  const ms = [undefined, m.contextLatency, m.retrievalLatency, m.modelLatency, m.deliveryLatency]
+  return traceSteps.value.map((step, index) => ({ label: labels[index], ms: ms[index], status: step.status }))
+})
 const traceSteps = computed(() => {
   if (!selected.value) return []
   const message = selected.value
@@ -117,7 +128,7 @@ async function open(row: MessageRecord) {
   drawer.value = true
   detailLoading.value = true
   try { selected.value = await api.messages.detail(row.id) }
-  catch (error) { ElMessage.error(error instanceof Error ? error.message : '读取消息详情失败') }
+  catch (error) { if (!connection.lost) ElMessage.error(error instanceof Error ? error.message : '读取消息详情失败') }
   finally { detailLoading.value = false }
 }
 function duration(value: number) { return value > 0 ? formatDuration(value) : '—' }

@@ -113,12 +113,9 @@ onMounted(load)
 
 <style scoped>
 .block { margin-bottom: 16px; }
-.block-head { display: flex; justify-content: space-between; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--line); gap: 12px; }
-.block-head h2 { font-size: 15px; margin: 0 0 4px; }
-.block-head p { margin: 0; color: var(--muted); font-size: 12px; }
 .form-row { display: flex; gap: 12px; align-items: flex-start; }
 .grow { flex: 1; }
 .mono :deep(textarea) { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
 .result { margin-top: 12px; max-height: 300px; overflow: auto; }
-code { font-size: 12px; word-break: break-all; }
+code { font-size: 13px; word-break: break-all; }
 </style>

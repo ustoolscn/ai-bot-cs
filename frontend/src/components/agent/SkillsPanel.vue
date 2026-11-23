@@ -67,8 +67,5 @@ onMounted(load)
 
 <style scoped>
 .block { margin-bottom: 16px; }
-.block-head { display: flex; justify-content: space-between; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--line); gap: 12px; }
-.block-head h2 { font-size: 15px; margin: 0 0 4px; }
-.block-head p { margin: 0; color: var(--muted); font-size: 12px; }
 .tag { margin: 2px 4px 2px 0; }
 </style>

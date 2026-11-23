@@ -14,6 +14,7 @@ const router = createRouter({
       { path: 'models', name: 'models', component: () => import('@/views/ModelsView.vue') },
       { path: 'agent', name: 'agent', component: () => import('@/views/AgentView.vue') },
       { path: 'learning', name: 'learning', component: () => import('@/views/LearningView.vue') },
+      { path: 'evaluation', name: 'evaluation', component: () => import('@/views/EvaluationView.vue') },
       { path: 'handoffs', name: 'handoffs', component: () => import('@/views/HandoffView.vue') },
       { path: 'system', name: 'system', component: () => import('@/views/SystemView.vue') },
     ] },

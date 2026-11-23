@@ -1,60 +1,127 @@
 <template>
   <div class="app-shell">
-    <header class="topbar">
-      <BrandLogo class="topbar-brand" />
-      <nav class="global-nav" aria-label="主导航">
-        <router-link v-for="item in navItems" :key="item.path" :to="item.path">{{ item.label }}</router-link>
-      </nav>
-      <div class="topbar-actions">
-        <el-tooltip content="搜索消息、机器人和知识库"><el-button text circle aria-label="搜索" @click="searchVisible = true"><el-icon><Search /></el-icon></el-button></el-tooltip>
-        <el-button text circle aria-label="通知" @click="$router.push('/overview#alerts')"><el-icon><Bell /></el-icon></el-button>
-        <el-tooltip content="系统设置"><el-button text circle aria-label="系统设置" @click="$router.push('/system')"><el-icon><Setting /></el-icon></el-button></el-tooltip>
-        <el-dropdown trigger="click" @command="handleCommand">
-          <button class="user-menu" aria-label="用户菜单"><span class="avatar">A</span><span class="user-name">{{ auth.username || 'admin' }}</span><el-icon><ArrowDown /></el-icon></button>
-          <template #dropdown><el-dropdown-menu><el-dropdown-item command="system">系统设置</el-dropdown-item><el-dropdown-item divided command="logout">退出登录</el-dropdown-item></el-dropdown-menu></template>
-        </el-dropdown>
+    <aside class="sidebar" :class="{ collapsed, 'mobile-open': mobileOpen }" aria-label="主导航">
+      <div class="sidebar-head">
+        <BrandLogo subtitle="QQ 客服管理" />
+        <button v-if="collapsed" class="icon-button collapse-toggle" aria-label="展开侧栏" @click="toggleCollapsed"><el-icon><Expand /></el-icon></button>
       </div>
-      <el-button class="mobile-menu" text circle @click="mobileOpen = !mobileOpen"><el-icon><Menu /></el-icon></el-button>
-    </header>
-    <div v-if="mobileOpen" class="mobile-nav">
-      <router-link v-for="item in [...navItems, { path: '/messages', label: '消息' }, { path: '/system', label: '系统' }]" :key="item.path" :to="item.path" @click="mobileOpen = false">{{ item.label }}</router-link>
-    </div>
-    <main class="route-view"><router-view /></main>
+      <button class="sidebar-search" @click="openSearch"><el-icon><Search /></el-icon><span>搜索页面</span><kbd>{{ shortcutLabel }}</kbd></button>
+      <nav class="sidebar-nav">
+        <div v-for="group in navGroups" :key="group.title" class="nav-group">
+          <div class="nav-group-title">{{ group.title }}</div>
+          <el-tooltip v-for="item in group.items" :key="item.path" :content="item.label" placement="right" :disabled="!collapsed">
+            <router-link :to="item.path" class="nav-link" @click="mobileOpen = false">
+              <el-icon><component :is="item.icon" /></el-icon>
+              <span>{{ item.label }}</span>
+              <em v-if="item.badge && badgeCount(item.badge)" class="nav-badge" :class="{ soft: item.badge === 'candidates' }">{{ badgeCount(item.badge) }}</em>
+            </router-link>
+          </el-tooltip>
+        </div>
+      </nav>
+      <router-link v-if="shell.openHandoffs" to="/handoffs" class="sidebar-tip" @click="mobileOpen = false">
+        <Mascot mood="wave" head-only :size="34" />
+        <span><strong>有 {{ shell.openHandoffs }} 位用户在等你</strong>去人工台看看吧</span>
+      </router-link>
+      <div v-else class="sidebar-tip">
+        <Mascot mood="happy" head-only :size="34" />
+        <span><strong>一切顺利</strong>小Q 正在认真回复中</span>
+      </div>
+      <div class="sidebar-foot">
+        <el-dropdown trigger="click" placement="top-start" @command="handleCommand">
+          <button class="user-menu" aria-label="用户菜单"><span class="avatar">{{ initial }}</span><span>{{ auth.username || 'admin' }}</span></button>
+          <template #dropdown><el-dropdown-menu><el-dropdown-item command="system" :icon="Setting">系统状态</el-dropdown-item><el-dropdown-item divided command="logout" :icon="SwitchButton">退出登录</el-dropdown-item></el-dropdown-menu></template>
+        </el-dropdown>
+        <button v-if="!collapsed" class="icon-button collapse-toggle" title="收起侧栏" aria-label="收起侧栏" @click="toggleCollapsed"><el-icon><Fold /></el-icon></button>
+      </div>
+    </aside>
+    <div v-if="mobileOpen" class="sidebar-backdrop" @click="mobileOpen = false" />
 
-    <el-dialog v-model="searchVisible" title="全局搜索" width="560px" class="search-dialog">
-      <el-input v-model="search" size="large" autofocus placeholder="搜索消息、机器人、会话或知识库" :prefix-icon="Search" />
+    <div class="main-area">
+      <header class="mobile-bar">
+        <button class="icon-button" aria-label="打开导航" @click="mobileOpen = true"><el-icon><Menu /></el-icon></button>
+        <BrandLogo />
+      </header>
+      <div v-if="connection.lost && !bannerDismissed" class="connection-banner" role="status">
+        <el-icon><WarningFilled /></el-icon>
+        <span v-if="connection.usingMock">后端服务未连接，页面上显示的是示例数据，保存操作不会生效。</span>
+        <span v-else>暂时连不上后端服务，数据可能不是最新的。请稍后点页面上的“刷新”重试。</span>
+        <el-button text size="small" @click="bannerDismissed = true">知道了</el-button>
+      </div>
+      <main class="route-view"><router-view /></main>
+    </div>
+
+    <el-dialog v-model="searchVisible" width="560px" class="search-dialog" align-center :show-close="false" @opened="focusSearch">
+      <el-input ref="searchInput" v-model="search" class="search-input" size="large" placeholder="输入页面名称或要做的事，例如“转人工”“上传文档”" :prefix-icon="Search" @keydown="onSearchKey" />
       <div class="search-results">
-        <button v-for="result in filteredResults" :key="result.path" @click="openResult(result.path)"><el-icon><component :is="result.icon" /></el-icon><span><strong>{{ result.title }}</strong><small>{{ result.subtitle }}</small></span><el-icon class="result-arrow"><ArrowRight /></el-icon></button>
+        <button v-for="(result, index) in filteredResults" :key="result.path" :class="{ active: index === activeIndex }" @click="openResult(result.path)" @mouseenter="activeIndex = index">
+          <el-icon><component :is="result.icon" /></el-icon>
+          <span><strong>{{ result.label }}</strong><small>{{ result.description }}</small></span>
+          <span class="group-label">{{ result.group }}</span>
+        </button>
+        <div v-if="!filteredResults.length" class="search-empty">没有找到相关页面</div>
       </div>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { ArrowDown, ArrowRight, Bell, ChatDotRound, Cpu, Files, Menu, Search, Setting } from '@element-plus/icons-vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { Expand, Fold, Menu, Search, Setting, SwitchButton, WarningFilled } from '@element-plus/icons-vue'
 import BrandLogo from '@/components/BrandLogo.vue'
+import Mascot from '@/components/fx/Mascot.vue'
 import { useAuthStore } from '@/stores/auth'
+import { navGroups, navItems } from '@/router/nav'
+import { connection } from '@/utils/connection'
+import { useShellStore } from '@/stores/shell'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
+const shell = useShellStore()
 const mobileOpen = ref(false)
+const collapsed = ref(localStorage.getItem('sidebar-collapsed') === '1')
 const searchVisible = ref(false)
 const search = ref('')
-const navItems = [
-  { path: '/overview', label: '概览' }, { path: '/bots', label: '机器人' }, { path: '/conversations', label: '会话' }, { path: '/agent', label: '智能体' }, { path: '/learning', label: '学习' }, { path: '/handoffs', label: '人工台' }, { path: '/knowledge', label: '知识' }, { path: '/models', label: '模型' },
-]
-const results = [
-  { title: '消息记录', subtitle: '查看完整处理链路', path: '/messages', icon: ChatDotRound },
-  { title: '机器人管理', subtitle: '配置 QQ 机器人与回调', path: '/bots', icon: Cpu },
-  { title: '知识库管理', subtitle: '管理文档与向量索引', path: '/knowledge', icon: Files },
-  { title: '智能体设置', subtitle: '回复风格、记忆、技能工具与网站数据', path: '/agent', icon: Setting },
-  { title: '知识学习', subtitle: '候选知识审核、FAQ、知识缺口与用户记忆', path: '/learning', icon: Files },
-  { title: '人工台', subtitle: '转人工工单与人工回复', path: '/handoffs', icon: ChatDotRound },
-  { title: '系统状态', subtitle: '任务队列与服务配置', path: '/system', icon: Setting },
-]
-const filteredResults = computed(() => !search.value ? results : results.filter((item) => `${item.title}${item.subtitle}`.includes(search.value)))
-function openResult(path: string) { searchVisible.value = false; router.push(path) }
-async function handleCommand(command: string) { if (command === 'system') router.push('/system'); if (command === 'logout') { await auth.logout(); router.push('/login') } }
+const activeIndex = ref(0)
+const bannerDismissed = ref(false)
+const searchInput = ref<{ focus: () => void } | null>(null)
+const initial = computed(() => (auth.username || 'A').slice(0, 1).toUpperCase())
+const shortcutLabel = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K'
+
+const filteredResults = computed(() => {
+  const keyword = search.value.trim().toLowerCase()
+  if (!keyword) return navItems
+  return navItems.filter(item => `${item.label}${item.description}${item.group}`.toLowerCase().includes(keyword))
+})
+watch(search, () => { activeIndex.value = 0 })
+
+function badgeCount(kind: 'handoffs' | 'candidates') { return kind === 'handoffs' ? shell.openHandoffs : shell.pendingCandidates }
+function toggleCollapsed() { collapsed.value = !collapsed.value; localStorage.setItem('sidebar-collapsed', collapsed.value ? '1' : '0') }
+function openSearch() { search.value = ''; activeIndex.value = 0; searchVisible.value = true }
+function focusSearch() { nextTick(() => searchInput.value?.focus()) }
+function openResult(path: string) { searchVisible.value = false; mobileOpen.value = false; router.push(path) }
+function onSearchKey(event: Event) {
+  const key = (event as KeyboardEvent).key
+  if (key === 'ArrowDown') { event.preventDefault(); activeIndex.value = Math.min(activeIndex.value + 1, filteredResults.value.length - 1) }
+  if (key === 'ArrowUp') { event.preventDefault(); activeIndex.value = Math.max(activeIndex.value - 1, 0) }
+  if (key === 'Enter' && filteredResults.value[activeIndex.value]) openResult(filteredResults.value[activeIndex.value].path)
+}
+function onGlobalKey(event: KeyboardEvent) {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch() }
+}
+async function handleCommand(command: string) {
+  if (command === 'system') router.push('/system')
+  if (command === 'logout') { await auth.logout(); router.push('/login') }
+}
+
+watch(() => route.path, (path) => {
+  const item = navItems.find(entry => path.startsWith(entry.path))
+  document.title = item ? `${item.label} · AI Bot Hub` : 'AI Bot Hub'
+  shell.refreshCounts()
+}, { immediate: true })
+
+let timer: number | undefined
+onMounted(() => { window.addEventListener('keydown', onGlobalKey); timer = window.setInterval(() => shell.refreshCounts(), 60000) })
+onBeforeUnmount(() => { window.removeEventListener('keydown', onGlobalKey); window.clearInterval(timer) })
 </script>

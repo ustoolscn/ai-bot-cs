@@ -1,30 +1,30 @@
 <template>
   <div class="content-page">
-    <PageHeader title="知识学习" description="官方客服回答、管理员纠错和没答上的问题，经审核后自动沉淀为 FAQ。">
+    <PageHeader title="知识审核" description="官方客服的回答、管理员的纠错、机器人没答上的问题，都会先到这里。审核通过后成为 FAQ，机器人就能用上。">
       <el-button :icon="Refresh" @click="reload">刷新</el-button>
     </PageHeader>
-    <div class="stat-row">
-      <div v-for="s in statCards" :key="s.label" class="stat-card" @click="s.tab && (tab = s.tab)"><span>{{ s.label }}</span><strong>{{ s.value }}</strong></div>
-    </div>
-    <el-tabs v-model="tab" @tab-change="loadTab">
-      <el-tab-pane :label="`待审核 (${stats?.pendingCandidates ?? 0})`" name="candidates">
-        <div class="toolbar"><el-select v-model="candidateStatus" @change="loadTab"><el-option label="待审核" value="pending" /><el-option label="已通过" value="approved" /><el-option label="已驳回" value="rejected" /><el-option label="全部" value="all" /></el-select></div>
+    <el-tabs v-model="tab" @tab-change="onTabChange">
+      <el-tab-pane name="candidates">
+        <template #label>待审核<span class="count-pill" :class="{ hot: stats?.pendingCandidates }">{{ stats?.pendingCandidates ?? 0 }}</span></template>
+        <div class="toolbar"><el-segmented v-model="candidateStatus" :options="candidateStatusOptions" @change="loadTab" /></div>
         <section class="table-panel">
-          <el-table v-loading="loading" :data="candidates" empty-text="暂无候选知识。标记官方客服后，他们在群里的回答会自动出现在这里。">
+          <el-table v-loading="loading" :data="candidates" :empty-text="candidateStatus === 'pending' ? '没有待审核的知识。在“群与会话 → 成员”里标记官方客服后，他们在群里的回答会自动出现在这里。' : '暂无记录'">
             <el-table-column label="问题 / 答案" min-width="380"><template #default="{ row }"><div class="qa"><strong>{{ row.question }}</strong><span>{{ row.answer }}</span><small v-if="row.aliases?.length">相似问：{{ row.aliases.join('；') }}</small></div></template></el-table-column>
-            <el-table-column label="来源" width="110"><template #default="{ row }"><el-tag effect="plain" size="small">{{ sourceText[row.source] || row.source }}</el-tag></template></el-table-column>
-            <el-table-column label="置信度" width="80"><template #default="{ row }">{{ Math.round(row.confidence * 100) }}%</template></el-table-column>
+            <el-table-column label="来源" width="130"><template #default="{ row }"><div class="stacked-cell"><el-tag effect="plain" size="small">{{ sourceText[row.source] || row.source }}</el-tag><span>{{ row.knowledgeBaseName || '默认知识库' }}</span></div></template></el-table-column>
+            <el-table-column label="可信度" width="90"><template #default="{ row }"><span :class="row.confidence >= 0.85 ? 'trend-good' : row.confidence < 0.6 ? 'danger-text' : ''">{{ Math.round(row.confidence * 100) }}%</span></template></el-table-column>
             <el-table-column label="时间" width="150"><template #default="{ row }">{{ formatTime(row.createdAt) }}</template></el-table-column>
-            <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }"><template v-if="row.status === 'pending'"><el-button link type="primary" @click="review(row)">审核</el-button><el-button link type="danger" @click="reject(row)">驳回</el-button></template><span v-else class="muted">{{ row.status === 'approved' ? '已通过' : '已驳回' }}</span></template></el-table-column>
+            <el-table-column label="操作" width="210" fixed="right"><template #default="{ row }"><template v-if="row.status === 'pending'"><el-button size="small" type="primary" @click="quickApprove(row)">通过</el-button><el-button size="small" @click="review(row)">修改后通过</el-button><el-button link type="danger" @click="reject(row)">驳回</el-button></template><span v-else class="muted">{{ row.status === 'approved' ? '已通过' : '已驳回' }}</span></template></el-table-column>
           </el-table>
         </section>
       </el-tab-pane>
 
-      <el-tab-pane label="FAQ 条目" name="entries">
+      <el-tab-pane name="entries">
+        <template #label>FAQ<span class="count-pill">{{ stats?.publishedEntries ?? 0 }}</span></template>
         <div class="toolbar">
           <el-input v-model="entryQuery" placeholder="搜索问题或答案" :prefix-icon="Search" clearable @change="loadTab" />
           <el-select v-model="entryKB" clearable placeholder="全部知识库" @change="loadTab"><el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" /></el-select>
           <el-select v-model="entryStatus" @change="loadTab"><el-option label="已发布" value="published" /><el-option label="需复核" value="review" /><el-option label="已归档" value="archived" /><el-option label="全部" value="all" /></el-select>
+          <span class="spacer" />
           <el-button type="primary" :icon="Plus" @click="editEntry()">新建条目</el-button>
         </div>
         <section class="table-panel">
@@ -39,18 +39,20 @@
         </section>
       </el-tab-pane>
 
-      <el-tab-pane :label="`知识缺口 (${stats?.openGaps ?? 0})`" name="gaps">
+      <el-tab-pane name="gaps">
+        <template #label>没答上的问题<span class="count-pill" :class="{ hot: stats?.openGaps }">{{ stats?.openGaps ?? 0 }}</span></template>
         <section class="table-panel">
-          <el-table v-loading="loading" :data="gaps" empty-text="暂无知识缺口。质检发现 AI 因缺少资料没答上的问题会聚类到这里。">
+          <el-table v-loading="loading" :data="gaps" empty-text="没有新的缺口。机器人因为缺少资料没答上的问题，会自动归类到这里，补上答案即可。">
             <el-table-column prop="question" label="用户问了但没答上的问题" min-width="360" />
             <el-table-column prop="occurrences" label="出现次数" width="100" sortable />
             <el-table-column label="最近出现" width="150"><template #default="{ row }">{{ formatTime(row.lastSeenAt) }}</template></el-table-column>
-            <el-table-column label="操作" width="140" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="answerGap(row)">补充答案</el-button><el-button link @click="ignoreGap(row)">忽略</el-button></template></el-table-column>
+            <el-table-column label="操作" width="160" fixed="right"><template #default="{ row }"><el-button size="small" type="primary" @click="answerGap(row)">补充答案</el-button><el-button link @click="ignoreGap(row)">忽略</el-button></template></el-table-column>
           </el-table>
         </section>
       </el-tab-pane>
 
-      <el-tab-pane label="反馈记录" name="feedback">
+      <el-tab-pane name="feedback">
+        <template #label>反馈<span v-if="stats" class="count-pill" :class="{ hot: stats.negativeFeedback7d }" title="最近 7 天差评数">{{ stats.negativeFeedback7d }}</span></template>
         <div class="toolbar"><el-select v-model="feedbackRating" clearable placeholder="全部评价" @change="loadTab"><el-option v-for="(v, k) in ratingText" :key="k" :label="v" :value="k" /></el-select></div>
         <section class="table-panel">
           <el-table v-loading="loading" :data="feedback" empty-text="暂无反馈">
@@ -63,7 +65,8 @@
         </section>
       </el-tab-pane>
 
-      <el-tab-pane label="用户记忆" name="memories">
+      <el-tab-pane name="memories">
+        <template #label>用户记忆<span class="count-pill">{{ stats?.activeMemories ?? 0 }}</span></template>
         <div class="toolbar"><el-input v-model="memoryQuery" placeholder="搜索记忆内容、昵称" :prefix-icon="Search" clearable @change="loadTab" /><el-input v-model="memoryUser" placeholder="用户 ID" clearable @change="loadTab" /></div>
         <section class="table-panel">
           <el-table v-loading="loading" :data="memories" empty-text="暂无记忆">
@@ -102,7 +105,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useShellStore } from '@/stores/shell'
 import { Plus, Refresh, Search, StarFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
@@ -112,7 +117,12 @@ import type { KnowledgeBase } from '@/types'
 
 const kindText: Record<string, string> = { fact: '事实', preference: '偏好', issue: '问题', profile: '资料' }
 const memorySourceText: Record<string, string> = { extracted: '自动', tool: 'AI 记录', admin: '手动' }
-const tab = ref('candidates')
+const route = useRoute()
+const router = useRouter()
+const shell = useShellStore()
+const tabs = ['candidates', 'entries', 'gaps', 'feedback', 'memories']
+const tab = ref(tabs.includes(String(route.query.tab)) ? String(route.query.tab) : 'candidates')
+const candidateStatusOptions = [{ label: '待审核', value: 'pending' }, { label: '已通过', value: 'approved' }, { label: '已驳回', value: 'rejected' }, { label: '全部', value: 'all' }]
 const loading = ref(false)
 const stats = ref<LearningStats | null>(null)
 const knowledgeBases = ref<KnowledgeBase[]>([])
@@ -130,17 +140,13 @@ const memories = ref<Memory[]>([])
 const memoryQuery = ref('')
 const memoryUser = ref('')
 
-const statCards = computed(() => [
-  { label: '待审核候选', value: stats.value?.pendingCandidates ?? '—', tab: 'candidates' },
-  { label: '已发布 FAQ', value: stats.value?.publishedEntries ?? '—', tab: 'entries' },
-  { label: '待补知识缺口', value: stats.value?.openGaps ?? '—', tab: 'gaps' },
-  { label: '7 天负反馈 / 总反馈', value: stats.value ? `${stats.value.negativeFeedback7d} / ${stats.value.feedback7d}` : '—', tab: 'feedback' },
-  { label: '用户记忆', value: stats.value?.activeMemories ?? '—', tab: 'memories' },
-])
+function onTabChange() { router.replace({ query: tab.value === 'candidates' ? {} : { tab: tab.value } }); loadTab() }
+watch(() => route.query.tab, (value) => { const next = tabs.includes(String(value)) ? String(value) : 'candidates'; if (next !== tab.value) { tab.value = next; loadTab() } })
 
 async function reload() {
   const [s, kbs, settings] = await Promise.all([agentApi.learning.stats(), api.knowledge.list(), agentApi.settings.get().catch(() => null)])
   stats.value = s
+  shell.refreshCounts(true)
   knowledgeBases.value = kbs
   defaultKB.value = settings?.learningKnowledgeBaseId || kbs[0]?.id || ''
   await loadTab()
@@ -190,6 +196,15 @@ async function submitEntry() {
     await reload()
   } catch (e) { ElMessage.error(e instanceof Error ? e.message : '保存失败') }
 }
+async function quickApprove(row: Candidate) {
+  const knowledgeBaseId = row.knowledgeBaseId || defaultKB.value
+  if (!knowledgeBaseId) { review(row); return }
+  try {
+    await agentApi.learning.approve(row.id, { knowledgeBaseId, question: row.question, aliases: row.aliases || [], answer: row.answer })
+    ElMessage.success('已通过，索引完成后机器人就能用上')
+    await reload()
+  } catch (e) { ElMessage.error(e instanceof Error ? e.message : '操作失败') }
+}
 async function reject(row: Candidate) {
   const { value } = await ElMessageBox.prompt('驳回原因（可选）', '驳回候选', { inputValue: '' })
   await agentApi.learning.reject(row.id, value || '')
@@ -209,16 +224,8 @@ onMounted(reload)
 </script>
 
 <style scoped>
-.stat-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 18px; }
-.stat-card { background: #fff; border: 1px solid var(--line); border-radius: 7px; padding: 14px 16px; cursor: pointer; }
-.stat-card span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
-.stat-card strong { font-size: 22px; }
-.qa strong { display: block; font-size: 13px; margin-bottom: 4px; }
-.qa span { display: block; color: #4a5568; font-size: 12px; white-space: pre-wrap; line-height: 1.6; }
-.qa small { display: block; color: var(--muted); margin-top: 4px; }
-.muted { color: var(--muted); font-size: 12px; }
-.danger { color: #d64545; font-weight: 600; }
+.danger { color: var(--danger); font-weight: 600; }
 .pin { color: #e6a23c; margin-right: 4px; vertical-align: -2px; }
-.evidence { max-height: 220px; overflow: auto; font-size: 12px; }
-@media (max-width: 900px) { .stat-row { grid-template-columns: repeat(2, 1fr); } }
+.evidence { max-height: 220px; overflow: auto; font-size: 13px; }
+.stacked-cell .el-tag { margin-bottom: 2px; }
 </style>

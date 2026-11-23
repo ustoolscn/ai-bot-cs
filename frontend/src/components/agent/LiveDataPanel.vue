@@ -2,8 +2,11 @@
   <section class="settings-panel" v-loading="loading">
     <div class="panel-title">
       <h2>同步状态</h2>
-      <el-button size="small" :icon="Refresh" :loading="refreshing" @click="refresh">立即同步</el-button>
+      <el-tooltip :content="blockedReason" :disabled="!blockedReason" placement="top">
+        <span><el-button size="small" :icon="Refresh" :loading="refreshing" :disabled="!!blockedReason" @click="refresh">立即同步</el-button></span>
+      </el-tooltip>
     </div>
+    <el-alert v-if="blockedReason" class="gap" type="info" :closable="false" show-icon :title="blockedReason" />
     <template v-if="data">
       <dl class="detail-list">
         <div><dt>站点</dt><dd>{{ data.systemName || '—' }}</dd></div>
@@ -44,6 +47,9 @@ import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { agentApi, formatTime, type LiveData } from '@/api/agent'
 
+// blockedReason：设置有未保存的修改或实时数据未启用时，先不允许同步，避免后端按旧配置同步失败（400）。
+const props = defineProps<{ blockedReason?: string }>()
+
 const data = ref<LiveData | null>(null)
 const loading = ref(false)
 const refreshing = ref(false)
@@ -55,6 +61,7 @@ async function load() {
   try { data.value = await agentApi.liveData.get() } catch (e) { ElMessage.error(e instanceof Error ? e.message : '加载失败') } finally { loading.value = false }
 }
 async function refresh() {
+  if (props.blockedReason) return
   refreshing.value = true
   try { data.value = await agentApi.liveData.refresh(); ElMessage.success('已同步') } catch (e) { ElMessage.error(e instanceof Error ? e.message : '同步失败') } finally { refreshing.value = false }
 }
@@ -65,8 +72,8 @@ defineExpose({ load })
 <style scoped>
 .panel-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .panel-title h2 { margin: 0; }
-h3 { font-size: 13px; margin: 18px 0 8px; }
+h3 { font-size: 14px; font-weight: 600; margin: 20px 0 8px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .gap { margin-bottom: 8px; }
-.muted { color: var(--muted); font-size: 12px; }
+.muted { color: var(--muted); font-size: 13px; }
 </style>

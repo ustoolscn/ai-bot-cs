@@ -1,4 +1,5 @@
 import { ApiError, mockFallbackEnabled, request } from './client'
+import { connection } from '@/utils/connection'
 import { mockBots, mockConversations, mockKnowledgeBases, mockMessages, mockModels, mockOverview } from '@/mock/data'
 import type { Bot, Conversation, KnowledgeBase, KnowledgeDocument, MessageAttachment, MessageRecord, ModelProfile, ModelTestInput, ModelTestResult, Status, SystemOverview, SystemSettings } from '@/types'
 import { createEmptyOverview } from '@/utils/overview'
@@ -31,7 +32,7 @@ const asStatus = (value: string, enabled = true): Status => {
 async function loadOrMock<T>(loader: () => Promise<T>, fallback: T): Promise<T> {
   try { return await loader() }
   catch (error) {
-    if (mockFallbackEnabled && error instanceof ApiError && error.code === 'NETWORK_ERROR') return clone(fallback)
+    if (mockFallbackEnabled && error instanceof ApiError && error.code === 'NETWORK_ERROR') { connection.usingMock = true; return clone(fallback) }
     throw error
   }
 }

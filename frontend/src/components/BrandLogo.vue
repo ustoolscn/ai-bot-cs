@@ -1,8 +1,11 @@
 <template>
   <div class="brand-logo" aria-label="AI Bot Hub">
-    <span class="brand-mark"><el-icon><Cpu /></el-icon></span>
-    <span>AI Bot Hub</span>
+    <span class="brand-mark"><Mascot head-only :size="32" /></span>
+    <span class="brand-text">AI Bot Hub<small v-if="subtitle">{{ subtitle }}</small></span>
   </div>
 </template>
 
-<script setup lang="ts">import { Cpu } from '@element-plus/icons-vue'</script>
+<script setup lang="ts">
+import Mascot from '@/components/fx/Mascot.vue'
+defineProps<{ subtitle?: string }>()
+</script>

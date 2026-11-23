@@ -45,7 +45,7 @@ const alerts: AlertItem[] = [
 
 export const mockOverview: SystemOverview = {
   messages24h: 23842,
-  successRate: null,
+  successRate: 95.1,
   metrics: [
     { label: '总事件数', value: '23,842', trend: '18.6%', direction: 'up', good: false },
     { label: '成功处理', value: '22,681', sub: '(95.1%)', trend: '12.4%', direction: 'up', good: true },
@@ -55,14 +55,14 @@ export const mockOverview: SystemOverview = {
     { label: '触发会话数', value: '6,842', trend: '15.2%', direction: 'up', good: false },
   ],
   pipelines: [
-    { id: 'p1', time: '15:24:31', bot: '客服小Q', eventMs: 120, contextMs: 210, retrieval: { status: 'success', ms: 320, hit: '5/5' }, model: { status: 'success', ms: 820, name: 'qwen-plus' }, delivery: { status: 'success', ms: 280 }, totalMs: 1750 },
-    { id: 'p2', time: '15:24:28', bot: '客服小Q', eventMs: 98, contextMs: 180, retrieval: { status: 'success', ms: 210, hit: '3/3' }, model: { status: 'success', ms: 690, name: 'qwen-plus' }, delivery: { status: 'success', ms: 210 }, totalMs: 1390 },
-    { id: 'p3', time: '15:24:24', bot: '知识助手', eventMs: 110, contextMs: 190, retrieval: { status: 'success', ms: 450, hit: '6/8' }, model: { status: 'success', ms: 930, name: 'qwen-max' }, delivery: { status: 'success', ms: 300 }, totalMs: 1980 },
-    { id: 'p4', time: '15:24:21', bot: '客服小Q', eventMs: 103, contextMs: 205, retrieval: { status: 'warning', ms: 5200, hit: '1/10' }, model: { status: 'pending' }, delivery: { status: 'failed' }, totalMs: 5510 },
-    { id: 'p5', time: '15:24:18', bot: '活动小助手', eventMs: 95, contextMs: 160, retrieval: { status: 'success', ms: 180, hit: '2/2' }, model: { status: 'success', ms: 610, name: 'qwen-plus' }, delivery: { status: 'success', ms: 200 }, totalMs: 1250 },
-    { id: 'p6', time: '15:24:15', bot: '客服小Q', eventMs: 101, contextMs: 220, retrieval: { status: 'success', ms: 260, hit: '4/4' }, model: { status: 'success', ms: 720, name: 'qwen-plus' }, delivery: { status: 'success', ms: 230 }, totalMs: 1530 },
-    { id: 'p7', time: '15:24:12', bot: '知识助手', eventMs: 112, contextMs: 210, retrieval: { status: 'warning', ms: 300, hit: '2/5' }, model: { status: 'success', ms: 800, name: 'qwen-max' }, delivery: { status: 'success', ms: 260 }, totalMs: 1680 },
-    { id: 'p8', time: '15:24:09', bot: '客服小Q', eventMs: 97, contextMs: 170, retrieval: { status: 'success', ms: 190, hit: '3/3' }, model: { status: 'success', ms: 660, name: 'qwen-plus' }, delivery: { status: 'success', ms: 220 }, totalMs: 1340 },
+    { id: 'p1', conversation: '产品运营交流群', content: '怎么申请七天无理由退款？', time: '15:24:31', bot: '客服小Q', eventMs: 120, contextMs: 210, retrieval: { status: 'success', ms: 320, hit: '5/5' }, model: { status: 'success', ms: 820, name: 'qwen-plus' }, delivery: { status: 'success', ms: 280 }, totalMs: 1750 },
+    { id: 'p2', conversation: '售后服务群', content: '保修期是多久？', time: '15:24:28', bot: '客服小Q', eventMs: 98, contextMs: 180, retrieval: { status: 'success', ms: 210, hit: '3/3' }, model: { status: 'success', ms: 690, name: 'qwen-plus' }, delivery: { status: 'success', ms: 210 }, totalMs: 1390 },
+    { id: 'p3', conversation: '产品运营交流群', content: '企业版支持哪些权限？', time: '15:24:24', bot: '知识助手', eventMs: 110, contextMs: 190, retrieval: { status: 'success', ms: 450, hit: '6/8' }, model: { status: 'success', ms: 930, name: 'qwen-max' }, delivery: { status: 'success', ms: 300 }, totalMs: 1980 },
+    { id: 'p4', conversation: '售后服务群', content: '帮我查询订单', time: '15:24:21', bot: '客服小Q', eventMs: 103, contextMs: 205, retrieval: { status: 'warning', ms: 5200, hit: '1/10' }, model: { status: 'pending' }, delivery: { status: 'failed' }, totalMs: 5510 },
+    { id: 'p5', conversation: '夏季活动执行群', content: '活动奖品什么时候发？', time: '15:24:18', bot: '活动小助手', eventMs: 95, contextMs: 160, retrieval: { status: 'success', ms: 180, hit: '2/2' }, model: { status: 'success', ms: 610, name: 'qwen-plus' }, delivery: { status: 'success', ms: 200 }, totalMs: 1250 },
+    { id: 'p6', conversation: '产品运营交流群', content: '发票在哪里申请', time: '15:24:15', bot: '客服小Q', eventMs: 101, contextMs: 220, retrieval: { status: 'success', ms: 260, hit: '4/4' }, model: { status: 'success', ms: 720, name: 'qwen-plus' }, delivery: { status: 'success', ms: 230 }, totalMs: 1530 },
+    { id: 'p7', conversation: '售后服务群', content: '可以换绑手机号吗', time: '15:24:12', bot: '知识助手', eventMs: 112, contextMs: 210, retrieval: { status: 'warning', ms: 300, hit: '2/5' }, model: { status: 'success', ms: 800, name: 'qwen-max' }, delivery: { status: 'success', ms: 260 }, totalMs: 1680 },
+    { id: 'p8', conversation: '用户 8G7X', content: '充值多久到账', time: '15:24:09', bot: '客服小Q', eventMs: 97, contextMs: 170, retrieval: { status: 'success', ms: 190, hit: '3/3' }, model: { status: 'success', ms: 660, name: 'qwen-plus' }, delivery: { status: 'success', ms: 220 }, totalMs: 1340 },
   ],
   alerts,
   knowledge: { progress: 78.6, total: 24, completed: 15, indexing: 6, failed: 1, pending: 2, queues: [

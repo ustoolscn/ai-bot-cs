@@ -1,4 +1,5 @@
 import { request } from './client'
+import * as mock from '@/mock/agent'
 
 export interface AgentExample { question: string; answer: string }
 export interface LiveDataSettings {
@@ -101,45 +102,45 @@ export interface MessageAgentDetail {
 
 export const agentApi = {
   settings: {
-    get: () => request<AgentSettings>({ url: '/agent/settings' }),
+    get: () => request<AgentSettings>({ url: '/agent/settings' }, mock.mockAgentSettings),
     save: (settings: AgentSettings, accessToken?: string) => request<AgentSettings>({ method: 'PUT', url: '/agent/settings', data: accessToken === undefined ? settings : { ...settings, liveDataAccessToken: accessToken } }),
   },
   liveData: {
-    get: () => request<LiveData>({ url: '/agent/live-data' }),
+    get: () => request<LiveData>({ url: '/agent/live-data' }, mock.mockLiveData),
     refresh: () => request<LiveData>({ method: 'POST', url: '/agent/live-data/refresh', timeout: 45000 }),
   },
   skills: {
-    list: () => request<Skill[]>({ url: '/skills' }),
+    list: () => request<Skill[]>({ url: '/skills' }, mock.mockSkills),
     save: (skill: Skill) => request<{ saved: boolean }>({ method: skill.id ? 'PUT' : 'POST', url: skill.id ? `/skills/${skill.id}` : '/skills', data: skill }),
     remove: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/skills/${id}` }),
   },
   tools: {
-    list: () => request<{ builtin: BuiltinTool[]; custom: CustomTool[] }>({ url: '/tools' }),
+    list: () => request<{ builtin: BuiltinTool[]; custom: CustomTool[] }>({ url: '/tools' }, mock.mockTools),
     save: (tool: CustomTool, headers: Record<string, string> | null) => request<{ saved: boolean }>({ method: tool.id ? 'PUT' : 'POST', url: tool.id ? `/tools/${tool.id}` : '/tools', data: { ...tool, headers: headers || {}, keepHeaders: headers === null } }),
     remove: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/tools/${id}` }),
     test: (id: string, args: Record<string, unknown>) => request<{ result: string }>({ method: 'POST', url: `/tools/${id}/test`, data: { arguments: args }, timeout: 40000 }),
   },
   learning: {
-    stats: () => request<LearningStats>({ url: '/learning/stats' }),
-    candidates: (status = 'pending') => request<Candidate[]>({ url: '/knowledge/candidates', params: { status } }),
+    stats: () => request<LearningStats>({ url: '/learning/stats' }, mock.mockLearningStats),
+    candidates: (status = 'pending') => request<Candidate[]>({ url: '/knowledge/candidates', params: { status } }, mock.mockCandidates),
     approve: (id: string, data: { knowledgeBaseId: string; question: string; aliases: string[]; answer: string; note?: string }) => request<{ entryId: string }>({ method: 'POST', url: `/knowledge/candidates/${id}/approve`, data }),
     reject: (id: string, note: string) => request<{ rejected: boolean }>({ method: 'POST', url: `/knowledge/candidates/${id}/reject`, data: { note } }),
-    entries: (params: { knowledgeBaseId?: string; status?: string; q?: string }) => request<Entry[]>({ url: '/knowledge/entries', params }),
+    entries: (params: { knowledgeBaseId?: string; status?: string; q?: string }) => request<Entry[]>({ url: '/knowledge/entries', params }, mock.mockEntries),
     createEntry: (data: { knowledgeBaseId: string; question: string; aliases: string[]; answer: string }) => request<{ id: string }>({ method: 'POST', url: '/knowledge/entries', data }),
     updateEntry: (id: string, data: { question: string; aliases: string[]; answer: string; status: string }) => request<{ updated: boolean }>({ method: 'PUT', url: `/knowledge/entries/${id}`, data }),
     deleteEntry: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/knowledge/entries/${id}` }),
-    gaps: (status = 'open') => request<Gap[]>({ url: '/knowledge/gaps', params: { status } }),
+    gaps: (status = 'open') => request<Gap[]>({ url: '/knowledge/gaps', params: { status } }, mock.mockGaps),
     answerGap: (id: string, data: { knowledgeBaseId: string; question: string; answer: string; aliases: string[] }) => request<{ entryId: string }>({ method: 'POST', url: `/knowledge/gaps/${id}/answer`, data }),
     ignoreGap: (id: string) => request<{ ignored: boolean }>({ method: 'POST', url: `/knowledge/gaps/${id}/ignore` }),
-    feedback: (rating = '') => request<Feedback[]>({ url: '/feedback', params: { rating } }),
+    feedback: (rating = '') => request<Feedback[]>({ url: '/feedback', params: { rating } }, mock.mockFeedback),
   },
   memories: {
-    list: (params: { userId?: string; botId?: string; q?: string }) => request<Memory[]>({ url: '/memories', params }),
+    list: (params: { userId?: string; botId?: string; q?: string }) => request<Memory[]>({ url: '/memories', params }, mock.mockMemories),
     update: (id: string, data: { content: string; kind: string; pinned: boolean }) => request<{ updated: boolean }>({ method: 'PUT', url: `/memories/${id}`, data }),
     remove: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/memories/${id}` }),
   },
   handoffs: {
-    list: (status = 'open') => request<Handoff[]>({ url: '/handoffs', params: { status } }),
+    list: (status = 'open') => request<Handoff[]>({ url: '/handoffs', params: { status } }, status === 'resolved' ? [] : mock.mockHandoffs),
     resolve: (id: string) => request<{ resolved: boolean }>({ method: 'POST', url: `/handoffs/${id}/resolve` }),
   },
   messages: {
@@ -153,11 +154,11 @@ export const agentApi = {
     summaries: (conversationId: string) => request<Array<{ scope: string; summary: string; updatedAt: string }>>({ url: `/conversations/${conversationId}/summaries` }),
   },
   eval: {
-    cases: () => request<EvalCase[]>({ url: '/eval/cases' }),
+    cases: () => request<EvalCase[]>({ url: '/eval/cases' }, mock.mockEvalCases),
     saveCase: (c: EvalCase) => request<{ saved: boolean }>({ method: c.id ? 'PUT' : 'POST', url: c.id ? `/eval/cases/${c.id}` : '/eval/cases', data: c }),
     removeCase: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/eval/cases/${id}` }),
     fromEntries: () => request<{ created: number }>({ method: 'POST', url: '/eval/cases/from-entries' }),
-    runs: () => request<EvalRun[]>({ url: '/eval/runs' }),
+    runs: () => request<EvalRun[]>({ url: '/eval/runs' }, mock.mockEvalRuns),
     createRun: (data: { name?: string; chatProfileId?: string; knowledgeBaseIds: string[] }) => request<{ id: string }>({ method: 'POST', url: '/eval/runs', data }),
     results: (id: string) => request<EvalResult[]>({ url: `/eval/runs/${id}/results` }),
   },

@@ -2,41 +2,38 @@
   <div class="eval-grid">
     <section class="table-panel">
       <div class="block-head">
-        <div><h2>评测用例</h2><p>修改提示词、模型或风格前后各跑一次，对比得分和平均长度。</p></div>
-        <div class="actions"><el-button @click="fromEntries">从已发布 FAQ 生成</el-button><el-button type="primary" :icon="Plus" @click="editCase()">新增</el-button></div>
+        <div><h2>跑一次评测</h2><p>用下面的用例完整试跑一遍（不会真的发到 QQ，转人工也不会真正执行）。改提示词或模型前后各跑一次，对比得分和字数。</p></div>
       </div>
-      <el-table v-loading="loading" :data="cases" max-height="420" empty-text="暂无用例">
-        <el-table-column prop="question" label="问题" min-width="200" />
-        <el-table-column prop="expected" label="期望要点" min-width="220" show-overflow-tooltip />
-        <el-table-column label="启用" width="70"><template #default="{ row }"><el-switch v-model="row.enabled" size="small" @change="agentApi.eval.saveCase(row)" /></template></el-table-column>
-        <el-table-column label="操作" width="110"><template #default="{ row }"><el-button link type="primary" @click="editCase(row)">编辑</el-button><el-button link type="danger" @click="removeCase(row)">删除</el-button></template></el-table-column>
+      <div class="run-form">
+        <el-select v-model="runForm.chatProfileId" placeholder="对话模型（默认用当前设置）" clearable><el-option v-for="m in chatModels" :key="m.id" :label="`${m.name} · ${m.model}`" :value="m.id" /></el-select>
+        <el-select v-model="runForm.knowledgeBaseIds" multiple placeholder="使用的知识库" collapse-tags><el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" /></el-select>
+        <el-input v-model="runForm.name" placeholder="给这次评测起个名字，例如“缩短回复后”" />
+        <el-button type="primary" :icon="VideoPlay" :disabled="!enabledCount" @click="startRun">开始评测（{{ enabledCount }} 条用例）</el-button>
+      </div>
+      <el-table class="clickable-rows" :data="runs" max-height="440" empty-text="还没有跑过评测" @row-click="openRun">
+        <el-table-column label="名称" min-width="150"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.name || '未命名' }}</strong><span>{{ formatTime(row.createdAt) }} · {{ row.chatProfileName }}</span></div></template></el-table-column>
+        <el-table-column label="平均分（满分 10）" width="170"><template #default="{ row, $index }"><span class="score-bar"><i :style="{ width: `${(row.avgScore ?? 0) * 10}%` }" /></span><strong>{{ row.avgScore != null ? row.avgScore.toFixed(1) : '—' }}</strong> <small v-if="delta($index, 'avgScore')" :class="delta($index, 'avgScore')!.startsWith('+') ? 'trend-good' : 'trend-bad'">{{ delta($index, 'avgScore') }}</small></template></el-table-column>
+        <el-table-column label="平均字数" width="110"><template #default="{ row, $index }">{{ row.avgLength != null ? Math.round(row.avgLength) : '—' }} <small v-if="delta($index, 'avgLength')" class="muted">{{ delta($index, 'avgLength') }}</small></template></el-table-column>
+        <el-table-column label="状态" width="110"><template #default="{ row }"><ProgressRing v-if="row.status === 'running' || row.status === 'pending'" :percent="row.total ? row.completed / row.total * 100 : 0" :size="34" :stroke="4" tone="butter"><small class="run-count">{{ row.completed }}</small></ProgressRing><el-tag v-else size="small" :type="row.status === 'completed' ? 'success' : 'danger'">{{ statusText[row.status] || row.status }}</el-tag></template></el-table-column>
       </el-table>
     </section>
     <section class="table-panel">
       <div class="block-head">
-        <div><h2>评测运行</h2><p>试运行完整流程（不会发送 QQ 消息，转人工等操作不会真正执行）。</p></div>
+        <div><h2>评测用例</h2><p>每条用例是一个问题和期望答到的要点。</p></div>
+        <div class="actions"><el-button @click="fromEntries">从已发布 FAQ 生成</el-button><el-button type="primary" :icon="Plus" @click="editCase()">新增用例</el-button></div>
       </div>
-      <div class="run-form">
-        <el-select v-model="runForm.chatProfileId" placeholder="对话模型" clearable><el-option v-for="m in chatModels" :key="m.id" :label="`${m.name} · ${m.model}`" :value="m.id" /></el-select>
-        <el-select v-model="runForm.knowledgeBaseIds" multiple placeholder="使用的知识库" collapse-tags><el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" /></el-select>
-        <el-input v-model="runForm.name" placeholder="名称（可选）" />
-        <el-button type="primary" :icon="VideoPlay" @click="startRun">开始评测</el-button>
-      </div>
-      <el-table :data="runs" max-height="380" empty-text="暂无运行" @row-click="openRun">
-        <el-table-column prop="name" label="名称" min-width="140" />
-        <el-table-column prop="chatProfileName" label="模型" min-width="120" />
-        <el-table-column label="进度" width="100"><template #default="{ row }">{{ row.completed }}/{{ row.total }}</template></el-table-column>
-        <el-table-column label="平均分" width="80"><template #default="{ row }">{{ row.avgScore != null ? row.avgScore.toFixed(1) : '—' }}</template></el-table-column>
-        <el-table-column label="平均字数" width="90"><template #default="{ row }">{{ row.avgLength != null ? Math.round(row.avgLength) : '—' }}</template></el-table-column>
-        <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag size="small" :type="row.status === 'completed' ? 'success' : row.status === 'failed' ? 'danger' : 'warning'">{{ statusText[row.status] || row.status }}</el-tag></template></el-table-column>
+      <el-table v-loading="loading" :data="cases" max-height="520" empty-text="还没有用例。可以点“从已发布 FAQ 生成”快速导入。">
+        <el-table-column label="问题 / 期望要点" min-width="260"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.question }}</strong><span>{{ row.expected }}</span></div></template></el-table-column>
+        <el-table-column label="启用" width="70"><template #default="{ row }"><el-switch v-model="row.enabled" size="small" @change="agentApi.eval.saveCase(row)" /></template></el-table-column>
+        <el-table-column label="操作" width="110"><template #default="{ row }"><el-button link type="primary" @click="editCase(row)">编辑</el-button><el-button link type="danger" @click="removeCase(row)">删除</el-button></template></el-table-column>
       </el-table>
     </section>
 
-    <el-dialog v-model="caseDialog" title="评测用例" width="560px">
+    <el-dialog v-model="caseDialog" :title="editingCase.id ? '编辑用例' : '新增用例'" width="560px">
       <el-form label-position="top">
-        <el-form-item label="问题"><el-input v-model="editingCase.question" type="textarea" :rows="2" /></el-form-item>
-        <el-form-item label="期望要点"><el-input v-model="editingCase.expected" type="textarea" :rows="4" /></el-form-item>
-        <el-checkbox v-model="editingCase.enabled">启用</el-checkbox>
+        <el-form-item label="用户会怎么问"><el-input v-model="editingCase.question" type="textarea" :rows="2" /></el-form-item>
+        <el-form-item label="期望答到的要点"><el-input v-model="editingCase.expected" type="textarea" :rows="4" placeholder="用分号分隔多个要点" /></el-form-item>
+        <el-checkbox v-model="editingCase.enabled">参与评测</el-checkbox>
       </el-form>
       <template #footer><el-button @click="caseDialog = false">取消</el-button><el-button type="primary" @click="saveCase">保存</el-button></template>
     </el-dialog>
@@ -47,15 +44,18 @@
         <div class="content-box">{{ r.answer || r.error }}</div>
         <small class="muted">{{ r.verdict }} · {{ r.latencyMs }}ms<template v-if="r.toolsUsed?.length"> · 工具：{{ r.toolsUsed.join('、') }}</template></small>
       </article>
+      <EmptyState v-if="!results.length" title="这次评测还没有结果" />
     </el-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { Plus, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { agentApi, type EvalCase, type EvalResult, type EvalRun } from '@/api/agent'
+import { agentApi, formatTime, type EvalCase, type EvalResult, type EvalRun } from '@/api/agent'
+import EmptyState from '@/components/EmptyState.vue'
+import ProgressRing from '@/components/fx/ProgressRing.vue'
 import type { KnowledgeBase, ModelProfile } from '@/types'
 
 defineProps<{ chatModels: ModelProfile[]; knowledgeBases: KnowledgeBase[] }>()
@@ -70,6 +70,15 @@ const resultDrawer = ref(false)
 const results = ref<EvalResult[]>([])
 const currentRun = ref<EvalRun | null>(null)
 let timer: ReturnType<typeof setInterval> | undefined
+const enabledCount = computed(() => cases.value.filter(c => c.enabled).length)
+// 与下一行（更早的一次）已完成评测对比
+function delta(index: number, key: 'avgScore' | 'avgLength') {
+  const current = runs.value[index]?.[key]
+  const previous = runs.value.slice(index + 1).find(r => r.status === 'completed' && r[key] != null)?.[key]
+  if (current == null || previous == null) return ''
+  const diff = key === 'avgScore' ? Number((current - previous).toFixed(1)) : Math.round(current - previous)
+  return diff === 0 ? '' : `${diff > 0 ? '+' : ''}${diff}`
+}
 
 async function load() {
   loading.value = true
@@ -91,14 +100,13 @@ onBeforeUnmount(() => clearInterval(timer))
 </script>
 
 <style scoped>
-.eval-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
-.block-head { display: flex; justify-content: space-between; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--line); gap: 12px; }
-.block-head h2 { font-size: 15px; margin: 0 0 4px; }
-.block-head p { margin: 0; color: var(--muted); font-size: 12px; }
-.actions { display: flex; gap: 8px; }
-.run-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 14px 18px; }
+.score-bar { display: inline-block; width: 64px; height: 8px; border-radius: 99px; background: var(--surface-3); overflow: hidden; vertical-align: middle; margin-right: 8px; }
+.score-bar i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #ffc27a, #f2735a); animation: grow 1s var(--ease-bounce) both; transform-origin: left; }
+@keyframes grow { from { transform: scaleX(0); } }
+.run-count { font: 700 11px/1 var(--font-round); }
+.run-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
 .result-item { margin-bottom: 18px; }
 .result-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
-.muted { color: var(--muted); font-size: 12px; }
-@media (max-width: 1100px) { .eval-grid { grid-template-columns: 1fr; } }
+.result-item small { display: block; margin-top: 6px; font-size: 13px; }
+@media (max-width: 620px) { .run-form { grid-template-columns: 1fr; } }
 </style>
