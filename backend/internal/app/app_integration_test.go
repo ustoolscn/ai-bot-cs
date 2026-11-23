@@ -247,6 +247,20 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
 		return sent == 3 && len(mainChatRequests(mock.ChatRequests())) == 3 && mock.QQSendCount() == 3 && mock.QQRetractionCount() == 0, err
 	})
+	var sawImageDecision bool
+	for _, r := range mock.ChatRequests() {
+		if bytes.Contains(r, []byte("判断这条群消息")) && bytes.Contains(r, []byte("data:image/png;base64,")) {
+			sawImageDecision = true
+		}
+	}
+	if !sawImageDecision {
+		t.Fatal("smart reply decision did not receive the image")
+	}
+	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, qqEventBody(t, "event-image-at-copy", "GROUP_AT_MESSAGE_CREATE", "message-image", "请识别这张图片"))
+	var retained bool
+	if err := pool.QueryRow(ctx, `SELECT parts @> '[{"type":"image"}]'::jsonb FROM messages WHERE platform_message_id='message-image'`).Scan(&retained); err != nil || !retained {
+		t.Fatalf("duplicate QQ event removed original image: %v", err)
+	}
 	imageChatPayload := string(mainChatRequests(mock.ChatRequests())[2])
 	if !strings.Contains(imageChatPayload, `"type":"image_url"`) || !strings.Contains(imageChatPayload, `"url":"data:image/png;base64,`) {
 		t.Fatalf("image was not sent to the multimodal model: %s", imageChatPayload)
@@ -321,6 +335,27 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM knowledge_documents WHERE id=$1", documentID).Scan(&remainingDocuments); err != nil || remainingDocuments != 0 {
 		t.Fatalf("document was not deleted: count=%d err=%v", remainingDocuments, err)
 	}
+	// The group can receive a picture and a separate text follow-up several minutes later.
+	if _, err := pool.Exec(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,sender_id,platform_message_id,event_type,content,parts,event_at)
+ SELECT channel,bot_id,conversation_id,'inbound',sender_id,'unanswered-picture','GROUP_MESSAGE_CREATE','',parts,now()
+ FROM messages WHERE id=$1`, imageMessageID); err != nil {
+		t.Fatal(err)
+	}
+	var follow map[string]any
+	if err := json.Unmarshal(qqEventBody(t, "event-follow", "GROUP_AT_MESSAGE_CREATE", "message-follow", "在吗"), &follow); err != nil {
+		t.Fatal(err)
+	}
+	follow["d"].(map[string]any)["timestamp"] = time.Now().Add(time.Second).Format(time.RFC3339Nano)
+	data, _ := json.Marshal(follow)
+	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, data)
+	eventually(t, 8*time.Second, "follow-up receives prior picture", func() (bool, error) {
+		for _, req := range mainChatRequests(mock.ChatRequests()) {
+			if bytes.Contains(req, []byte("上一条尚未得到答复")) && bytes.Contains(req, []byte("data:image/png;base64,")) {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
 }
 
 func TestGroupMentionQueuesWhenFullEventArrivesFirst(t *testing.T) {

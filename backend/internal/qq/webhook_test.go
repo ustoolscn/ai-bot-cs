@@ -59,6 +59,13 @@ func TestParseImageAttachment(t *testing.T) {
 	}
 }
 
+func TestNestedImageWithoutMIME(t *testing.T) {
+	body := []byte(`{"id":"evt","t":"GROUP_MESSAGE_CREATE","d":{"id":"m","group_openid":"g","msg_elements":[{"attachments":[{"filename":"photo.jpg","url":"//multimedia.nt.qq.com.cn/download?k=123"}]}]}}`)
+	_, msg, err := Parse(body, "bot")
+	if err != nil || msg == nil || len(msg.Parts) != 1 || msg.Parts[0].Type != "image" || msg.Parts[0].URL != "https://multimedia.nt.qq.com.cn/download?k=123" {
+		t.Fatalf("nested image lost: %v %#v", err, msg)
+	}
+}
 func TestGroupMessageMentions(t *testing.T) {
 	for _, tc := range []struct {
 		name, mentions string

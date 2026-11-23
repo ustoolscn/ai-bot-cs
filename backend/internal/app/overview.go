@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -8,20 +9,21 @@ import (
 )
 
 type overviewPipeline struct {
-	ID           string         `json:"id"`
-	Time         time.Time      `json:"time"`
-	Bot          string         `json:"bot"`
-	Conversation string         `json:"conversation"`
-	Content      string         `json:"content"`
-	EventType    string         `json:"eventType"`
-	EventMS      int64          `json:"eventMs"`
-	ContextMS    int64          `json:"contextMs"`
-	ContextLabel string         `json:"contextLabel"`
-	ContextState string         `json:"contextStatus"`
-	Retrieval    map[string]any `json:"retrieval"`
-	Model        map[string]any `json:"model"`
-	Delivery     map[string]any `json:"delivery"`
-	TotalMS      int64          `json:"totalMs"`
+	Timeline     json.RawMessage `json:"timeline"`
+	ID           string          `json:"id"`
+	Time         time.Time       `json:"time"`
+	Bot          string          `json:"bot"`
+	Conversation string          `json:"conversation"`
+	Content      string          `json:"content"`
+	EventType    string          `json:"eventType"`
+	EventMS      int64           `json:"eventMs"`
+	ContextMS    int64           `json:"contextMs"`
+	ContextLabel string          `json:"contextLabel"`
+	ContextState string          `json:"contextStatus"`
+	Retrieval    map[string]any  `json:"retrieval"`
+	Model        map[string]any  `json:"model"`
+	Delivery     map[string]any  `json:"delivery"`
+	TotalMS      int64           `json:"totalMs"`
 }
 
 func (a *App) overview(c *gin.Context) {
@@ -66,17 +68,17 @@ func (a *App) overview(c *gin.Context) {
 
 func (a *App) overviewPipelines(c *gin.Context) []overviewPipeline {
 	rows, err := a.db.Query(c, `
-		SELECT m.id::text,m.event_at,b.name,c.name,left(m.content,160),m.event_type,
+		SELECT message_timeline(m),m.id::text,m.event_at,b.name,c.name,left(m.content,160),m.event_type,
 		       GREATEST(EXTRACT(EPOCH FROM (t.created_at-m.created_at))*1000,0)::bigint,
 		       COALESCE(ar.context_latency_ms,0),COALESCE(ar.retrieval_latency_ms,0),
 		       CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END,
-		       t.status,COALESCE(ar.status,'pending'),
+		       COALESCE(t.status,'skipped'),COALESCE(ar.status,'pending'),
 		       COALESCE(mc.latency_ms,0),COALESCE(mp.name,mp.model,''),COALESCE(mc.error,''),
 		       COALESCE(ot.status,'pending'),
 		       COALESCE(GREATEST(EXTRACT(EPOCH FROM (ot.updated_at-ot.created_at))*1000,0),0)::bigint,
 		       COALESCE(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ot.updated_at,ar.completed_at,t.updated_at)-m.created_at))*1000,0),0)::bigint
-		FROM inbox_tasks t
-		JOIN messages m ON m.id=t.message_id
+		FROM messages m
+ LEFT JOIN inbox_tasks t ON t.message_id=m.id
 		JOIN conversations c ON c.id=m.conversation_id
 		JOIN bots b ON b.id=m.bot_id
 		LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true
@@ -84,7 +86,8 @@ func (a *App) overviewPipelines(c *gin.Context) []overviewPipeline {
 		LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
 		LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true
 		LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
-		ORDER BY m.event_at DESC LIMIT 10`)
+		WHERE t.id IS NOT NULL OR EXISTS(SELECT FROM group_reviews gr WHERE gr.message_id=m.id)
+ ORDER BY m.event_at DESC LIMIT 10`)
 	if err != nil {
 		a.log.Warn("overview pipelines", "error", err)
 		return []overviewPipeline{}
@@ -95,7 +98,7 @@ func (a *App) overviewPipelines(c *gin.Context) []overviewPipeline {
 		var p overviewPipeline
 		var contextMS, retrievalMS, hits, modelMS, deliveryMS int64
 		var taskStatus, runStatus, modelName, modelError, deliveryStatus string
-		if err := rows.Scan(&p.ID, &p.Time, &p.Bot, &p.Conversation, &p.Content, &p.EventType, &p.EventMS, &contextMS, &retrievalMS, &hits, &taskStatus, &runStatus, &modelMS, &modelName, &modelError, &deliveryStatus, &deliveryMS, &p.TotalMS); err != nil {
+		if err := rows.Scan(&p.Timeline, &p.ID, &p.Time, &p.Bot, &p.Conversation, &p.Content, &p.EventType, &p.EventMS, &contextMS, &retrievalMS, &hits, &taskStatus, &runStatus, &modelMS, &modelName, &modelError, &deliveryStatus, &deliveryMS, &p.TotalMS); err != nil {
 			a.log.Warn("scan overview pipeline", "error", err)
 			continue
 		}

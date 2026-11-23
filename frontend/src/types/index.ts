@@ -60,7 +60,20 @@ export interface Conversation {
   enabled: boolean
 }
 
+export interface TimingStage {
+  label: string
+  status: string
+  detail?: string
+  ms?: number | null
+  elapsedMs?: number | null
+}
+export interface MessageTimeline {
+  stages: TimingStage[]
+  totalMs: number | null
+}
+
 export interface MessageRecord {
+  timeline?: MessageTimeline
   id: string
   time: string
   botName: string
@@ -133,6 +146,7 @@ export interface KnowledgeBase {
 }
 
 export interface PipelineRow {
+  timeline?: MessageTimeline
   id: string
   time: string
   bot: string

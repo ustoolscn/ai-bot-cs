@@ -191,8 +191,9 @@ func groupEventBody(t *testing.T, eventID, eventType, messageID, memberID, name,
 		"id": eventID, "op": 0, "t": eventType,
 		"d": map[string]any{
 			"id": messageID, "group_openid": "agent-group", "content": content,
-			"timestamp": time.Now().UTC().Format(time.RFC3339),
-			"author":    map[string]any{"member_openid": memberID, "username": name},
+			"timestamp":     time.Now().UTC().Format(time.RFC3339),
+			"message_scene": map[string]any{"ext": []string{"msg_idx=ref-" + messageID}},
+			"author":        map[string]any{"member_openid": memberID, "username": name},
 		},
 	})
 	return body
@@ -295,6 +296,52 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.reply_to_message_id='m3' AND m.event_type='AI_RESPONSE' AND t.status='sent'`).Scan(&n)
 		return n >= 2, err
 	})
+	var timing struct {
+		Stages []struct {
+			Label, Status string
+			Ms, ElapsedMs *int64
+		}
+		TotalMs *int64
+	}
+	var expectedTotal int64
+	err = pool.QueryRow(ctx, `SELECT message_timeline(m),(SELECT round(extract(epoch FROM max(t.updated_at)-m.created_at)*1000)::bigint
+ FROM outbox_tasks t JOIN messages r ON r.id=t.message_id WHERE r.conversation_id=m.conversation_id AND r.event_type='AI_RESPONSE' AND r.reply_to_message_id=m.platform_message_id)
+ FROM messages m WHERE m.platform_message_id='m3'`).Scan(&timing, &expectedTotal)
+	if err != nil || timing.TotalMs == nil || *timing.TotalMs != expectedTotal {
+		t.Fatalf("split reply total: got %+v expected %d err %v", timing.TotalMs, expectedTotal, err)
+	}
+	found := map[string]bool{}
+	var previous int64
+	for _, stage := range timing.Stages {
+		found[stage.Label] = true
+		if stage.ElapsedMs != nil {
+			if *stage.ElapsedMs < previous || stage.Ms == nil || *stage.Ms > *stage.ElapsedMs {
+				t.Fatalf("invalid timing for %+v", stage)
+			}
+			previous = *stage.ElapsedMs
+		}
+	}
+	for _, label := range []string{"判断是否回复", "模型生成 · 第 1 轮", "模型生成 · 第 2 轮", "回复整理与分段", "投递第 1 段", "投递第 2 段"} {
+		if !found[label] {
+			t.Errorf("missing stage %q", label)
+		}
+	}
+	checkedSegments := 0
+	for _, payload := range mock.Sends() {
+		if payload["msg_id"] != "m3" || payload["msg_type"] != float64(2) {
+			continue
+		}
+		firstSegment := payload["msg_seq"] == float64(1)
+		markdown := payload["markdown"].(map[string]any)["content"].(string)
+		ref, hasRef := payload["message_reference"].(map[string]any)
+		if strings.Contains(markdown, "qqbot-at-user") != firstSegment || hasRef != firstSegment || (hasRef && ref["message_id"] != "ref-m3") || strings.Contains(markdown, "回复「") {
+			t.Fatalf("unexpected mention or quote on segment %v: %#v", payload["msg_seq"], payload)
+		}
+		checkedSegments++
+	}
+	if checkedSegments < 2 {
+		t.Fatalf("expected multiple passive QQ replies, got %d", checkedSegments)
+	}
 	calls := mock.MainCalls()
 	if len(calls) != 2 {
 		t.Fatalf("expected tool round trip (2 main calls), got %d", len(calls))
@@ -378,7 +425,7 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	postQQWebhook(t, client, hook, botSecret, groupEventBody(t, "e6", "GROUP_AT_MESSAGE_CREATE", "m6", "alice", "Alice", "我要人工"))
 	eventually(t, 8*time.Second, "handoff created", func() (bool, error) {
 		var n int
-		err := pool.QueryRow(ctx, `SELECT count(*) FROM handoffs WHERE platform_user_id='alice' AND status='open'`).Scan(&n)
+		err := pool.QueryRow(ctx, `SELECT count(*) FROM handoffs WHERE platform_user_id='alice' AND status='open' AND EXISTS (SELECT 1 FROM messages WHERE reply_to_message_id='m6' AND event_type='AI_RESPONSE')`).Scan(&n)
 		return n == 1, err
 	})
 	before := len(mock.MainCalls())

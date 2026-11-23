@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -67,6 +69,22 @@ type MessageElement struct {
 
 func (e MessageElement) collectAttachments(out *[]MessageAttachment, seen map[string]bool) {
 	add := func(item MessageAttachment) {
+		item.URL = strings.TrimSpace(item.URL)
+		if strings.HasPrefix(item.URL, "//") {
+			item.URL = "https:" + item.URL
+		}
+		// Older QQ media links can omit the scheme or use HTTP. Fetch QQ CDN media over HTTPS.
+		candidate := item.URL
+		if !strings.Contains(candidate, "://") {
+			candidate = "https://" + candidate
+		}
+		if u, err := url.Parse(candidate); err == nil && u.User == nil && (u.Scheme == "http" || u.Scheme == "https") {
+			host := strings.ToLower(u.Hostname())
+			if strings.HasSuffix(host, ".qq.com") || strings.HasSuffix(host, ".qq.com.cn") || strings.HasSuffix(host, ".qpic.cn") {
+				u.Scheme = "https"
+				item.URL = u.String()
+			}
+		}
 		if item.URL != "" && !seen[item.URL] {
 			*out = append(*out, item)
 			seen[item.URL] = true
@@ -171,7 +189,11 @@ func Parse(body []byte, botID string) (Envelope, *domain.InboundMessage, error) 
 	d.collectAttachments(&attachments, map[string]bool{})
 	for _, a := range attachments {
 		partType := "attachment"
-		if strings.HasPrefix(strings.ToLower(a.ContentType), "image/") {
+		mime := strings.ToLower(strings.TrimSpace(a.ContentType))
+		generic := mime == "" || mime == "file" || mime == "application/octet-stream"
+		ext := strings.ToLower(path.Ext(a.Filename))
+		knownExt := ext == ".png" || ext == ".jpeg" || ext == ".jpg" || ext == ".webp" || ext == ".gif"
+		if strings.HasPrefix(mime, "image/") || mime == "image" || generic && (knownExt || a.Width > 0 && a.Height > 0) {
 			partType = "image"
 		}
 		parts = append(parts, domain.ContentPart{Type: partType, URL: a.URL, Text: a.Filename, Filename: a.Filename, ContentType: a.ContentType, SizeBytes: a.Size, Width: a.Width, Height: a.Height})

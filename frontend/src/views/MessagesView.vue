@@ -48,8 +48,8 @@
           <EmptyState v-else compact mood="thinking" title="这条消息没有保存上下文" description="比较早的消息没有记录当时发给模型的内容，新消息会完整显示。" />
         </div>
 
-        <PipelineFlow compact class="detail-flow" :stages="flowStages" />
-        <div class="trace-flow">
+        <PipelineFlow compact class="detail-flow"  :stages="selected.timeline?.stages || flowStages" :total-ms="selected.timeline?.totalMs" />
+        <div v-if="!selected.timeline" class="trace-flow">
           <div v-for="(step,index) in traceSteps" :key="step.title" class="trace-step" :class="step.status"><span>{{ index + 1 }}</span><div><strong>{{ step.title }}</strong><p>{{ step.description }}</p></div><em>{{ step.duration }}</em></div>
         </div>
 
@@ -136,7 +136,7 @@ function duration(value: number) { return value > 0 ? formatDuration(value) : '�
 function previewUrls(parts?: MessageAttachment[]) { return (parts || []).flatMap(part => part.previewUrl ? [part.previewUrl] : []) }
 function roleText(role: string) { return ({ system: '系统', developer: '开发者', user: '用户', assistant: '助手' } as Record<string, string>)[role] || role }
 function exportRows() { const csv = ['时间,机器人,会话,问题,状态,Token', ...filtered.value.map(m => `"${m.time}","${m.botName}","${m.conversationName}","${m.question.replaceAll('"','""')}","${m.status}","${m.tokens}"`)].join('\n'); const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv'})); a.download='messages.csv'; a.click(); URL.revokeObjectURL(a.href); ElMessage.success('消息记录已导出') }
-useAdminEvents(['messages','message_retractions','agent_runs','model_calls','tool_calls','outbox_tasks','inbox_tasks'], async () => {
+useAdminEvents(['messages','message_retractions','agent_runs','model_calls','tool_calls','outbox_tasks','inbox_tasks','message_stages','group_reviews'], async () => {
   await load(true)
   const id = selected.value?.id
   if (drawer.value && id) {

@@ -78,7 +78,7 @@ func (a *App) queueReview(ctx context.Context, tx pgx.Tx, mid string, queue bool
 	return err
 }
 
-func (a *App) reviewGroupMessage(ctx context.Context, mid string) error {
+func (a *App) reviewGroupMessage(ctx context.Context, mid string) (reviewErr error) {
 	var cid, bot, member, pid, content, role string
 	var when time.Time
 	var policy guardPolicy
@@ -96,6 +96,14 @@ func (a *App) reviewGroupMessage(ctx context.Context, mid string) error {
 		return err
 	}
 	reason := ""
+	finishReview := a.startStage(ctx, mid, "群规则审核")
+	defer func() {
+		detail := reason
+		if detail == "" {
+			detail = "放行"
+		}
+		finishReview(detail, reviewErr)
+	}()
 	if enabled && !blocked && policy.Enabled && role != "admin" && role != "owner" && member != "" {
 		for _, line := range strings.Split(policy.Keywords, "\n") {
 			word := strings.TrimSpace(line)

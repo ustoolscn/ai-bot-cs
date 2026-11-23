@@ -109,7 +109,7 @@ func (a *App) workerLoop(ctx context.Context, name string, fn func(context.Conte
 
 type inboxJob struct {
 	TaskID, MessageID, BotID, ConversationID, ConversationType, PlatformConversationID, PlatformMessageID, Content, SystemPrompt, EventType, TriggerMode string
-	HasImage                                                                                                                                             bool
+	HasImage, MentionsBot                                                                                                                                bool
 	ContextLimit, Attempts                                                                                                                               int
 	Enabled                                                                                                                                              bool
 	Deadline                                                                                                                                             *time.Time
@@ -122,7 +122,7 @@ func (a *App) claimInbox(ctx context.Context) (inboxJob, error) {
 	}
 	defer tx.Rollback(ctx)
 	var j inboxJob
-	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,m.conversation_id::text,c.type,c.platform_id,COALESCE(m.platform_message_id,''),m.content,c.system_prompt,c.context_limit,c.enabled,m.reply_deadline,t.attempts,m.event_type,c.trigger_mode,m.parts @> '[{"type":"image"}]'::jsonb FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id WHERE t.status='pending' AND t.next_attempt_at<=now() ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationID, &j.ConversationType, &j.PlatformConversationID, &j.PlatformMessageID, &j.Content, &j.SystemPrompt, &j.ContextLimit, &j.Enabled, &j.Deadline, &j.Attempts, &j.EventType, &j.TriggerMode, &j.HasImage)
+	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,m.conversation_id::text,c.type,c.platform_id,COALESCE(m.platform_message_id,''),m.content,c.system_prompt,c.context_limit,c.enabled,m.reply_deadline,t.attempts,m.event_type,c.trigger_mode,m.parts @> '[{"type":"image"}]'::jsonb,COALESCE((m.raw_event#>'{d,mentions}') @> '[{"is_you":true}]'::jsonb,false) FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id WHERE t.status='pending' AND t.next_attempt_at<=now() ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationID, &j.ConversationType, &j.PlatformConversationID, &j.PlatformMessageID, &j.Content, &j.SystemPrompt, &j.ContextLimit, &j.Enabled, &j.Deadline, &j.Attempts, &j.EventType, &j.TriggerMode, &j.HasImage, &j.MentionsBot)
 	if err != nil {
 		return inboxJob{}, err
 	}
@@ -372,6 +372,7 @@ func (a *App) processOutbox(ctx context.Context) error {
 	cancelSend := func() {}
 	if hasContentPart(j.Parts, "ark_ack") {
 		sendCtx, cancelSend = context.WithTimeout(ctx, 5*time.Second)
+		defer cancelSend()
 	}
 	replyTo := j.ReplyTo
 	active := j.EventType == "SCHEDULED_POST" || humanReplyNeedsActive(j, time.Now())
@@ -380,14 +381,13 @@ func (a *App) processOutbox(ctx context.Context) error {
 	}
 	var mention, mentionName, quote string
 	var raw []byte
-	if j.EventType == "AI_RESPONSE" && j.ConversationType == "group" {
+	if j.EventType == "AI_RESPONSE" && j.ConversationType == "group" && j.Sequence == 1 {
 		if err := a.db.QueryRow(ctx, `SELECT sender_id,sender_name,content,raw_event FROM messages WHERE conversation_id=$1 AND platform_message_id=$2 AND direction='inbound'`, j.ConversationRecordID, j.ReplyTo).Scan(&mention, &mentionName, &quote, &raw); err != nil {
 			return a.retryOutbox(ctx, j, err)
 		}
 		quote = agent.TruncateRunes(quote, 120)
 	}
 	pid, err := client.Send(sendCtx, domain.OutboundMessage{ID: j.MessageID, Channel: "qq", BotID: j.BotID, ConversationType: j.ConversationType, ConversationID: j.ConversationID, ReplyToMessageID: replyTo, MentionUserID: mention, MentionUserName: mentionName, ReferenceMessageID: qq.ReferenceIndex(raw), QuotedText: quote, Text: j.Text, Format: format, Parts: j.Parts, ReplyDeadline: j.Deadline, Sequence: j.Sequence})
-	cancelSend()
 	if err != nil {
 		if hasContentPart(j.Parts, "ark_ack") {
 			a.log.Warn("QQ processing ARK failed", "bot_id", j.BotID, "conversation_type", j.ConversationType, "conversation_id", j.ConversationID, "error", err)

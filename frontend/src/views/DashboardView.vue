@@ -36,24 +36,31 @@
     <div class="overview-grid">
       <div class="side-stack">
         <section class="panel flow-panel">
-          <div class="panel-head"><div><h2>消息是怎么被处理的</h2><p>最近 {{ overview.pipelines.length }} 条消息在每一步的平均耗时</p></div></div>
-          <div class="panel-body"><PipelineFlow :stages="flowStages" /></div>
+          <div class="panel-head"><div><h2>消息是怎么被处理的</h2><p>{{ traceScope === 'average' ? '各步按有计时的样本取平均，总用时按已结束的消息计算。' : '从后台接收消息开始累计，包含排队和分段等待。' }}</p></div></div>
+          <div class="panel-body">
+            <el-select v-model="traceScope" aria-label="选择消息处理记录" style="max-width:100%;width:320px;margin-bottom:12px">
+              <el-option label="最近消息平均" value="average" />
+              <el-option v-for="row in overview.pipelines" :key="row.id" :value="row.id" :label="row.time+' · '+(row.content || row.eventType || '群消息')" />
+            </el-select>
+            <PipelineFlow :stages="shownStages" :total-ms="shownTotal" :average="traceScope==='average'" />
+          </div>
         </section>
 
         <section class="panel">
           <div class="panel-head">
-            <div><h2>最近处理的消息</h2><p>小圆点依次是：接收、上下文、检索、模型、投递</p></div>
+            <div><h2>最近处理的消息</h2><p>选择一条消息查看各环节耗时</p></div>
             <el-button text type="primary" @click="$router.push('/messages')">全部消息 <el-icon class="el-icon--right"><ArrowRight /></el-icon></el-button>
           </div>
           <ul v-if="overview.pipelines.length" class="recent-list">
-            <li v-for="(row, index) in overview.pipelines" :key="row.id" class="recent-item" :style="{ animationDelay: `${index * 40}ms` }" @click="$router.push('/messages')">
+            <li v-for="(row, index) in overview.pipelines" :key="row.id" class="recent-item" :style="{ animationDelay: `${index * 40}ms` }" @click="traceScope = row.id">
               <span class="recent-avatar" :style="{ background: avatarColor(row.bot) }">{{ row.bot.slice(0, 1) }}</span>
               <div class="recent-main">
                 <strong>{{ row.content || '（没有文字内容）' }}</strong>
                 <span>{{ row.time }} · {{ row.bot }}<template v-if="row.conversation"> · {{ row.conversation }}</template></span>
               </div>
               <div class="recent-meta">
-                <el-tooltip :content="stageTip(row)" placement="top">
+                <span v-if="row.timeline">{{ row.timeline.stages.find(s => s.status === 'failed')?.label || row.timeline.stages.at(-1)?.label }}</span>
+                <el-tooltip v-else :content="stageTip(row)" placement="top">
                   <span class="stage-dots">
                     <i class="stage-dot is-success" />
                     <i class="stage-dot" :class="`is-${row.contextStatus || 'success'}`" />
@@ -62,7 +69,7 @@
                     <i class="stage-dot" :class="`is-${row.delivery.status}`" />
                   </span>
                 </el-tooltip>
-                <span class="recent-total" :class="{ 'danger-text': row.totalMs > 5000 }">{{ formatDuration(row.totalMs) }}</span>
+                <span class="recent-total" :class="{ 'danger-text': row.totalMs > 5000 }">{{ row.timeline ? (row.timeline.totalMs == null ? '—' : formatDuration(row.timeline.totalMs)) : formatDuration(row.totalMs) }}</span>
               </div>
             </li>
           </ul>
@@ -114,7 +121,7 @@ import Mascot from '@/components/fx/Mascot.vue'
 import PipelineFlow from '@/components/fx/PipelineFlow.vue'
 import ProgressRing from '@/components/fx/ProgressRing.vue'
 import WaveProgress from '@/components/fx/WaveProgress.vue'
-import type { PipelineRow, Status, SystemOverview } from '@/types'
+import type { TimingStage, PipelineRow, Status, SystemOverview } from '@/types'
 import { formatDuration } from '@/utils/format'
 import { createEmptyOverview } from '@/utils/overview'
 import { useAuthStore } from '@/stores/auth'
@@ -173,6 +180,30 @@ const flowStages = computed(() => {
   ]
 })
 
+const traceScope = ref('average')
+const selectedTrace = computed(() => overview.value.pipelines.find(row => row.id === traceScope.value)?.timeline)
+function average(values: Array<number | null | undefined>) {
+  const measured = values.filter((value): value is number => typeof value === 'number')
+  return measured.length ? measured.reduce((sum, value) => sum + value, 0) / measured.length : null
+}
+const shownTotal = computed(() => traceScope.value === 'average'
+  ? average(overview.value.pipelines.map(row => row.timeline?.totalMs))
+  : selectedTrace.value?.totalMs)
+const shownStages = computed(() => {
+  if (traceScope.value !== 'average') return selectedTrace.value?.stages || []
+  const samples = overview.value.pipelines.flatMap(row => row.timeline?.stages || [])
+  if (!samples.length) return overview.value.pipelines.length ? flowStages.value : []
+  const groups = new Map<string, TimingStage[]>()
+  for (const stage of samples) {
+    const group = groups.get(stage.label) || []
+    group.push(stage)
+    groups.set(stage.label, group)
+  }
+  return Array.from(groups, ([label, group]) => ({
+    label, ms: average(group.map(s => s.ms)), elapsedMs: average(group.map(s => s.elapsedMs)),
+    detail: group.length+' 次记录', status: group.some(s => s.status === 'failed') ? 'failed' : group.some(s => s.status === 'processing') ? 'processing' : group[0].status
+  })).sort((a,b) => (a.elapsedMs ?? Infinity) - (b.elapsedMs ?? Infinity))
+})
 const avatarColors = ['linear-gradient(135deg,#ffa477,#f2735a)', 'linear-gradient(135deg,#a99cf5,#7f6ee6)', 'linear-gradient(135deg,#7fdcbc,#3fb48d)', 'linear-gradient(135deg,#8fcdfb,#4a9fe4)', 'linear-gradient(135deg,#ffd774,#f0a92c)']
 function avatarColor(name: string) { let hash = 0; for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0; return avatarColors[hash % avatarColors.length] }
 function stageTip(row: PipelineRow) {
@@ -191,7 +222,7 @@ async function load(background: unknown = false) {
   loading.value = false
 }
 onMounted(load)
-useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_calls','handoffs','knowledge_candidates','agent_runs','bots'], () => load(true))
+useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_calls','handoffs','knowledge_candidates','agent_runs','bots','message_stages','group_reviews'], () => load(true))
 </script>
 
 <style scoped>
