@@ -103,12 +103,12 @@ useAdminEvents(['messages','agent_runs','model_calls','tool_calls','outbox_tasks
 
 <style scoped>
 .steps { display: flex; flex-direction: column; gap: 8px; }
-.steps article { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; background: #fafbfd; }
-.steps article.error { border-color: #f3c2c2; }
+.steps article { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; background: var(--surface-2); }
+.steps article.error { border-color: var(--danger-light); }
 .steps header { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .steps header em { margin-left: auto; color: var(--muted); font-style: normal; }
-.steps pre { margin: 6px 0 0; white-space: pre-wrap; word-break: break-all; font-size: 12px; color: #3c4960; max-height: 180px; overflow: auto; }
-.steps pre.err { color: #c03939; }
+.steps pre { margin: 6px 0 0; white-space: pre-wrap; word-break: break-all; font-size: 12px; color: var(--text-2); max-height: 180px; overflow: auto; }
+.steps pre.err { color: var(--danger); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .gap { margin-bottom: 10px; }
 .gap-top { margin-top: 10px; }

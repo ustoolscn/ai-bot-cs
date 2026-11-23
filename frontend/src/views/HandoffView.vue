@@ -13,13 +13,13 @@
           <button v-for="h in items" :key="h.id" class="inbox-item" :class="{ active: h.id === selectedId }" @click="select(h)">
             <div class="inbox-item-top">
               <strong>{{ h.displayName || h.userId }}</strong>
-              <el-tag v-if="h.status !== 'open'" size="small" type="success">已结单</el-tag>
+              <span v-if="h.status !== 'open'" class="pill good">已结单</span>
               <time>{{ relativeTime(h.createdAt) }}</time>
             </div>
             <p>{{ h.messageContent || lastInbound(h)?.content || '—' }}</p>
             <small>{{ h.conversationName }} · {{ h.reason || '转人工' }}</small>
           </button>
-          <EmptyState v-if="!loading && !items.length" :mood="status === 'open' ? 'happy' : 'sleepy'" :title="status === 'open' ? '没有人在等人工' : '这里还没有记录'" :description="status === 'open' ? '用户说“找人工”或机器人答不上来时，会出现在这里。转人工的规则在 智能体 → 学习与转人工。' : undefined" />
+          <EmptyState v-if="!loading && !items.length" :mood="status === 'open' ? 'happy' : 'sleepy'" :title="status === 'open' ? '没有人在等人工' : '这里还没有记录'" :description="status === 'open' ? '用户说“找人工”或机器人答不上来时，会出现在这里。转人工后机器人安静多久，在“通用设置 → 学习与转人工”里调整。' : undefined" />
         </div>
       </aside>
 
@@ -31,10 +31,10 @@
               <h2>{{ current.displayName || current.userId }}</h2>
               <p>{{ current.conversationName }} · {{ current.conversationType === 'group' ? '群聊' : '私聊' }} · 转入于 {{ formatTime(current.createdAt) }}</p>
             </div>
-            <el-button v-if="current.status === 'open'" type="success" plain :icon="CircleCheck" @click="resolve(current)">结单并恢复机器人</el-button>
-            <el-tag v-else type="success">已结单 · {{ formatTime(current.resolvedAt) }}</el-tag>
+            <el-button v-if="current.status === 'open'" :icon="CircleCheck" @click="resolve(current)">结单并恢复机器人</el-button>
+            <span v-else class="pill good">已结单 · {{ formatTime(current.resolvedAt) }}</span>
           </header>
-          <el-alert v-if="current.reason" class="inbox-reason" type="warning" :closable="false" :title="`转人工原因：${current.reason}`" />
+          <div class="inbox-reason">转人工原因：{{ current.reason || '用户要求人工' }}</div>
           <div ref="chatBox" class="chat-scroll">
             <div v-for="m in current.recent" :key="m.id" class="chat-row" :class="[m.direction, { human: m.eventType === 'HUMAN_REPLY', selected: m.id === targetId }]">
               <small>{{ m.direction === 'inbound' ? (m.senderName || '用户') : m.eventType === 'HUMAN_REPLY' ? '人工回复' : '机器人' }} · {{ formatTime(m.eventAt) }}</small>
@@ -51,11 +51,11 @@
             <div class="composer-actions">
               <el-checkbox v-model="learn">同时把这次回答提交为候选知识</el-checkbox>
               <span class="muted">超过 QQ 被动回复时限后会自动改为主动消息发送</span>
-              <el-button type="primary" :icon="Promotion" :loading="sending" :disabled="!replyText.trim() || !target" @click="send">发送</el-button>
+              <el-button type="primary" :icon="Promotion" :loading="sending" :disabled="!replyText.trim() || !target" @click="send">发送回复</el-button>
             </div>
           </footer>
         </template>
-        <div v-else class="inbox-placeholder"><EmptyState mood="wave" title="选择左侧的一位用户" description="可以查看最近的聊天记录，并直接回复。" /></div>
+        <div v-else class="inbox-placeholder"><EmptyState title="选择左侧的一位用户" description="可以查看最近的聊天记录，并直接回复。" /></div>
       </section>
     </div>
   </div>
@@ -126,7 +126,7 @@ async function send() {
   } catch (e) { ElMessage.error(e instanceof Error ? e.message : '发送失败') } finally { sending.value = false }
 }
 async function resolve(h: Handoff) {
-  await ElMessageBox.confirm(`结单后机器人会重新回复 ${h.displayName || h.userId} 的消息。`, '结单并恢复机器人', { confirmButtonText: '结单', cancelButtonText: '取消' })
+  try { await ElMessageBox.confirm(`结单后机器人会重新回复 ${h.displayName || h.userId} 的消息。`, '结单并恢复机器人', { confirmButtonText: '结单', cancelButtonText: '取消' }) } catch { return }
   await agentApi.handoffs.resolve(h.id)
   ElMessage.success('已结单，机器人已恢复')
   shell.refreshCounts(true)

@@ -1,6 +1,6 @@
 <template>
-  <div class="empty-state">
-    <Mascot :mood="mood" :size="compact ? 64 : 88" float />
+  <div class="empty-state" :class="{ compact }">
+    <Mascot v-if="!compact" :mood="mood" :size="56" />
     <strong>{{ title }}</strong>
     <p v-if="description">{{ description }}</p>
     <slot />

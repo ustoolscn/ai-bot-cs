@@ -6,7 +6,7 @@
         <span><el-button size="small" :icon="Refresh" :loading="refreshing" :disabled="!!blockedReason" @click="refresh">立即同步</el-button></span>
       </el-tooltip>
     </div>
-    <el-alert v-if="blockedReason" class="gap" type="info" :closable="false" show-icon :title="blockedReason" />
+    <p class="muted" style="margin-bottom: 12px">{{ blockedReason || '保存设置后，机器人会按刷新间隔自动同步；也可以手动同步一次。' }}</p>
     <template v-if="data">
       <dl class="detail-list">
         <div><dt>站点</dt><dd>{{ data.systemName || '—' }}</dd></div>
@@ -14,7 +14,7 @@
         <div><dt>最近尝试</dt><dd>{{ formatTime(data.lastAttemptAt) }}</dd></div>
         <div><dt>模型数量</dt><dd>{{ data.modelCount }}</dd></div>
       </dl>
-      <el-alert v-if="data.lastError" class="gap" :title="data.lastError" type="warning" :closable="false" show-icon />
+      <p v-if="data.lastError" class="danger-text" style="margin-top: 8px; font-size: 13px">最近一次同步失败：{{ data.lastError }}</p>
       <h3>注入提示词的内容</h3>
       <div class="content-box">{{ data.promptPreview || '暂无数据' }}</div>
       <h3>全站服务状态</h3>

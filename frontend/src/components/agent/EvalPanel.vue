@@ -14,7 +14,7 @@
         <el-table-column label="名称" min-width="150"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.name || '未命名' }}</strong><span>{{ formatTime(row.createdAt) }} · {{ row.chatProfileName }}</span></div></template></el-table-column>
         <el-table-column label="平均分（满分 10）" width="170"><template #default="{ row, $index }"><span class="score-bar"><i :style="{ width: `${(row.avgScore ?? 0) * 10}%` }" /></span><strong>{{ row.avgScore != null ? row.avgScore.toFixed(1) : '—' }}</strong> <small v-if="delta($index, 'avgScore')" :class="delta($index, 'avgScore')!.startsWith('+') ? 'trend-good' : 'trend-bad'">{{ delta($index, 'avgScore') }}</small></template></el-table-column>
         <el-table-column label="平均字数" width="110"><template #default="{ row, $index }">{{ row.avgLength != null ? Math.round(row.avgLength) : '—' }} <small v-if="delta($index, 'avgLength')" class="muted">{{ delta($index, 'avgLength') }}</small></template></el-table-column>
-        <el-table-column label="状态" width="110"><template #default="{ row }"><ProgressRing v-if="row.status === 'running' || row.status === 'pending'" :percent="row.total ? row.completed / row.total * 100 : 0" :size="34" :stroke="4" tone="butter"><small class="run-count">{{ row.completed }}</small></ProgressRing><el-tag v-else size="small" :type="row.status === 'completed' ? 'success' : 'danger'">{{ statusText[row.status] || row.status }}</el-tag></template></el-table-column>
+        <el-table-column label="状态" width="110"><template #default="{ row }"><span v-if="row.status === 'running' || row.status === 'pending'" class="pill busy">进行中 {{ row.completed }}/{{ row.total }}</span><span v-else class="pill" :class="row.status === 'completed' ? 'good' : 'bad'">{{ statusText[row.status] || row.status }}</span></template></el-table-column>
       </el-table>
     </section>
     <section class="table-panel">
@@ -56,7 +56,6 @@ import { Plus, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { agentApi, formatTime, type EvalCase, type EvalResult, type EvalRun } from '@/api/agent'
 import EmptyState from '@/components/EmptyState.vue'
-import ProgressRing from '@/components/fx/ProgressRing.vue'
 import type { KnowledgeBase, ModelProfile } from '@/types'
 
 defineProps<{ chatModels: ModelProfile[]; knowledgeBases: KnowledgeBase[] }>()
@@ -97,13 +96,8 @@ useAdminEvents(['eval_cases','eval_runs','eval_results'], async () => { await lo
 </script>
 
 <style scoped>
-.score-bar { display: inline-block; width: 64px; height: 8px; border-radius: 99px; background: var(--surface-3); overflow: hidden; vertical-align: middle; margin-right: 8px; }
-.score-bar i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #ffc27a, #f2735a); animation: grow 1s var(--ease-bounce) both; transform-origin: left; }
-@keyframes grow { from { transform: scaleX(0); } }
-.run-count { font: 700 11px/1 var(--font-round); }
-.run-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+.run-form { border-bottom: 1px solid var(--line); }
 .result-item { margin-bottom: 18px; }
 .result-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .result-item small { display: block; margin-top: 6px; font-size: 13px; }
-@media (max-width: 620px) { .run-form { grid-template-columns: 1fr; } }
 </style>

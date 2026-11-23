@@ -1,13 +1,9 @@
 <template>
-  <div class="content-page">
-    <PageHeader title="黑名单" description="拉黑的群成员，机器人不回复他，他的发言也不进上下文、记忆和学习。开了自动踢人的，机器人发现他在群里就会踢出去。">
+  <div class="content-page page-fill">
+    <PageHeader title="黑名单" description="机器人不回复被拉黑的人，他的发言也不进上下文、记忆和学习；开了自动踢人的，发现他在群里就会踢出去。要拉黑新成员，请到群详情的“成员”里操作。">
       <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
     </PageHeader>
 
-    <el-alert class="tip" type="info" :closable="false" show-icon>
-      <template #title>在“群与会话 → 成员”里点“拉黑”添加。QQ 不提供成员的真实 QQ 号，只能从机器人见过的群成员里选。</template>
-      自动踢人需要群主给机器人开启“移除群成员”权限，并在 QQ 机器人后台打开对应开关；没有权限时会在这里显示失败，请到群里手动踢。
-    </el-alert>
 
     <div class="toolbar">
       <el-input v-model="search" placeholder="搜索昵称、成员 ID 或原因" :prefix-icon="Search" clearable />
@@ -15,9 +11,9 @@
     </div>
 
     <section class="table-panel">
-      <el-table v-loading="loading" :data="filtered" row-key="id">
+      <el-table v-loading="loading" :data="filtered" row-key="id" height="100%">
         <template #empty>
-          <EmptyState mood="happy" title="黑名单是空的" description="群里有人捣乱时，到“群与会话 → 成员”里点“拉黑”。" />
+          <EmptyState mood="happy" title="黑名单是空的" description="群里有人捣乱时，打开“群与会话”里的这个群，在“成员”里点“拉黑”。自动踢人需要群主给机器人开启“移除群成员”权限。" />
         </template>
         <el-table-column label="成员" min-width="200">
           <template #default="{ row }"><div class="stacked-cell"><strong>{{ row.displayName || '未知昵称' }}</strong><span class="mono">{{ row.userId }}</span></div></template>
@@ -25,7 +21,7 @@
         <el-table-column label="范围" min-width="170">
           <template #default="{ row }">
             <div class="stacked-cell">
-              <strong>{{ row.conversationId ? conversationName(row.conversationId) : '所有群' }}</strong>
+              <strong>{{ row.conversationId ? conversationName(row.conversationId) : '机器人所在的所有群' }}</strong>
               <span>{{ row.botName }}</span>
             </div>
           </template>
@@ -45,10 +41,10 @@
           </template>
         </el-table-column>
         <el-table-column label="拉黑时间" width="150"><template #default="{ row }">{{ formatTime(row.createdAt) }}</template></el-table-column>
-        <el-table-column label="操作" width="130" fixed="right">
+        <el-table-column label="操作" width="140" fixed="right">
           <template #default="{ row }">
             <el-button v-if="row.autoKick && row.actions.some((a: BlockedAction) => a.status === 'failed')" link type="primary" @click="retry(row)">重试</el-button>
-            <el-button link type="danger" @click="remove(row)">解除</el-button>
+            <el-button link type="danger" @click="remove(row)">解除拉黑</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -106,7 +102,7 @@ async function retry(row: BlockedUser) {
 }
 async function remove(row: BlockedUser) {
   try {
-    await ElMessageBox.confirm(`解除对“${row.displayName || row.userId}”的拉黑？已被踢出的人不会自动拉回群。`, '解除拉黑', { confirmButtonText: '解除', cancelButtonText: '取消', type: 'warning' })
+    await ElMessageBox.confirm(`解除对“${row.displayName || row.userId}”的拉黑？已被踢出的人不会自动拉回群。`, '解除拉黑', { confirmButtonText: '解除拉黑', cancelButtonText: '取消', type: 'warning' })
   } catch { return }
   try { await agentApi.blacklist.remove(row.id); ElMessage.success('已解除'); await load() } catch (e) { ElMessage.error(e instanceof Error ? e.message : '解除失败') }
 }
@@ -114,17 +110,12 @@ useAdminEvents(['blacklist_actions','blocked_users'], load)
 </script>
 
 <style scoped>
-.tip { margin-bottom: 16px; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
-.faint { color: var(--faint); }
 .action-list { display: flex; flex-wrap: wrap; gap: 6px; }
-.kick-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; cursor: default; }
+.kick-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: var(--radius-xs); font-size: 12px; font-weight: 500; cursor: default; }
 .kick-pill i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.kick-pill em { font-style: normal; font-weight: 400; opacity: .8; }
-.kick-pill.pending { background: var(--sky-light); color: var(--sky); }
-.kick-pill.pending i { animation: blink 1.2s ease-in-out infinite; }
+.kick-pill em { font-style: normal; font-weight: 400; }
+.kick-pill.pending { background: var(--primary-light); color: var(--primary-text); }
 .kick-pill.kicked { background: var(--success-light); color: var(--success); }
 .kick-pill.failed { background: var(--danger-light); color: var(--danger); cursor: help; }
-.kick-pill.disabled { background: var(--info-light); color: var(--muted); }
-@keyframes blink { 50% { opacity: .3; } }
+.kick-pill.disabled { background: var(--surface-3); color: var(--muted); }
 </style>

@@ -1,26 +1,27 @@
 <template>
-  <div class="content-page">
-    <PageHeader title="记忆" description="按会话和用户查看、编辑机器人记住的信息。">
-      <el-button type="danger" plain :disabled="!selectedIds.length || loading" :loading="deleting" @click="deleteSelected('memories', '用户记忆')">批量删除{{ selectedIds.length ? '（'+selectedIds.length+'）' : '' }}</el-button>
+  <div class="content-page page-fill">
+    <PageHeader title="用户记忆" description="机器人在对话里记住的用户信息，例如分组、接入方式、常遇到的问题。先选会话，再选用户。是否记忆、每次带几条，在“通用设置 → 上下文与记忆”里调整。">
       <el-button :icon="Refresh" @click="reload">刷新</el-button>
     </PageHeader>
         <div class="toolbar">
-          <el-select v-model="memoryGroup" filterable clearable placeholder="选择群聊或私聊" aria-label="选择群聊或私聊" @change="changeMemoryGroup">
+          <el-select v-model="memoryGroup" filterable clearable placeholder="选择群聊或私聊" aria-label="选择群聊或私聊" style="width: 300px" @change="changeMemoryGroup">
             <el-option v-for="group in memoryGroups" :key="group.key" :value="group.key" :label="group.label" />
           </el-select>
-          <el-select v-model="memoryUser" filterable clearable :disabled="!memoryGroup" placeholder="选择用户" aria-label="选择用户" @change="changeMemoryUser">
+          <el-select v-model="memoryUser" filterable clearable :disabled="!memoryGroup" placeholder="选择用户" aria-label="选择用户" style="width: 240px" @change="changeMemoryUser">
             <el-option v-for="member in memoryMembers" :key="member.userId" :value="member.userId" :label="memberLabel(member)" />
           </el-select>
           <el-input v-if="memoryUser" v-model="memoryQuery" placeholder="搜索该用户的记忆" :prefix-icon="Search" clearable @change="reload" />
+          <span class="spacer" />
+          <el-button type="danger" plain :style="{ visibility: selectedIds.length ? 'visible' : 'hidden' }" :loading="deleting" @click="deleteSelected('memories', '用户记忆')">删除选中的 {{ selectedIds.length }} 条</el-button>
         </div>
         <section class="table-panel">
-          <el-table row-key="id" :key="JSON.stringify([memoryGroup,memoryUser,memoryQuery])" v-loading="loading" :data="memories" @selection-change="(rows: {id:string}[]) => selectRows(rows)" :empty-text="!directory.length ? '暂无用户记忆' : !memoryGroup ? '请选择群聊或私聊' : !memoryUser ? '请选择该会话中的用户' : '暂无匹配的记忆'">
+          <el-table row-key="id" height="100%" :key="JSON.stringify([memoryGroup,memoryUser,memoryQuery])" v-loading="loading" :data="memories" @selection-change="(rows: {id:string}[]) => selectRows(rows)" :empty-text="!directory.length ? '暂无用户记忆' : !memoryGroup ? '请选择群聊或私聊' : !memoryUser ? '请选择该会话中的用户' : '暂无匹配的记忆'">
             <el-table-column type="selection" reserve-selection width="48" />
             <el-table-column label="用户" width="170"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.displayName || '—' }}</strong><span>{{ row.userId }}</span></div></template></el-table-column>
-            <el-table-column label="记忆" min-width="320"><template #default="{ row }"><el-icon v-if="row.pinned" class="pin"><StarFilled /></el-icon>{{ row.content }}</template></el-table-column>
+            <el-table-column label="记忆" min-width="320"><template #default="{ row }"><span v-if="row.pinned" class="pill busy" style="margin-right: 6px">常驻</span>{{ row.content }}</template></el-table-column>
             <el-table-column label="类型" width="80"><template #default="{ row }">{{ kindText[row.kind] || row.kind }}</template></el-table-column>
             <el-table-column label="记忆向量" width="105">
-              <template #default="{ row }">{{ row.hasEmbedding === true ? '已生成' : row.hasEmbedding === false ? '未生成' : '未知' }}</template>
+              <template #default="{ row }"><span :class="{ faint: row.hasEmbedding !== true }">{{ row.hasEmbedding === true ? '已生成' : row.hasEmbedding === false ? '未生成' : '—' }}</span></template>
             </el-table-column>
             <el-table-column label="来源" width="80"><template #default="{ row }">{{ memorySourceText[row.source] || row.source }}</template></el-table-column>
             <el-table-column label="更新" width="150"><template #default="{ row }">{{ formatTime(row.updatedAt) }}</template></el-table-column>
@@ -33,7 +34,7 @@
         <el-form-item label="类型"><el-select v-model="memoryForm.kind"><el-option v-for="(v, k) in kindText" :key="k" :label="v" :value="k" /></el-select></el-form-item>
         <el-checkbox v-model="memoryForm.pinned">常驻（每次回复都带上）</el-checkbox>
       </el-form>
-      <template #footer><el-button @click="memoryDialog = false">取消</el-button><el-button type="primary" @click="saveMemory">保存</el-button></template>
+      <template #footer><el-button @click="memoryDialog = false">取消</el-button><el-button type="primary" @click="saveMemory">保存记忆</el-button></template>
     </el-dialog>
   </div>
 </template>
@@ -42,7 +43,7 @@
 import { useBulkDelete } from '@/composables/useBulkDelete'
 import { useAdminEvents } from '@/composables/useAdminEvents'
 import { onMounted, reactive, ref, computed, watch } from 'vue'
-import { Search, Refresh, StarFilled } from '@element-plus/icons-vue'
+import { Search, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import { agentApi, formatTime, type Memory, type MemoryMember } from '@/api/agent'
@@ -110,11 +111,8 @@ const memoryDialog = ref(false)
 const memoryForm = reactive({ id: '', content: '', kind: 'fact', pinned: false })
 function editMemory(row: Memory) { Object.assign(memoryForm, { id: row.id, content: row.content, kind: row.kind, pinned: row.pinned }); memoryDialog.value = true }
 async function saveMemory() { await agentApi.memories.update(memoryForm.id, { content: memoryForm.content, kind: memoryForm.kind, pinned: memoryForm.pinned }); memoryDialog.value = false; await reload() }
-async function removeMemory(row: Memory) { await ElMessageBox.confirm('删除这条记忆？', '确认', { type: 'warning' }); await agentApi.memories.remove(row.id); await reload() }
+async function removeMemory(row: Memory) { try { await ElMessageBox.confirm('删除这条记忆？删除后不能恢复。', '删除记忆', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }) } catch { return }; await agentApi.memories.remove(row.id); await reload() }
 
 onMounted(reload)
 useAdminEvents(['user_memories','conversations','bots'], reload)
 </script>
-<style scoped>
-.pin { color: #e6a23c; margin-right: 4px; vertical-align: -2px; }
-</style>

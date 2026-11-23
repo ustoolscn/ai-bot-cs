@@ -1,26 +1,29 @@
 <template>
-  <div class="content-page">
-    <PageHeader title="消息记录" description="每条触发了机器人的消息都在这里。点任意一行，查看它从接收到发出回复的完整过程。">
+  <div class="content-page page-fill">
+    <PageHeader title="消息记录" description="每条触发了机器人的消息。点任意一行，查看它从收到到发出回复的完整过程。">
       <el-button :icon="Download" @click="exportRows">导出记录</el-button>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
     </PageHeader>
     <div class="toolbar">
       <el-input v-model="search" placeholder="搜索问题、回复、发送者或消息 ID" :prefix-icon="Search" clearable />
       <el-segmented v-model="status" :options="[{ label: '全部', value: 'all' }, { label: '成功', value: 'success' }, { label: '失败', value: 'failed' }]" />
-      <el-date-picker v-model="date" type="date" placeholder="选择日期" />
+      <span class="spacer" />
+      <span class="muted" style="font-size: 13px">{{ filtered.length }} 条</span>
     </div>
-    <el-alert v-if="loadError" class="page-error-alert" type="error" :closable="false" show-icon :title="loadError" />
     <section class="table-panel">
-      <el-table v-loading="loading" class="clickable-rows" :data="filtered" empty-text="还没有触发机器人的消息。机器人在群里被 @ 或收到私聊后会出现在这里。" @row-click="open">
-        <el-table-column prop="time" label="时间" width="175" />
-        <el-table-column label="消息" min-width="340"><template #default="{ row }"><div class="message-preview"><strong>{{ row.question }}</strong><span>{{ row.attachments?.length ? `包含 ${row.attachments.length} 个附件 · ` : '' }}{{ row.answer || '未生成回复' }}</span></div></template></el-table-column>
-        <el-table-column label="机器人 / 会话" min-width="180"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.botName }}</strong><span>{{ row.conversationName }}</span></div></template></el-table-column>
-        <el-table-column prop="sender" label="发送者" width="100" />
-        <el-table-column label="模型" width="150"><template #default="{ row }"><div class="stacked-cell"><strong class="truncate">{{ row.model || '—' }}</strong><span>{{ row.tokens }} tokens</span></div></template></el-table-column>
-        <el-table-column label="知识命中" width="100"><template #default="{ row }">{{ row.knowledgeHits }} 条</template></el-table-column>
-        <el-table-column label="耗时" width="100"><template #default="{ row }">{{ formatDuration(row.latency) }}</template></el-table-column>
+      <el-table v-loading="loading" class="clickable-rows" :data="filtered" height="100%" @row-click="open">
+        <template #empty>
+          <EmptyState v-if="loadError" mood="thinking" title="消息记录加载失败" :description="loadError"><el-button @click="load">重新加载</el-button></EmptyState>
+          <EmptyState v-else title="还没有消息" description="机器人在群里被 @ 或收到私聊后，消息会出现在这里。" />
+        </template>
+        <el-table-column label="时间" width="168"><template #default="{ row }"><span class="num" style="white-space: nowrap">{{ row.time }}</span></template></el-table-column>
+        <el-table-column label="消息" min-width="260"><template #default="{ row }"><div class="message-preview"><strong>{{ row.question }}</strong><span>{{ row.attachments?.length ? `包含 ${row.attachments.length} 个附件 · ` : '' }}{{ row.answer || '未生成回复' }}</span></div></template></el-table-column>
+        <el-table-column label="机器人 / 会话" min-width="150"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.botName }}</strong><span>{{ row.conversationName }}</span></div></template></el-table-column>
+        <el-table-column prop="sender" label="发送者" width="96" />
+        <el-table-column label="模型" width="130"><template #default="{ row }"><div class="stacked-cell"><strong class="truncate">{{ row.model || '—' }}</strong><span>{{ row.tokens }} tokens</span></div></template></el-table-column>
+        <el-table-column label="知识命中" width="90" align="right"><template #default="{ row }"><span class="num">{{ row.knowledgeHits }}</span></template></el-table-column>
+        <el-table-column label="耗时" width="90" align="right"><template #default="{ row }"><span class="num">{{ formatDuration(row.latency) }}</span></template></el-table-column>
         <el-table-column label="状态" width="100"><template #default="{ row }"><StatusBadge :status="row.status" /></template></el-table-column>
-        <el-table-column width="44" fixed="right"><template #default><el-icon class="faint"><ArrowRight /></el-icon></template></el-table-column>
       </el-table>
     </section>
 
@@ -68,7 +71,7 @@
 <script setup lang="ts">
 import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, onMounted, ref } from 'vue'
-import { ArrowRight, Download, Refresh, Search } from '@element-plus/icons-vue'
+import { Download, Refresh, Search } from '@element-plus/icons-vue'
 import { connection } from '@/utils/connection'
 import PipelineFlow from '@/components/fx/PipelineFlow.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -83,7 +86,6 @@ import { formatDuration } from '@/utils/format'
 const messages = ref<MessageRecord[]>([])
 const search = ref('')
 const status = ref('all')
-const date = ref('')
 const drawer = ref(false)
 const detailLoading = ref(false)
 const selected = ref<MessageRecord>()
@@ -121,7 +123,7 @@ async function load(background: unknown = false) {
     messages.value = Array.isArray(result) ? result : []
   } catch (error) {
     messages.value = []
-    loadError.value = error instanceof Error ? `消息记录加载失败：${error.message}` : '消息记录加载失败，请稍后重试。'
+    loadError.value = error instanceof Error ? error.message : '请稍后重试。'
   } finally { loading.value = false }
 }
 async function open(row: MessageRecord) {

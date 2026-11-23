@@ -1,25 +1,31 @@
 <template>
   <div class="content-page">
-    <PageHeader :title="title" :description="description">
-      <el-button v-if="mode === 'services'" @click="$router.push('/bots')">返回机器人</el-button>
-      <el-button :disabled="busy || !!error" type="primary" :icon="Plus" @click="edit()">添加{{ label }}</el-button>
+    <PageHeader :title="title" :description="description" :back="mode === 'services' ? { label: '机器人与客服', to: '/bots' } : undefined">
+      <el-button :disabled="busy" type="primary" :icon="Plus" @click="edit()">添加{{ label }}</el-button>
     </PageHeader>
-    <el-alert v-if="error" type="error" :closable="false" show-icon><template #title>{{ error }} <el-button link @click="load">重试</el-button></template></el-alert>
-    <section v-else v-loading="busy" class="table-panel">
-      <el-table :data="rows" row-key="id" :empty-text="'还没有' + label + '，点击右上角添加。'">
-        <el-table-column prop="name" :label="label + '名称'" min-width="140" />
-        <el-table-column v-if="mode === 'personalities'" prop="prompt" label="说话风格" min-width="240" />
-        <el-table-column v-if="mode === 'agents'" prop="instructions" label="客服职责" min-width="180" />
+    <el-tabs v-if="mode !== 'services'" :model-value="mode" @update:model-value="switchMode">
+      <el-tab-pane name="agents" label="智能体" />
+      <el-tab-pane name="personalities" label="性格" />
+    </el-tabs>
+    <section v-loading="busy" class="table-panel">
+      <el-table :data="rows" row-key="id" class="clickable-rows" @row-click="edit">
+        <template #empty>
+          <EmptyState v-if="error" mood="thinking" title="加载失败" :description="error"><el-button @click="load()">重新加载</el-button></EmptyState>
+          <EmptyState v-else :title="'还没有' + label" :description="emptyHint"><el-button type="primary" :icon="Plus" @click="edit()">添加{{ label }}</el-button></EmptyState>
+        </template>
+        <el-table-column prop="name" :label="label + '名称'" min-width="160"><template #default="{ row }"><strong style="font-weight: 500">{{ row.name }}</strong></template></el-table-column>
+        <el-table-column v-if="mode === 'personalities'" label="说话风格" min-width="320"><template #default="{ row }"><span class="truncate">{{ row.prompt }}</span></template></el-table-column>
+        <el-table-column v-if="mode === 'agents'" label="客服职责" min-width="260"><template #default="{ row }"><span class="truncate">{{ row.instructions || '—' }}</span></template></el-table-column>
         <el-table-column v-if="mode !== 'personalities'" :label="mode === 'services' ? '智能体' : '性格'" min-width="150">
-          <template #default="{ row }">{{ mode === 'services' ? agents.find(a => a.id === row.agentId)?.name : presets.find(p => p.id === row.personalityId)?.name }}</template>
+          <template #default="{ row }">{{ (mode === 'services' ? agents.find(a => a.id === row.agentId)?.name : presets.find(p => p.id === row.personalityId)?.name) || '—' }}</template>
         </el-table-column>
         <el-table-column v-if="mode === 'services'" label="对话模型" min-width="170">
           <template #default="{ row }">{{ row.chatProfileId ? models.find(m => m.id === row.chatProfileId)?.name || '模型不可用' : '系统默认模型' }}</template>
         </el-table-column>
-        <el-table-column width="90"><template #default="{ row }"><el-button link type="primary" @click="edit(row)">配置</el-button></template></el-table-column>
+        <el-table-column width="90" align="right"><template #default="{ row }"><el-button link type="primary" @click.stop="edit(row)">编辑</el-button></template></el-table-column>
       </el-table>
     </section>
-    <el-dialog v-model="open" :title="(form.id ? '配置' : '添加') + label" width="min(520px, 94vw)">
+    <el-dialog v-model="open" :title="(form.id ? '编辑' : '添加') + label" width="min(560px, 94vw)">
       <el-form label-position="top" @submit.prevent="save">
         <el-form-item :label="label + '名称'"><el-input v-model="form.name" /></el-form-item>
         <el-form-item v-if="mode === 'personalities'" label="说话风格"><el-input v-model="form.prompt" type="textarea" :rows="5" placeholder="描述用词、语气和回答习惯" /></el-form-item>
@@ -30,7 +36,7 @@
           </el-form-item>
         </template>
         <el-form-item v-if="mode === 'services'" label="使用的智能体"><el-select v-model="form.agentId" placeholder="选择智能体"><el-option v-for="a in agents" :key="a.id" :label="a.name" :value="a.id" /></el-select>
-          <router-link v-if="!agents.length" to="/agent">先创建智能体</router-link>
+          <small v-if="!agents.length" class="form-tip">还没有智能体，请先在“智能体与性格”里创建。</small>
         </el-form-item>
         <el-form-item v-if="mode === 'services'" label="对话模型">
           <el-select v-model="form.chatProfileId" placeholder="系统默认模型" clearable :value-on-clear="''">
@@ -42,7 +48,7 @@
           <el-form-item label="群消息判断模型"><el-select v-model="form.decisionProfileId" clearable :value-on-clear="''" placeholder="跟随通用判断设置"><el-option v-for="m in models" :key="m.id" :value="m.id" :label="m.name" :disabled="m.status === 'offline'" /></el-select><small class="form-tip">逐条判断是否需要接话，决定接话后才调用对话模型。</small></el-form-item>
         </template>
       </el-form>
-      <template #footer><el-button @click="open = false">取消</el-button><el-button type="primary" :disabled="!valid" :loading="saving" @click="save">保存</el-button></template>
+      <template #footer><el-button @click="open = false">取消</el-button><el-button type="primary" :disabled="!valid" :loading="saving" @click="save">保存{{ label }}</el-button></template>
     </el-dialog>
   </div>
 </template>
@@ -53,6 +59,8 @@ import { computed, reactive, ref, watch } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
+import EmptyState from '@/components/EmptyState.vue'
+import { useRouter } from 'vue-router'
 import type { ModelProfile } from '@/types'
 import { api } from '@/api'
 import { botServices, personalities, supportAgents, type BotService, type Personality, type SupportAgent } from '@/api/support'
@@ -70,11 +78,18 @@ const open = ref(false)
 const blank = () => ({ id: '', name: '', instructions: '', personalityId: '', prompt: '', agentId: '', chatProfileId: '', simpleProfileId: '', decisionProfileId: '' })
 const form = reactive(blank())
 const label = computed(() => ({ personalities: '性格', agents: '智能体', services: 'AI 客服' })[props.mode])
-const title = computed(() => props.mode === 'services' && botName.value ? botName.value + ' · AI 客服' : label.value)
+const router = useRouter()
+const title = computed(() => props.mode === 'services' ? (botName.value || '机器人') + ' 的 AI 客服' : '智能体与性格')
+const emptyHint = computed(() => ({
+  personalities: '性格是可复用的说话风格，例如“热情口语化”“简洁专业”。',
+  agents: '智能体描述客服负责什么，并选用一种性格。',
+  services: 'AI 客服 = 智能体 + 对话模型。添加后到“群与会话”里为每个群选择接待客服。',
+})[props.mode])
+function switchMode(value: string | number) { router.push(value === 'personalities' ? '/personalities' : '/agent') }
 const description = computed(() => ({
-  personalities: '在这里编辑说话风格。使用该性格的智能体会在下一次回复时采用更新后的内容。',
-  agents: '为智能体填写客服职责，选择一种性格。同一个智能体可以分配给多个 AI 客服。',
-  services: '为这个 QQ 机器人添加客服，为每位客服选择智能体和对话模型，然后在「群与会话」选择接待客服。',
+  personalities: '智能体负责“做什么”，性格负责“怎么说”。改了性格，用它的智能体下一次回复就会生效。',
+  agents: '智能体负责“做什么”，性格负责“怎么说”。同一个智能体可以分配给多个 AI 客服。',
+  services: '为这个机器人添加 AI 客服，每位客服选择一个智能体和对话模型，然后到“群与会话”里选择由谁接待。',
 })[props.mode])
 const rows = computed(() => props.mode === 'services' ? services.value : props.mode === 'agents' ? agents.value : presets.value)
 const valid = computed(() => form.name.trim() && (props.mode === 'services' ? form.agentId : props.mode === 'agents' ? form.personalityId : form.prompt.trim()))

@@ -1,22 +1,13 @@
 <template>
   <div class="login-page">
-    <svg class="login-bg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-      <circle cx="180" cy="160" r="150" fill="#ffd6c2" opacity=".55" />
-      <circle cx="1040" cy="640" r="190" fill="#e6ddff" opacity=".6" />
-      <circle cx="980" cy="140" r="90" fill="#fff0b8" opacity=".7" />
-      <circle cx="260" cy="680" r="70" fill="#cdeee0" opacity=".7" />
-      <path d="M560 70 l10 24 l24 10 l-24 10 l-10 24 l-10 -24 l-24 -10 l24 -10 z" fill="#f5c451" opacity=".8" />
-      <path d="M860 420 l7 16 l16 7 l-16 7 l-7 16 l-7 -16 l-16 -7 l16 -7 z" fill="#f2a38c" opacity=".8" />
-    </svg>
     <div class="login-card">
-      <div class="login-mascot"><Mascot mood="wave" :size="120" float /></div>
-      <h2>欢迎回来</h2>
-      <p>小Q 已经准备好啦，登录后一起照看客服吧</p>
-      <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
+      <div class="login-brand"><Mascot head-only :size="36" /><div><strong>AI Bot Hub</strong><span>QQ 客服管理后台</span></div></div>
+      <h2>登录</h2>
+      <p>使用管理员账号登录。</p>
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top" @submit.prevent="submit">
-        <el-form-item label="账号" prop="username"><el-input v-model="form.username" size="large" autocomplete="username" placeholder="管理员账号" :prefix-icon="User" /></el-form-item>
-        <el-form-item label="密码" prop="password"><el-input v-model="form.password" size="large" autocomplete="current-password" placeholder="密码" type="password" show-password :prefix-icon="Lock" @keyup.enter="submit" /></el-form-item>
-        <div class="login-options"><el-checkbox v-model="remember">保持登录</el-checkbox><span v-if="mockFallbackEnabled">开发预览：admin / admin123456</span></div>
+        <el-form-item label="账号" prop="username"><el-input v-model="form.username" size="large" autocomplete="username" placeholder="管理员账号" /></el-form-item>
+        <el-form-item label="密码" prop="password" :error="error"><el-input v-model="form.password" size="large" autocomplete="current-password" placeholder="密码" type="password" show-password @keyup.enter="submit" /></el-form-item>
+        <div class="login-options"><el-checkbox v-model="remember">保持登录</el-checkbox><span v-if="mockFallbackEnabled">开发预览账号已自动填好</span></div>
         <el-button type="primary" size="large" native-type="submit" :loading="auth.loading" class="login-submit">登录</el-button>
       </el-form>
     </div>
@@ -26,7 +17,6 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Lock, User } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import Mascot from '@/components/fx/Mascot.vue'
 import { useAuthStore } from '@/stores/auth'

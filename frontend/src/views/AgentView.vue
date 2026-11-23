@@ -1,9 +1,8 @@
 <template>
   <div class="content-page">
-    <PageHeader title="通用设置" description="管理所有客服共享的回复、记忆和工具设置。未分配 AI 客服的会话使用默认人设。">
+    <PageHeader title="通用设置" description="所有 AI 客服共享的设置。没有分配 AI 客服的会话，使用这里的默认人设。">
       <el-button :icon="Refresh" @click="reload">重新加载</el-button>
     </PageHeader>
-    <el-alert v-if="loadError" class="page-error-alert" type="error" :closable="false" show-icon :title="`设置加载失败：${loadError}`" />
 
     <div v-if="settings" class="settings-layout">
       <nav class="settings-toc" aria-label="设置目录">
@@ -23,11 +22,11 @@
             </el-form>
           </div>
           <div class="settings-card">
-            <h3>示例对话 <small class="muted">从官方客服的真实回复里挑几条，语气和长度会更像你们的客服</small></h3>
+            <h3>示例对话</h3><p class="form-tip" style="margin: -8px 0 12px">从官方客服的真实回复里挑几条，语气和长度会更像你们的客服。</p>
             <div v-for="(ex, index) in settings.examples" :key="index" class="example-row">
               <el-input v-model="ex.question" placeholder="用户问" />
               <el-input v-model="ex.answer" type="textarea" :autosize="{ minRows: 1, maxRows: 4 }" placeholder="客服答" />
-              <el-button :icon="Delete" circle aria-label="删除示例" @click="settings.examples.splice(index, 1)" />
+              <el-button :icon="Delete" aria-label="删除示例" title="删除示例" @click="settings.examples.splice(index, 1)" />
             </div>
             <el-button :icon="Plus" @click="settings.examples.push({ question: '', answer: '' })">添加示例</el-button>
           </div>
@@ -58,7 +57,7 @@
             <h3>长期记忆</h3>
             <div class="setting-row"><div><strong>记住用户的关键信息</strong><span>每轮对话后自动记下分组、接入方式、常遇到的问题等。可以在“记忆”里查看和修改</span></div><el-switch v-model="settings.memoryEnabled" /></div>
             <div class="setting-row"><div><strong>每次回复最多带入几条记忆</strong></div><el-input-number v-model="settings.maxMemories" :min="1" :max="30" :disabled="!settings.memoryEnabled" /></div>
-            <el-alert type="info" :closable="false" show-icon title="QQ 里同一个人在群聊和私聊的 ID 不同，记忆会按“机器人 + 用户 ID”分开保存。" />
+            <p class="form-tip" style="margin-top: 12px">QQ 里同一个人在群聊和私聊的 ID 不同，记忆会按“机器人 + 用户 ID”分开保存。</p>
           </div>
         </section>
 
@@ -129,13 +128,14 @@
             <el-icon><WarningFilled /></el-icon>
             <span>有未保存的修改</span>
             <span class="spacer" />
-            <el-button class="ghost" @click="discard">放弃修改</el-button>
-            <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+            <el-button @click="discard">放弃修改</el-button>
+            <el-button type="primary" :loading="saving" @click="save">保存设置</el-button>
           </div>
         </transition>
       </div>
     </div>
-    <div v-else-if="!loadError" v-loading="true" style="height: 300px" />
+    <section v-else-if="loadError" class="panel"><EmptyState mood="thinking" title="设置加载失败" :description="loadError"><el-button @click="load()">重新加载</el-button></EmptyState></section>
+    <div v-else v-loading="true" style="height: 300px" />
   </div>
 </template>
 
@@ -146,6 +146,7 @@ import { onBeforeRouteLeave } from 'vue-router'
 import { Delete, Plus, Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
+import EmptyState from '@/components/EmptyState.vue'
 import LiveDataPanel from '@/components/agent/LiveDataPanel.vue'
 import SkillsPanel from '@/components/agent/SkillsPanel.vue'
 import ToolsPanel from '@/components/agent/ToolsPanel.vue'
@@ -189,7 +190,7 @@ const savedLiveEnabled = computed(() => snapshot.value ? (JSON.parse(snapshot.va
 
 const dirty = computed(() => !!settings.value && (JSON.stringify(settings.value) !== snapshot.value || !!accessToken.value.trim() || clearToken.value))
 const liveBlockedReason = computed(() => {
-  if (dirty.value) return '设置有未保存的修改，请先点底部的“保存”，再同步。'
+  if (dirty.value) return '设置有未保存的修改，请先点底部的“保存设置”，再同步。'
   if (!savedLiveEnabled.value) return '请先打开“启用实时数据”、填写网站地址并保存，再同步。'
   return ''
 })
@@ -262,7 +263,6 @@ useAdminEvents(['system_settings','knowledge_bases','model_profiles'], async () 
 </script>
 
 <style scoped>
-.settings-card h3 small { font-weight: 400; font-size: 13px; margin-left: 6px; }
 .live-card { padding: 20px 24px; }
 .live-card :deep(.settings-panel) { border: 0; box-shadow: none; padding: 0; }
 .settings-section :deep(.table-panel.block) { margin-top: 12px; margin-bottom: 0; }
