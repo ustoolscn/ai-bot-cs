@@ -47,13 +47,37 @@ type ChatContentPart struct {
 }
 
 type ChatMessage struct {
-	Role    string            `json:"role"`
-	Content string            `json:"content"`
-	Parts   []ChatContentPart `json:"parts,omitempty"`
+	Role       string            `json:"role"`
+	Content    string            `json:"content"`
+	Parts      []ChatContentPart `json:"parts,omitempty"`
+	ToolCalls  []ToolCall        `json:"toolCalls,omitempty"`
+	ToolCallID string            `json:"toolCallId,omitempty"`
 }
 type ChatResult struct {
 	Content                   string
 	InputTokens, OutputTokens int
+	ToolCalls                 []ToolCall
+}
+
+// ToolCall is a function call requested by the model.
+type ToolCall struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// ToolSpec describes a function the model may call.
+type ToolSpec struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
+// ChatOptions are per-request options.
+type ChatOptions struct {
+	Tools            []ToolSpec
+	MaxOutputTokens  int
+	DisableWebSearch bool
 }
 
 type ChannelAdapter interface {

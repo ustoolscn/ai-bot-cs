@@ -81,20 +81,37 @@ func (c *Client) do(ctx context.Context, path string, payload any, out any) erro
 }
 
 func (c *Client) Chat(ctx context.Context, messages []domain.ChatMessage) (domain.ChatResult, error) {
-	if c.UseResponses {
-		return c.responsesChat(ctx, messages)
-	}
-	return c.completionsChat(ctx, messages)
+	return c.ChatWith(ctx, messages, domain.ChatOptions{})
 }
 
-func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMessage) (domain.ChatResult, error) {
+// ChatWith sends a chat request with optional function tools and limits.
+func (c *Client) ChatWith(ctx context.Context, messages []domain.ChatMessage, opts domain.ChatOptions) (domain.ChatResult, error) {
+	if c.UseResponses {
+		return c.responsesChat(ctx, messages, opts)
+	}
+	return c.completionsChat(ctx, messages, opts)
+}
+
+func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMessage, opts domain.ChatOptions) (domain.ChatResult, error) {
+	type fnCall struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	}
+	type toolCall struct {
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		Function fnCall `json:"function"`
+	}
 	type requestMsg struct {
-		Role    string `json:"role"`
-		Content any    `json:"content"`
+		Role       string     `json:"role"`
+		Content    any        `json:"content"`
+		ToolCalls  []toolCall `json:"tool_calls,omitempty"`
+		ToolCallID string     `json:"tool_call_id,omitempty"`
 	}
 	type responseMsg struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+		Role      string     `json:"role"`
+		Content   string     `json:"content"`
+		ToolCalls []toolCall `json:"tool_calls"`
 	}
 	chatMessages := make([]requestMsg, 0, len(messages))
 	for _, m := range messages {
@@ -102,17 +119,31 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 		if len(m.Parts) > 0 {
 			content = completionContent(m)
 		}
-		chatMessages = append(chatMessages, requestMsg{Role: m.Role, Content: content})
+		rm := requestMsg{Role: m.Role, Content: content, ToolCallID: m.ToolCallID}
+		for _, tc := range m.ToolCalls {
+			rm.ToolCalls = append(rm.ToolCalls, toolCall{ID: tc.ID, Type: "function", Function: fnCall{Name: tc.Name, Arguments: tc.Arguments}})
+		}
+		chatMessages = append(chatMessages, rm)
 	}
 	req := map[string]any{"model": c.Model, "messages": chatMessages, "temperature": 0.3}
 	for key, value := range c.ExtraBody {
-		if key == "model" || key == "messages" || key == "reasoning_effort" {
+		if key == "model" || key == "messages" || key == "reasoning_effort" || key == "tools" {
 			continue
 		}
 		req[key] = value
 	}
 	if c.ReasoningEffort != "" && c.ReasoningEffort != "default" {
 		req["reasoning_effort"] = c.ReasoningEffort
+	}
+	if len(opts.Tools) > 0 {
+		tools := make([]map[string]any, 0, len(opts.Tools))
+		for _, t := range opts.Tools {
+			tools = append(tools, map[string]any{"type": "function", "function": map[string]any{"name": t.Name, "description": t.Description, "parameters": t.Parameters}})
+		}
+		req["tools"] = tools
+	}
+	if opts.MaxOutputTokens > 0 {
+		req["max_tokens"] = opts.MaxOutputTokens
 	}
 	var resp struct {
 		Choices []struct {
@@ -123,27 +154,41 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 			Completion int `json:"completion_tokens"`
 		} `json:"usage"`
 	}
-	if err := c.do(ctx, "/chat/completions", req, &resp); err != nil {
+	err := c.do(ctx, "/chat/completions", req, &resp)
+	if err != nil && opts.MaxOutputTokens > 0 && IsHTTPStatus(err, 400) && strings.Contains(err.Error(), "max_tokens") {
+		delete(req, "max_tokens")
+		req["max_completion_tokens"] = opts.MaxOutputTokens
+		err = c.do(ctx, "/chat/completions", req, &resp)
+	}
+	if err != nil {
 		return domain.ChatResult{}, err
 	}
 	if len(resp.Choices) == 0 {
 		return domain.ChatResult{}, fmt.Errorf("model returned no choices")
 	}
-	return domain.ChatResult{Content: resp.Choices[0].Message.Content, InputTokens: resp.Usage.Prompt, OutputTokens: resp.Usage.Completion}, nil
+	msg := resp.Choices[0].Message
+	result := domain.ChatResult{Content: msg.Content, InputTokens: resp.Usage.Prompt, OutputTokens: resp.Usage.Completion}
+	for _, tc := range msg.ToolCalls {
+		if tc.Function.Name == "" {
+			continue
+		}
+		result.ToolCalls = append(result.ToolCalls, domain.ToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments})
+	}
+	return result, nil
 }
 
-func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessage) (domain.ChatResult, error) {
-	type inputMessage struct {
-		Role    string `json:"role"`
-		Content any    `json:"content"`
-	}
-	input := make([]inputMessage, 0, len(messages))
+func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessage, opts domain.ChatOptions) (domain.ChatResult, error) {
+	input := make([]map[string]any, 0, len(messages))
 	instructions := make([]string, 0, 2)
 	for _, message := range messages {
-		if message.Role == "system" || message.Role == "developer" {
+		switch message.Role {
+		case "system", "developer":
 			if strings.TrimSpace(message.Content) != "" {
 				instructions = append(instructions, message.Content)
 			}
+			continue
+		case "tool":
+			input = append(input, map[string]any{"type": "function_call_output", "call_id": message.ToolCallID, "output": message.Content})
 			continue
 		}
 		role := message.Role
@@ -154,12 +199,26 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 		if len(message.Parts) > 0 {
 			content = responsesContent(message)
 		}
-		input = append(input, inputMessage{Role: role, Content: content})
+		if role != "assistant" || strings.TrimSpace(message.Content) != "" || len(message.Parts) > 0 {
+			input = append(input, map[string]any{"role": role, "content": content})
+		}
+		for _, tc := range message.ToolCalls {
+			input = append(input, map[string]any{"type": "function_call", "call_id": tc.ID, "name": tc.Name, "arguments": tc.Arguments})
+		}
+	}
+	tools := []map[string]any{}
+	if !opts.DisableWebSearch {
+		tools = append(tools, map[string]any{"type": "web_search"})
+	}
+	for _, t := range opts.Tools {
+		tools = append(tools, map[string]any{"type": "function", "name": t.Name, "description": t.Description, "parameters": t.Parameters})
 	}
 	payload := map[string]any{
 		"model": c.Model,
 		"input": input,
-		"tools": []map[string]any{{"type": "web_search"}},
+	}
+	if len(tools) > 0 {
+		payload["tools"] = tools
 	}
 	if len(instructions) > 0 {
 		payload["instructions"] = strings.Join(instructions, "\n\n")
@@ -173,11 +232,17 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 	if c.ReasoningEffort != "" && c.ReasoningEffort != "default" {
 		payload["reasoning"] = map[string]any{"effort": c.ReasoningEffort}
 	}
+	if opts.MaxOutputTokens > 0 {
+		payload["max_output_tokens"] = opts.MaxOutputTokens
+	}
 	var resp struct {
 		OutputText string `json:"output_text"`
 		Output     []struct {
-			Type    string `json:"type"`
-			Content []struct {
+			Type      string `json:"type"`
+			CallID    string `json:"call_id"`
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+			Content   []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
 			} `json:"content"`
@@ -191,7 +256,12 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 		return domain.ChatResult{}, err
 	}
 	parts := make([]string, 0, 2)
+	var calls []domain.ToolCall
 	for _, output := range resp.Output {
+		if output.Type == "function_call" && output.Name != "" {
+			calls = append(calls, domain.ToolCall{ID: output.CallID, Name: output.Name, Arguments: output.Arguments})
+			continue
+		}
 		if output.Type != "message" {
 			continue
 		}
@@ -205,10 +275,10 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 	if content == "" {
 		content = strings.TrimSpace(resp.OutputText)
 	}
-	if content == "" {
+	if content == "" && len(calls) == 0 {
 		return domain.ChatResult{}, fmt.Errorf("responses API returned no output_text")
 	}
-	return domain.ChatResult{Content: content, InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens}, nil
+	return domain.ChatResult{Content: content, InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens, ToolCalls: calls}, nil
 }
 
 func completionContent(message domain.ChatMessage) []map[string]any {

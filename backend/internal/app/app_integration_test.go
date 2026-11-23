@@ -182,7 +182,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 		return false, fmt.Errorf("sent=%d sends=%d inbox=%s outbox=%s", sent, mock.QQSendCount(), inboxStatus, outboxStates)
 	})
 
-	chatRequests := mock.ChatRequests()
+	chatRequests := mainChatRequests(mock.ChatRequests())
 	if len(chatRequests) != 1 {
 		t.Fatalf("expected one chat request, got %d", len(chatRequests))
 	}
@@ -218,7 +218,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 
 	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, mentionBody)
 	time.Sleep(250 * time.Millisecond)
-	if mock.ChatCount() != 1 || mock.QQSendCount() != 2 {
+	if len(mainChatRequests(mock.ChatRequests())) != 1 || mock.QQSendCount() != 2 {
 		t.Fatalf("duplicate event was processed again: chats=%d sends=%d", mock.ChatCount(), mock.QQSendCount())
 	}
 	var webhookEvents, inboundMessages, agentRuns, outboundMessages int
@@ -252,9 +252,9 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	eventually(t, 8*time.Second, "image answer delivered to QQ", func() (bool, error) {
 		var sent int
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
-		return sent == 6 && mock.ChatCount() == 3 && mock.QQSendCount() == 6 && mock.QQRetractionCount() == 3, err
+		return sent == 6 && len(mainChatRequests(mock.ChatRequests())) == 3 && mock.QQSendCount() == 6 && mock.QQRetractionCount() == 3, err
 	})
-	imageChatPayload := string(mock.ChatRequests()[2])
+	imageChatPayload := string(mainChatRequests(mock.ChatRequests())[2])
 	if !strings.Contains(imageChatPayload, `"type":"image_url"`) || !strings.Contains(imageChatPayload, `"url":"data:image/png;base64,`) {
 		t.Fatalf("image was not sent to the multimodal model: %s", imageChatPayload)
 	}
@@ -494,7 +494,7 @@ func TestModel403ExcludesMessageFromFutureContext(t *testing.T) {
 		return false, fmt.Errorf("sent=%d outbox=%s", sent, strings.Join(states, ", "))
 	})
 	mu.Lock()
-	requests := append([][]byte(nil), chatBodies...)
+	requests := mainChatRequests(append([][]byte(nil), chatBodies...))
 	mu.Unlock()
 	if len(requests) != 2 {
 		t.Fatalf("403 request should not retry: requests=%d", len(requests))
@@ -605,8 +605,11 @@ func (m *upstreamMock) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		m.mu.Lock()
 		m.chatBodies = append(m.chatBodies, append([]byte(nil), body...))
-		content := m.nextChatContent
-		m.nextChatContent = ""
+		content := ""
+		if bytes.Contains(body, []byte("当前场景")) {
+			content = m.nextChatContent
+			m.nextChatContent = ""
+		}
 		m.mu.Unlock()
 		if content == "" {
 			content = "根据知识库，退款期限是七天。"
@@ -928,4 +931,16 @@ func eventually(t *testing.T, timeout time.Duration, description string, check f
 		t.Fatalf("timed out waiting for %s: %v", description, lastErr)
 	}
 	t.Fatalf("timed out waiting for %s", description)
+}
+
+// mainChatRequests keeps only reply-generation requests, dropping auxiliary
+// calls (question rewrite, evaluation, summaries) made by background jobs.
+func mainChatRequests(all [][]byte) [][]byte {
+	var out [][]byte
+	for _, r := range all {
+		if bytes.Contains(r, []byte("当前场景")) {
+			out = append(out, r)
+		}
+	}
+	return out
 }

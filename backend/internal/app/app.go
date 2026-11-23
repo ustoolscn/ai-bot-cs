@@ -40,6 +40,7 @@ type App struct {
 	images    *storage.Local
 	imageHTTP *http.Client
 	log       *slog.Logger
+	live      liveCache
 }
 
 func New(ctx context.Context, cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (*App, error) {
@@ -73,6 +74,7 @@ func (a *App) recoverTasks(ctx context.Context) error {
 		"UPDATE outbox_tasks SET status='pending',locked_at=NULL,next_attempt_at=now(),updated_at=now() WHERE status='processing'",
 		"UPDATE message_retractions SET status='pending',locked_at=NULL,next_attempt_at=now(),updated_at=now() WHERE status='processing'",
 		"UPDATE knowledge_documents SET status='pending',next_attempt_at=now(),updated_at=now() WHERE status='processing'",
+		"UPDATE agent_jobs SET status='pending',locked_at=NULL,next_attempt_at=now(),updated_at=now() WHERE status='processing'",
 	}
 	for _, query := range queries {
 		if _, err := a.db.Exec(ctx, query); err != nil {
@@ -136,6 +138,52 @@ func (a *App) Router() http.Handler {
 	auth.GET("/system/settings", a.getSystemSettings)
 	auth.PUT("/system/settings", a.putSystemSettings)
 	auth.POST("/system/retry-failed", a.retryFailedTasks)
+	auth.GET("/system/alerts", a.listAlerts)
+	auth.POST("/system/alerts/ack", a.ackAlerts)
+	auth.GET("/agent/settings", a.getAgentSettings)
+	auth.PUT("/agent/settings", a.putAgentSettings)
+	auth.GET("/agent/live-data", a.getLiveData)
+	auth.POST("/agent/live-data/refresh", a.refreshLiveDataNow)
+	auth.GET("/skills", a.listSkills)
+	auth.POST("/skills", a.saveSkill)
+	auth.PUT("/skills/:id", a.saveSkill)
+	auth.DELETE("/skills/:id", a.deleteSkill)
+	auth.GET("/tools", a.listTools)
+	auth.POST("/tools", a.saveTool)
+	auth.PUT("/tools/:id", a.saveTool)
+	auth.DELETE("/tools/:id", a.deleteTool)
+	auth.POST("/tools/:id/test", a.testTool)
+	auth.GET("/conversations/:id/members", a.listMembers)
+	auth.PUT("/conversations/:id/members/:userId", a.updateMember)
+	auth.GET("/conversations/:id/summaries", a.getSummary)
+	auth.GET("/memories", a.listMemories)
+	auth.POST("/memories", a.createMemory)
+	auth.PUT("/memories/:id", a.updateMemory)
+	auth.DELETE("/memories/:id", a.deleteMemory)
+	auth.GET("/handoffs", a.listHandoffs)
+	auth.POST("/handoffs/:id/resolve", a.resolveHandoff)
+	auth.POST("/messages/:id/reply", a.humanReply)
+	auth.POST("/messages/:id/feedback", a.createFeedback)
+	auth.GET("/feedback", a.listFeedback)
+	auth.GET("/learning/stats", a.learningStats)
+	auth.GET("/knowledge/candidates", a.listCandidates)
+	auth.POST("/knowledge/candidates/:id/approve", a.approveCandidateAPI)
+	auth.POST("/knowledge/candidates/:id/reject", a.rejectCandidate)
+	auth.GET("/knowledge/entries", a.listEntries)
+	auth.POST("/knowledge/entries", a.createEntryAPI)
+	auth.PUT("/knowledge/entries/:id", a.updateEntryAPI)
+	auth.DELETE("/knowledge/entries/:id", a.deleteEntryAPI)
+	auth.GET("/knowledge/gaps", a.listGaps)
+	auth.POST("/knowledge/gaps/:id/answer", a.answerGap)
+	auth.POST("/knowledge/gaps/:id/ignore", a.ignoreGap)
+	auth.GET("/eval/cases", a.listEvalCases)
+	auth.POST("/eval/cases", a.saveEvalCase)
+	auth.PUT("/eval/cases/:id", a.saveEvalCase)
+	auth.DELETE("/eval/cases/:id", a.deleteEvalCase)
+	auth.POST("/eval/cases/from-entries", a.evalCasesFromEntries)
+	auth.GET("/eval/runs", a.listEvalRuns)
+	auth.POST("/eval/runs", a.createEvalRun)
+	auth.GET("/eval/runs/:id/results", a.getEvalRun)
 	r.NoRoute(gin.WrapH(webui.Handler()))
 	return r
 }
@@ -583,7 +631,7 @@ func (a *App) listMessages(c *gin.Context) {
 	}
 	query := `SELECT m.id::text,m.content AS question,m.parts,m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",
 		m.platform_message_id AS "platformMessageId",c.name AS "conversationName",b.name AS "botName",
-		COALESCE(om.content,'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",COALESCE(ar.status,t.status) AS status,
+		COALESCE((SELECT string_agg(x.content, E'\n\n' ORDER BY x.event_at) FROM messages x WHERE x.conversation_id=m.conversation_id AND x.direction='outbound' AND x.event_type IN ('AI_RESPONSE','HUMAN_REPLY') AND x.reply_to_message_id=m.platform_message_id),'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",COALESCE(ar.status,t.status) AS status,
 		COALESCE(mp.name,mp.model,'') AS model,COALESCE(mc.input_tokens,0) AS "inputTokens",COALESCE(mc.output_tokens,0) AS "outputTokens",
 		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
 		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END AS "knowledgeHits",
@@ -599,7 +647,7 @@ func (a *App) listMessages(c *gin.Context) {
 	LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true
 	LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY created_at DESC LIMIT 1) mc ON true
 	LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
-	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true
+	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND reply_to_message_id=m.platform_message_id ORDER BY created_at ASC LIMIT 1) om ON true
 	LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
 	ORDER BY m.event_at DESC LIMIT $1`
 	rows, err := a.db.Query(c, query, limit)
@@ -621,7 +669,7 @@ func (a *App) getMessage(c *gin.Context) {
 	var msg map[string]any
 	rows, err := a.db.Query(c, `SELECT m.id::text,m.content AS question,m.parts,m.sender_id AS "senderId",m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",m.raw_event AS "rawEvent",
 		m.platform_message_id AS "platformMessageId",c.name AS "conversationName",b.name AS "botName",
-		COALESCE(om.content,'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",COALESCE(ar.status,t.status) AS status,
+		COALESCE((SELECT string_agg(x.content, E'\n\n' ORDER BY x.event_at) FROM messages x WHERE x.conversation_id=m.conversation_id AND x.direction='outbound' AND x.event_type IN ('AI_RESPONSE','HUMAN_REPLY') AND x.reply_to_message_id=m.platform_message_id),'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",COALESCE(ar.status,t.status) AS status,
 		COALESCE(mp.name,mp.model,'') AS model,COALESCE(mc.input_tokens,0) AS "inputTokens",COALESCE(mc.output_tokens,0) AS "outputTokens",
 		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
 		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END AS "knowledgeHits",
@@ -637,7 +685,7 @@ func (a *App) getMessage(c *gin.Context) {
 	LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true
 	LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY created_at DESC LIMIT 1) mc ON true
 	LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
-	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true
+	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND reply_to_message_id=m.platform_message_id ORDER BY created_at ASC LIMIT 1) om ON true
 	LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
 	WHERE m.id=$1`, c.Param("id"))
 	if err == nil {
@@ -651,13 +699,25 @@ func (a *App) getMessage(c *gin.Context) {
 		return
 	}
 	decorateMessageParts(msg)
-	runs, _ := a.db.Query(c, `SELECT r.id::text,r.status,r.context_messages AS "contextMessages",r.retrieved_chunks AS "retrievedChunks",
+	runs, _ := a.db.Query(c, `SELECT r.id::text,r.status,r.context_messages AS "contextMessages",r.rewritten_query AS "rewrittenQuery",r.steps,r.evaluation,r.retrieved_chunks AS "retrievedChunks",
 		r.context_latency_ms AS "contextLatencyMs",r.retrieval_latency_ms AS "retrievalLatencyMs",r.error,r.started_at AS "startedAt",r.completed_at AS "completedAt",
 		COALESCE(json_agg(json_build_object('kind',mc.kind,'profileName',COALESCE(mp.name,mp.model,''),'model',COALESCE(mp.model,''),'inputTokens',mc.input_tokens,'outputTokens',mc.output_tokens,'latencyMs',mc.latency_ms,'error',mc.error) ORDER BY mc.created_at) FILTER(WHERE mc.id IS NOT NULL),'[]') AS calls
 	FROM agent_runs r LEFT JOIN model_calls mc ON mc.agent_run_id=r.id LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
 	WHERE r.message_id=$1 GROUP BY r.id ORDER BY r.started_at DESC`, c.Param("id"))
 	rd, _ := rowsJSON(runs)
 	msg["agentRuns"] = rd
+	fb, _ := a.db.Query(c, `SELECT f.id::text,f.source,f.rating,f.comment,f.corrected_answer AS "correctedAnswer",f.created_at AS "createdAt" FROM message_feedback f JOIN messages o ON o.id=f.message_id
+		JOIN messages i ON i.conversation_id=o.conversation_id AND i.platform_message_id=o.reply_to_message_id WHERE i.id=$1 ORDER BY f.created_at DESC`, c.Param("id"))
+	fd, _ := rowsJSON(fb)
+	msg["feedback"] = fd
+	var replies []map[string]any
+	if rr, err := a.db.Query(c, `SELECT x.id::text,x.event_type AS "eventType",x.content,x.status,x.event_at AS "eventAt" FROM messages i JOIN messages x ON x.conversation_id=i.conversation_id AND x.reply_to_message_id=i.platform_message_id AND x.direction='outbound' AND x.event_type<>'PROCESSING_ACK' WHERE i.id=$1 ORDER BY x.event_at`, c.Param("id")); err == nil {
+		replies, _ = rowsJSON(rr)
+	}
+	msg["replies"] = replies
+	var senderStaff bool
+	_ = a.db.QueryRow(c, `SELECT COALESCE(cm.is_staff,false) FROM messages m LEFT JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id WHERE m.id=$1`, c.Param("id")).Scan(&senderStaff)
+	msg["senderIsStaff"] = senderStaff
 	ok(c, msg)
 }
 
@@ -957,6 +1017,10 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 	if err != nil {
 		return err
 	}
+	var senderIsStaff bool
+	if msg.ConversationType == "group" && msg.SenderID != "" {
+		_ = tx.QueryRow(ctx, "SELECT is_staff FROM conversation_members WHERE conversation_id=$1 AND platform_user_id=$2", cid, msg.SenderID).Scan(&senderIsStaff)
+	}
 	var blocked bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM blocked_users WHERE bot_id=$1 AND platform_user_id=$2 AND (conversation_id IS NULL OR conversation_id=$3))`, msg.BotID, msg.SenderID, cid).Scan(&blocked); err != nil {
 		return err
@@ -976,7 +1040,13 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 	if err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
+	if senderIsStaff && strings.TrimSpace(msg.Text) != "" {
+		a.enqueueJob(ctx, "staff_answer", map[string]any{"messageId": mid}, "staff_answer:"+mid)
+	}
+	return nil
 }
 
 func inboundConversationName(msg *domain.InboundMessage) string {
