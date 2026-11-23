@@ -5,7 +5,8 @@ ARG RUNTIME_IMAGE=docker.m.daocloud.io/library/alpine:3.23
 FROM ${NODE_IMAGE} AS frontend-build
 ARG PNPM_REGISTRY=https://registry.npmmirror.com
 WORKDIR /src/frontend
-RUN corepack enable && pnpm config set registry ${PNPM_REGISTRY}
+ARG PNPM_VERSION=10.11.0
+RUN npm install --global pnpm@${PNPM_VERSION} --registry=${PNPM_REGISTRY} && pnpm config set registry ${PNPM_REGISTRY}
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY frontend/ ./
