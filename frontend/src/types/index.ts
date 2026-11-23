@@ -17,7 +17,7 @@ export interface Bot {
 export interface ModelProfile {
   id: string
   name: string
-  kind: 'chat' | 'embedding'
+  kind: 'chat' | 'embedding' | 'image'
   provider: string
   model: string
   baseUrl: string
@@ -65,6 +65,7 @@ export interface ModelTestInput {
 export type ModelTestResult =
   | { kind: 'chat'; model: string; content: string; latencyMs: number; inputTokens: number; outputTokens: number }
   | { kind: 'embedding'; model: string; dimensions: number; vectorPreview: number[]; latencyMs: number }
+  | { kind: 'image'; model: string; imageUrl?: string; latencyMs: number }
 
 export interface Conversation {
   serviceId?: string

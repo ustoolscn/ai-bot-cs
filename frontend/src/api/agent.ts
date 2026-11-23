@@ -2,22 +2,16 @@ import { request } from './client'
 import * as mock from '@/mock/agent'
 
 export interface AgentExample { question: string; answer: string }
+export type StatusImageStyle = 'brief' | 'table' | 'heatmap' | 'night' | 'page' | 'off'
 export interface LiveDataSettings {
   enabled: boolean
   baseUrl: string
   hasAccessToken: boolean
   userId: string
-  refreshSeconds: number
-  syncAnnouncements: boolean
-  announcementKnowledgeBaseId: string
   injectSnapshot: boolean
   priceNote: string
   statusPageUrl?: string
-}
-export interface ImageGenerationSettings {
-  baseUrl: string
-  model: string
-  hasApiKey?: boolean
+  statusImageStyle?: StatusImageStyle
 }
 export interface AgentSettings {
   personaName: string
@@ -48,7 +42,6 @@ export interface AgentSettings {
   learningKnowledgeBaseId: string
   gapSimilarity: number
   liveData: LiveDataSettings
-  imageGeneration?: ImageGenerationSettings
 }
 
 export interface Announcement { content: string; publishDate: string; type?: string }
@@ -140,7 +133,7 @@ export interface MessageAgentDetail {
 export const agentApi = {
   settings: {
     get: () => request<AgentSettings>({ url: '/agent/settings' }, mock.mockAgentSettings),
-    save: (settings: AgentSettings, accessToken?: string, imageGenerationApiKey?: string) => request<AgentSettings>({ method: 'PUT', url: '/agent/settings', data: { ...settings, ...(accessToken === undefined ? {} : { liveDataAccessToken: accessToken }), ...(imageGenerationApiKey === undefined ? {} : { imageGenerationApiKey }) } }),
+    save: (settings: AgentSettings, accessToken?: string) => request<AgentSettings>({ method: 'PUT', url: '/agent/settings', data: accessToken === undefined ? settings : { ...settings, liveDataAccessToken: accessToken } }),
   },
   liveData: {
     get: () => request<LiveData>({ url: '/agent/live-data' }, mock.mockLiveData),

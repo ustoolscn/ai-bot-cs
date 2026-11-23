@@ -7,6 +7,8 @@ export default defineConfig({
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   server: {
     port: 5173,
+    // 状态图模板放在后端目录，前端预览直接读取同一份文件
+    fs: { allow: ['..'] },
     proxy: {
       '/api': {
         target: process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:8080',

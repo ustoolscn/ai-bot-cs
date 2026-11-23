@@ -21,6 +21,8 @@
               <el-select v-model="form.simpleProfileId" clearable :value-on-clear="''" placeholder="跟随通用设置"><el-option v-for="m in chatModels" :key="m.id" :value="m.id" :label="m.name" :disabled="m.status === 'offline'" /></el-select></div>
             <div class="setting-row"><div><strong>群消息判断模型</strong><span>判断群消息要不要接话</span></div>
               <el-select v-model="form.decisionProfileId" clearable :value-on-clear="''" placeholder="跟随通用设置"><el-option v-for="m in chatModels" :key="m.id" :value="m.id" :label="m.name" :disabled="m.status === 'offline'" /></el-select></div>
+            <div class="setting-row"><div><strong>生图模型</strong><span>“生成图片”技能用哪个模型，在“模型”页添加</span></div>
+              <el-select v-model="form.imageProfileId" clearable :value-on-clear="''" :placeholder="imageModels.length ? '不使用生图' : '还没有生图模型'"><el-option v-for="m in imageModels" :key="m.id" :value="m.id" :label="m.name + ' · ' + m.model" :disabled="m.status === 'offline'" /></el-select></div>
           </div>
         </section>
 
@@ -46,7 +48,9 @@
             <div class="setting-row"><div><strong>启用</strong></div><el-switch v-model="live.enabled" /></div>
             <template v-if="live.enabled">
               <div class="setting-row"><div><strong>网站地址</strong></div><el-input v-model="live.baseUrl" placeholder="https://" /></div>
-              <div class="setting-row"><div><strong>状态页地址</strong><span>问到分组或服务状态时截图发给用户</span></div><el-input v-model="live.statusPageUrl" placeholder="https://" /></div>
+              <div class="setting-row stack"><div><strong>状态图样式</strong><span>用户问分组或服务状态时，用网站实时数据画成图片发出，并由 AI 写一句结论</span></div>
+                <StatusStylePicker v-model="statusStyle" /></div>
+              <div v-if="statusStyle === 'page'" class="setting-row"><div><strong>状态页地址</strong><span>截取这个网页发给用户</span></div><el-input v-model="live.statusPageUrl" placeholder="https://" /></div>
               <div class="setting-row"><div><strong>系统访问令牌</strong><span>只有价格页需要登录时才填</span></div>
                 <div>
                   <el-input v-model="accessToken" type="password" show-password :placeholder="live.hasAccessToken && !clearToken ? '已保存，留空不修改' : '可不填'" />
@@ -54,11 +58,7 @@
                 </div>
               </div>
               <div class="setting-row"><div><strong>用户 ID</strong></div><el-input v-model="live.userId" /></div>
-              <div class="setting-row"><div><strong>刷新间隔</strong></div><span><el-input-number v-model="live.refreshSeconds" :min="30" :max="3600" :step="30" /><span class="unit-label">秒</span></span></div>
               <div class="setting-row"><div><strong>公告和异常分组放进提示词</strong></div><el-switch v-model="live.injectSnapshot" /></div>
-              <div class="setting-row"><div><strong>公告同步到知识库</strong></div><el-switch v-model="live.syncAnnouncements" /></div>
-              <div v-if="live.syncAnnouncements" class="setting-row"><div><strong>同步到</strong></div>
-                <el-select v-model="live.announcementKnowledgeBaseId" clearable placeholder="选择知识库"><el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" /></el-select></div>
               <div class="setting-row"><div><strong>报价附带说明</strong></div><el-input v-model="live.priceNote" /></div>
             </template>
           </div>
@@ -136,8 +136,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import LiveDataPanel from '@/components/agent/LiveDataPanel.vue'
+import StatusStylePicker from '@/components/agent/StatusStylePicker.vue'
 import { api } from '@/api'
-import { agentApi, type Skill } from '@/api/agent'
+import { agentApi, type Skill, type StatusImageStyle } from '@/api/agent'
 import { botServices, type BotService } from '@/api/support'
 import type { KnowledgeBase, ModelProfile } from '@/types'
 
@@ -172,7 +173,13 @@ const clearToken = ref(false)
 const activeSection = ref('basic')
 const livePanel = ref<InstanceType<typeof LiveDataPanel> | null>(null)
 const chatModels = computed(() => models.value.filter(m => m.kind === 'chat'))
+const imageModels = computed(() => models.value.filter(m => m.kind === 'image'))
 const live = computed(() => form.value!.settings.liveData)
+// 旧配置没有样式字段：填过状态页地址的沿用截网页，否则默认简报
+const statusStyle = computed({
+  get: () => live.value.statusImageStyle || (live.value.statusPageUrl ? 'page' : 'brief'),
+  set: (value: StatusImageStyle) => { live.value.statusImageStyle = value },
+})
 const liveSource = computed(() => botServices(props.botId).liveData(props.serviceId))
 const dirty = computed(() => !!form.value && (isNew.value || JSON.stringify(form.value) !== snapshot.value || !!accessToken.value.trim() || clearToken.value))
 const liveBlockedReason = computed(() => {
@@ -206,7 +213,7 @@ async function load() {
     ]
     if (isNew.value) {
       apply({
-        id: '', name: '', instructions: '', chatProfileId: '', simpleProfileId: '', decisionProfileId: '',
+        id: '', name: '', instructions: '', chatProfileId: '', imageProfileId: '', simpleProfileId: '', decisionProfileId: '',
         settings: {
           stylePrompt: defaults.stylePrompt, examples: structuredClone(defaults.examples || []), toolsEnabled: defaults.toolsEnabled, maxToolSteps: defaults.maxToolSteps,
           skillIds: null, toolNames: null, knowledgeBaseIds: null, evaluationEnabled: defaults.evaluationEnabled, staffMiningEnabled: defaults.staffMiningEnabled,

@@ -24,6 +24,8 @@ export interface BotService {
   name: string
   instructions: string
   chatProfileId: string
+  /** 生图技能用的模型（模型页里 kind=image 的配置），空表示不能生图 */
+  imageProfileId?: string
   simpleProfileId: string
   decisionProfileId: string
   settings: ServiceSettings
@@ -34,7 +36,7 @@ const mockService: BotService = {
   settings: {
     stylePrompt: '像熟练的真人客服一样说话，先给结论，一般 1～3 句话。', examples: [], toolsEnabled: true, maxToolSteps: 4, skillIds: null, toolNames: null, knowledgeBaseIds: null,
     evaluationEnabled: true, staffMiningEnabled: true, autoPublishStaff: false, autoPublishMinConfidence: 0.85, learningKnowledgeBaseId: '', handoffPauseMinutes: 30,
-    liveData: { enabled: true, baseUrl: 'https://example.com', hasAccessToken: false, userId: '', refreshSeconds: 300, syncAnnouncements: false, announcementKnowledgeBaseId: '', injectSnapshot: true, priceNote: '', statusPageUrl: '' },
+    liveData: { enabled: true, baseUrl: 'https://example.com', hasAccessToken: false, userId: '', injectSnapshot: true, priceNote: '', statusPageUrl: '' },
   },
 }
 

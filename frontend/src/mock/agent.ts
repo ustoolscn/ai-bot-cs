@@ -32,8 +32,7 @@ export const mockAgentSettings: AgentSettings = {
   autoPublishMinConfidence: 0.85,
   learningKnowledgeBaseId: '',
   gapSimilarity: 0.82,
-  liveData: { enabled: true, baseUrl: 'https://example-api.com', hasAccessToken: false, userId: '', refreshSeconds: 300, syncAnnouncements: true, announcementKnowledgeBaseId: '', injectSnapshot: true, priceNote: '价格以官网为准' },
-  imageGeneration: { baseUrl: '', model: 'gpt-image-2.6-flare', hasApiKey: false },
+  liveData: { enabled: true, baseUrl: 'https://example-api.com', hasAccessToken: false, userId: '', injectSnapshot: true, priceNote: '价格以官网为准' },
 }
 
 export const mockLiveData: LiveData = {
