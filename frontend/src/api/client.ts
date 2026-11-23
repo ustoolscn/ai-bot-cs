@@ -19,11 +19,12 @@ export async function request<T>(config: AxiosRequestConfig, fallback?: T): Prom
   } catch (error) {
     if (error instanceof ApiError) throw error
     const axiosError = error as AxiosError<ApiErrorEnvelope>
-    const backendUnavailable = !axiosError.response || axiosError.code === 'ECONNABORTED' || (axiosError.response.status >= 500)
-    if (backendUnavailable) connection.lost = true
+    const status = axiosError.response?.status
+    const backendUnavailable = !axiosError.response || status === 502 || status === 503 || status === 504
+    connection.lost = backendUnavailable
     if (hasFallback && backendUnavailable && mockFallbackEnabled) { connection.usingMock = true; return structuredClone(fallback) as T }
     const apiError = axiosError.response?.data?.error
-    throw new ApiError(apiError?.code || 'NETWORK_ERROR', apiError?.message || '暂时无法连接到服务', axiosError.response?.status)
+    throw new ApiError(apiError?.code || (backendUnavailable ? 'NETWORK_ERROR' : 'HTTP_ERROR'), apiError?.message || (backendUnavailable ? '暂时无法连接到服务' : `请求失败（HTTP ${status}）`), status)
   }
 }
 

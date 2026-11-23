@@ -15,15 +15,15 @@ type scheduleInput struct {
 
 func (a *App) scheduledPostRoutes(r *gin.RouterGroup) {
 	for _, path := range []string{"/schedules", "/conversations/:id/schedules"} {
-		g := r.Group(path)
+		g := r.Group(path, validateScheduleID)
 		g.GET("", a.listSchedules)
 		g.POST("", a.saveSchedule)
 		g.PUT("/:item", a.saveSchedule)
 		g.DELETE("/:item", a.deleteSchedule)
 	}
-	r.POST("/schedules/:item/test", a.testSchedule)
-	r.GET("/schedules/:item/runs", func(c *gin.Context) {
-		queryList(c, a, `SELECT r.id,r.created_at AS "createdAt",r.is_test AS "isTest",c.name AS "groupName",b.name AS "botName",
+	r.POST("/schedules/:item/test", validateScheduleID, a.testSchedule)
+	r.GET("/schedules/:item/runs", validateScheduleID, func(c *gin.Context) {
+		queryList(c, a, `SELECT r.id::text AS id,r.created_at AS "createdAt",r.is_test AS "isTest",c.name AS "groupName",b.name AS "botName",
  CASE WHEN o.status IN ('sent','failed','expired') THEN o.status WHEN j.status='failed' THEN 'failed' WHEN (s.revision<>r.revision OR NOT c.enabled OR NOT b.enabled OR (NOT s.enabled AND NOT r.is_test)) THEN 'cancelled'
  ELSE coalesce(o.status,j.status,'pending') END AS status,coalesce(o.last_error,j.last_error,'') AS error
  FROM (SELECT * FROM schedule_runs WHERE schedule_id=$1 ORDER BY created_at DESC LIMIT 10) r
@@ -32,11 +32,19 @@ func (a *App) scheduledPostRoutes(r *gin.RouterGroup) {
 	})
 }
 
+func validateScheduleID(c *gin.Context) {
+	if id := c.Param("item"); id != "" && parseUUID(id) != nil {
+		fail(c, 400, "invalid_schedule_id", "任务 ID 格式无效，请刷新任务列表")
+		c.Abort()
+		return
+	}
+}
+
 // The former group endpoint can manage single-group tasks only.
 const singleSchedule = `(NOT s.all_groups AND ARRAY(SELECT conversation_id FROM schedule_targets WHERE schedule_id=s.id)=ARRAY[$1::uuid])`
 
 func (a *App) listSchedules(c *gin.Context) {
-	q := `SELECT s.id,s.name,to_char(s.send_time,'HH24:MI') AS "sendTime",s.instruction,s.format,s.source,s.enabled,s.all_groups AS "allGroups",
+	q := `SELECT s.id::text AS id,s.name,to_char(s.send_time,'HH24:MI') AS "sendTime",s.instruction,s.format,s.source,s.enabled,s.all_groups AS "allGroups",
  ARRAY(SELECT conversation_id::text FROM schedule_targets WHERE schedule_id=s.id ORDER BY conversation_id) AS "groupIds",
  coalesce((SELECT service_id::text FROM schedule_targets WHERE schedule_id=s.id LIMIT 1),'') AS "serviceId"
  FROM scheduled_posts s`

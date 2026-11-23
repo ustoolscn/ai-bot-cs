@@ -66,7 +66,18 @@ func TestScheduleDistributionAndReviewDeletion(t *testing.T) {
 	insert("INSERT INTO model_profiles(name,kind,base_url,api_key_enc,model,enabled,is_default,web_search_mode) VALUES('search','chat',$1,$2,'search',true,true,'responses')", mock.URL+"/v1", secret)
 	input := map[string]any{"name": "天气", "sendTime": "08:00", "instruction": "查询天气", "source": "web", "format": "text", "enabled": true, "groupIds": []string{one, two}}
 	id := createdID(t, requestJSON(t, client, "POST", api+"schedules", input, 200))
-	path := api + "schedules/" + id
+	items := dataSlice(t, requestJSON(t, client, "GET", api+"schedules", nil, 200))
+	if len(items) != 1 {
+		t.Fatalf("unexpected schedule count: %d", len(items))
+	}
+	listID, ok := items[0].(map[string]any)["id"].(string)
+	if !ok || listID != id {
+		t.Fatalf("unexpected schedule ID: %v", items[0])
+	}
+	path := api + "schedules/" + listID
+	for _, action := range []struct{ method, suffix string }{{"DELETE", ""}, {"PUT", ""}, {"POST", "/test"}, {"GET", "/runs"}} {
+		requestJSON(t, client, action.method, api+"schedules/1,2,3"+action.suffix, nil, 400)
+	}
 	_, three := makeGroup(3)
 	testBody := map[string]any{"requestId": uuid.NewString(), "groupIds": []string{three}}
 	requestJSON(t, client, "POST", path+"/test", testBody, 400)
@@ -119,6 +130,9 @@ func TestScheduleDistributionAndReviewDeletion(t *testing.T) {
 		}
 		count(1, "SELECT count(*) FROM "+tc.table+" WHERE id=$1", keep)
 	}
+
+	requestJSON(t, client, "DELETE", path, nil, 200)
+	count(0, "SELECT count(*) FROM scheduled_posts WHERE id=$1", listID)
 
 	// Replaying migrations also upgrades an old single-group task with its existing delivery job.
 	oldJob := uuid.NewString()
