@@ -154,7 +154,7 @@ const sections = [
 const toolLabels: Record<string, string> = {
   publish_html_page: '发布网页链接', render_html_image: 'HTML 排版成图片', search_knowledge: '检索知识库', get_model_price: '查询模型价格',
   get_service_status: '查询服务状态', get_group_status: '查询分组状态', get_announcements: '获取网站公告', remember_user_fact: '记住用户信息',
-  handoff_to_human: '转人工', quote_previous_reply: '引用之前的回复',
+  handoff_to_human: '转人工', quote_previous_reply: '引用之前的回复', generate_image: '生成图片',
 }
 
 const isNew = computed(() => props.serviceId === 'new')

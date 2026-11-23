@@ -14,6 +14,11 @@ export interface LiveDataSettings {
   priceNote: string
   statusPageUrl?: string
 }
+export interface ImageGenerationSettings {
+  baseUrl: string
+  model: string
+  hasApiKey?: boolean
+}
 export interface AgentSettings {
   personaName: string
   stylePrompt: string
@@ -43,6 +48,7 @@ export interface AgentSettings {
   learningKnowledgeBaseId: string
   gapSimilarity: number
   liveData: LiveDataSettings
+  imageGeneration?: ImageGenerationSettings
 }
 
 export interface Announcement { content: string; publishDate: string; type?: string }
@@ -133,7 +139,7 @@ export interface MessageAgentDetail {
 export const agentApi = {
   settings: {
     get: () => request<AgentSettings>({ url: '/agent/settings' }, mock.mockAgentSettings),
-    save: (settings: AgentSettings, accessToken?: string) => request<AgentSettings>({ method: 'PUT', url: '/agent/settings', data: accessToken === undefined ? settings : { ...settings, liveDataAccessToken: accessToken } }),
+    save: (settings: AgentSettings, accessToken?: string, imageGenerationApiKey?: string) => request<AgentSettings>({ method: 'PUT', url: '/agent/settings', data: { ...settings, ...(accessToken === undefined ? {} : { liveDataAccessToken: accessToken }), ...(imageGenerationApiKey === undefined ? {} : { imageGenerationApiKey }) } }),
   },
   liveData: {
     get: () => request<LiveData>({ url: '/agent/live-data' }, mock.mockLiveData),

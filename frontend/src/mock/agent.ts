@@ -33,6 +33,7 @@ export const mockAgentSettings: AgentSettings = {
   learningKnowledgeBaseId: '',
   gapSimilarity: 0.82,
   liveData: { enabled: true, baseUrl: 'https://example-api.com', hasAccessToken: false, userId: '', refreshSeconds: 300, syncAnnouncements: true, announcementKnowledgeBaseId: '', injectSnapshot: true, priceNote: '价格以官网为准' },
+  imageGeneration: { baseUrl: '', model: 'gpt-image-2.6-flare', hasApiKey: false },
 }
 
 export const mockLiveData: LiveData = {
@@ -53,6 +54,7 @@ export const mockSkills: Skill[] = [
 ]
 export const mockTools: { builtin: BuiltinTool[]; custom: CustomTool[] } = {
   builtin: [
+    { name: 'generate_image', description: '按画面描述调用生图模型，生成图片发给用户', requiresLiveData: false, requiresKnowledgeBase: false },
     { name: 'search_knowledge', description: '检索会话绑定的知识库', requiresLiveData: false, requiresKnowledgeBase: true },
     { name: 'query_price', description: '查询模型实时价格', requiresLiveData: true, requiresKnowledgeBase: false },
     { name: 'request_handoff', description: '把用户转给人工客服', requiresLiveData: false, requiresKnowledgeBase: false },

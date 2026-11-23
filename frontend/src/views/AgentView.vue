@@ -57,6 +57,21 @@
 
         
 
+        <section id="image" class="settings-section">
+          <header><h2>生图模型</h2><p>AI 客服用“生成图片”技能时调用这里的模型。在客服的技能里勾选后生效。</p></header>
+          <div class="settings-card">
+            <div class="setting-row"><div><strong>请求地址</strong><span>需带版本前缀 /v1</span></div>
+              <el-input v-model="imageGen.baseUrl" class="field-wide" placeholder="https://api.example.com/v1" clearable /></div>
+            <div class="setting-row"><div><strong>模型</strong></div>
+              <el-input v-model="imageGen.model" class="field-wide" placeholder="gpt-image-2.6-flare" /></div>
+            <div class="setting-row"><div><strong>API Key</strong><span>{{ keyHint }}</span></div>
+              <div class="key-field">
+                <el-input v-model="imageKey" class="field-wide" type="password" show-password autocomplete="new-password" :placeholder="imageGen.hasApiKey && !clearImageKey ? '已保存，留空不修改' : '填写 API Key'" @input="clearImageKey = false" />
+                <el-button v-if="imageGen.hasApiKey && !clearImageKey && !imageKey" link type="danger" @click="clearImageKey = true">清除</el-button>
+              </div></div>
+          </div>
+        </section>
+
         <section id="skills" class="settings-section">
           <header><h2>技能与工具库</h2><p>在这里维护，每个 AI 客服里选择使用哪些。</p></header>
           <SkillsPanel />
@@ -97,6 +112,7 @@ const sections = [
   { id: 'length', label: '回复长度与格式' },
   { id: 'memory', label: '上下文与记忆' },
   { id: 'aux', label: '辅助模型' },
+  { id: 'image', label: '生图模型' },
   { id: 'skills', label: '技能与工具库' },
 ]
 
@@ -110,11 +126,26 @@ const activeSection = ref('length')
 const chatModels = computed(() => models.value.filter(m => m.kind === 'chat'))
 const embeddingModels = computed(() => models.value.filter(m => m.kind === 'embedding'))
 
-const dirty = computed(() => !!settings.value && (JSON.stringify(settings.value) !== snapshot.value))
+const imageKey = ref('')
+const clearImageKey = ref(false)
+const imageGen = computed(() => settings.value!.imageGeneration!)
+const savedImageBaseUrl = computed(() => snapshot.value ? (JSON.parse(snapshot.value) as AgentSettings).imageGeneration?.baseUrl ?? '' : '')
+const imageUrlChanged = computed(() => !!settings.value && imageGen.value.baseUrl.trim() !== savedImageBaseUrl.value)
+const keyHint = computed(() => {
+  if (clearImageKey.value) return '保存后会清除已保存的 Key'
+  if (imageKey.value) return '保存后生效'
+  if (imageUrlChanged.value) return '换了请求地址，需要重新填写 Key'
+  return imageGen.value.hasApiKey ? '已保存，加密存储' : '未填写，生图暂不可用'
+})
+
+const dirty = computed(() => !!settings.value && (JSON.stringify(settings.value) !== snapshot.value || !!imageKey.value || clearImageKey.value))
 
 function applySettings(value: AgentSettings) {
   value.examples = value.examples || []
+  value.imageGeneration = { baseUrl: '', model: 'gpt-image-2.6-flare', hasApiKey: false, ...value.imageGeneration }
   settings.value = value
+  imageKey.value = ''
+  clearImageKey.value = false
   snapshot.value = JSON.stringify(value)
 }
 
@@ -139,8 +170,14 @@ async function save() {
   if (!settings.value) return
   saving.value = true
   try {
-    const s = { ...settings.value, examples: settings.value.examples.filter(e => e.question.trim() && e.answer.trim()) }
-    applySettings(await agentApi.settings.save(s))
+    if (imageUrlChanged.value && imageGen.value.baseUrl.trim() && !imageKey.value && !clearImageKey.value) {
+      ElMessage.warning('换了生图请求地址，请重新填写 API Key')
+      return
+    }
+    const { hasApiKey: _ignored, ...image } = imageGen.value
+    const s = { ...settings.value, imageGeneration: { baseUrl: image.baseUrl.trim(), model: image.model.trim() || 'gpt-image-2.6-flare' }, examples: settings.value.examples.filter(e => e.question.trim() && e.answer.trim()) }
+    const key = imageKey.value ? imageKey.value.trim() : clearImageKey.value ? '' : undefined
+    applySettings(await agentApi.settings.save(s, undefined, key))
     ElMessage.success('设置已保存')
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '保存失败')
@@ -177,5 +214,7 @@ useAdminEvents(['system_settings','knowledge_bases','model_profiles'], async () 
 <style scoped>
 .live-card { padding: 20px 24px; }
 .live-card :deep(.settings-panel) { border: 0; box-shadow: none; padding: 0; }
+.field-wide { width: 340px; }
+.key-field { display: flex; align-items: center; gap: 8px; }
 .settings-section :deep(.table-panel.block) { margin-top: 12px; margin-bottom: 0; }
 </style>
