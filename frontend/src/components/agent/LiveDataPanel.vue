@@ -10,7 +10,7 @@
     <template v-if="data">
       <dl class="detail-list">
         <div><dt>站点</dt><dd>{{ data.systemName || '—' }}</dd></div>
-        <div><dt>最近成功同步</dt><dd>{{ formatTime(data.fetchedAt) }}</dd></div>
+        <div><dt>最近成功同步</dt><dd>{{ formatTime(data.fetchedAt) }}<span v-if="data.possiblyStale && !data.lastError" class="stale-note">数据可能过时，改过网站后点“立即同步”</span></dd></div>
         <div><dt>最近尝试</dt><dd>{{ formatTime(data.lastAttemptAt) }}</dd></div>
         <div><dt>模型数量</dt><dd>{{ data.modelCount }}</dd></div>
       </dl>
@@ -109,6 +109,7 @@ useAdminEvents(['live_data_snapshots'], load)
 </script>
 
 <style scoped>
+.stale-note { margin-left: 8px; color: var(--warning); font-size: 12px; }
 .price-expression { overflow-wrap: anywhere; white-space: pre-wrap; }
 .panel-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .panel-title h2 { margin: 0; }

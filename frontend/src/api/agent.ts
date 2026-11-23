@@ -73,6 +73,8 @@ export interface LiveData {
   enabled: boolean
   fetchedAt?: string
   lastAttemptAt?: string
+  /** 超过 24 小时未同步、上次同步失败或数据不完整 */
+  possiblyStale?: boolean
   lastError: string
   systemName: string
   notice: string
