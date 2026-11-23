@@ -57,11 +57,12 @@
       </el-tab-pane>
 
       <el-tab-pane name="feedback">
-        <template #label>反馈<span v-if="stats" class="count-pill" :class="{ hot: stats.negativeFeedback7d }" title="最近 7 天差评数">{{ stats.negativeFeedback7d }}</span></template>
-        <div class="toolbar"><el-select v-model="feedbackRating" clearable placeholder="全部评价" aria-label="按评价筛选" @change="loadTab"><el-option v-for="(v, k) in ratingText" :key="k" :label="v" :value="k" /></el-select><span class="spacer" /><el-button type="danger" plain :style="{ visibility: selectedIds.length ? 'visible' : 'hidden' }" :loading="deleting" @click="deleteSelected(tab, names[tab])">删除选中的 {{ selectedIds.length }} 条</el-button></div>
+        <template #label>反馈<span v-if="stats" class="count-pill" :class="{ hot: unreadFeedback }" title="未读差评数，标为已读后数字消失，记录仍保留">{{ unreadFeedback }}</span></template>
+        <div class="toolbar"><el-segmented v-model="feedbackView" :options="[{ label: '全部', value: 'all' }, { label: '未读', value: 'unread' }]" /><el-select v-model="feedbackRating" clearable placeholder="全部评价" aria-label="按评价筛选" @change="loadTab"><el-option v-for="(v, k) in ratingText" :key="k" :label="v" :value="k" /></el-select><span class="spacer" /><el-button v-if="selectedIds.length" :loading="markingRead" @click="markRead({ ids: [...selectedIds] })">选中的标为已读</el-button><el-button v-else :disabled="!feedback.some(f => !f.read)" :loading="markingRead" @click="markRead({ all: true })">全部标为已读</el-button><el-button type="danger" plain :style="{ visibility: selectedIds.length ? 'visible' : 'hidden' }" :loading="deleting" @click="deleteSelected(tab, names[tab])">删除选中的 {{ selectedIds.length }} 条</el-button></div>
         <section class="table-panel">
-          <el-table row-key="id" :key="JSON.stringify([tab,feedbackRating])" v-loading="loading" :data="feedback" @selection-change="(rows: {id:string}[]) => selectRows('feedback',rows)" empty-text="暂无反馈">
+          <el-table row-key="id" :key="JSON.stringify([tab,feedbackRating])" v-loading="loading" :data="shownFeedback" :row-class-name="({ row }: { row: Feedback }) => row.read ? '' : 'is-unread'" @selection-change="(rows: {id:string}[]) => selectRows('feedback',rows)" :empty-text="feedbackView === 'unread' ? '没有未读反馈' : '暂无反馈'">
             <el-table-column type="selection" reserve-selection width="48" />
+            <el-table-column width="76"><template #default="{ row }"><button v-if="!row.read" type="button" class="unread-dot" title="点击标为已读" @click.stop="markRead({ ids: [row.id] })"><i />未读</button><span v-else class="faint">已读</span></template></el-table-column>
             <el-table-column label="问题 / 回答" min-width="380"><template #default="{ row }"><div class="qa"><strong>{{ row.question || '—' }}</strong><span>{{ row.answer }}</span><small v-if="row.correctedAnswer">纠正：{{ row.correctedAnswer }}</small></div></template></el-table-column>
             <el-table-column label="评价" width="90"><template #default="{ row }"><el-tag size="small" :type="['good', 'helpful'].includes(row.rating) ? 'success' : 'danger'">{{ ratingText[row.rating] || row.rating }}</el-tag></template></el-table-column>
             <el-table-column label="来源" width="100"><template #default="{ row }">{{ feedbackSourceText[row.source] || row.source }}</template></el-table-column>
@@ -120,18 +121,33 @@ function clearConversationFilter() { router.replace({ query: { tab: 'candidates'
 
 const entries = ref<Entry[]>([])
 const entryQuery = ref('')
-const entryKB = ref('')
+const entryKB = ref(typeof route.query.kb === 'string' ? route.query.kb : '')
+watch(() => route.query.kb, kb => { if (typeof kb === 'string') entryKB.value = kb })
 const entryStatus = ref('published')
 const gaps = ref<Gap[]>([])
 const feedback = ref<Feedback[]>([])
 const feedbackRating = ref('')
+const feedbackView = ref<'all' | 'unread'>('all')
+const shownFeedback = computed(() => feedbackView.value === 'unread' ? feedback.value.filter(f => !f.read) : feedback.value)
+const unreadFeedback = computed(() => stats.value ? stats.value.unreadNegativeFeedback ?? stats.value.negativeFeedback7d : 0)
+const markingRead = ref(false)
+async function markRead(target: { ids: string[] } | { all: true }) {
+  markingRead.value = true
+  try {
+    await agentApi.learning.markFeedbackRead(target)
+    const ids = 'ids' in target ? new Set(target.ids) : null
+    feedback.value = feedback.value.map(f => !ids || ids.has(f.id) ? { ...f, read: true } : f)
+    selectedIds.value = []
+    stats.value = await agentApi.learning.stats()
+  } catch (e) { ElMessage.error(e instanceof Error ? e.message : '标记失败') } finally { markingRead.value = false }
+}
 const { selectedIds, deleting, deleteSelected } = useBulkDelete(reload)
 const names:Record<string,string>={candidates:'待审核记录',entries:'问答',gaps:'没答上的问题',feedback:'反馈'}
 function selectRows(kind:string,rows:{id:string}[]){if(kind===tab.value){
  const visible = new Set(({candidates,entries,gaps,feedback}[kind as 'candidates'|'entries'|'gaps'|'feedback']).value.map(row=>row.id))
  selectedIds.value=rows.map(row=>row.id).filter(id=>visible.has(id))
  }}
-watch([tab,candidateStatus,candidateConversation,entryQuery,entryKB,entryStatus,feedbackRating],()=>{selectedIds.value=[]},{flush:'sync'})
+watch([tab,candidateStatus,candidateConversation,entryQuery,entryKB,entryStatus,feedbackRating,feedbackView],()=>{selectedIds.value=[]},{flush:'sync'})
 function onTabChange(value: string | number) {
   if (value !== tab.value) router.replace({ query: value === 'documents' ? {} : { tab: String(value) } })
 }
@@ -213,4 +229,10 @@ useAdminEvents(['knowledge_entries','knowledge_candidates','knowledge_gaps','mes
 
 <style scoped>
 .evidence { max-height: 220px; overflow: auto; font-size: 13px; }
+.unread-dot { display: inline-flex; align-items: center; gap: 6px; padding: 2px 0; border: 0; background: none; color: var(--primary-text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.unread-dot i { width: 7px; height: 7px; border-radius: 50%; background: var(--primary); }
+.unread-dot:hover { text-decoration: underline; }
+.unread-dot:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+:deep(.is-unread .qa strong) { font-weight: 600; }
+.faint { font-size: 13px; }
 </style>

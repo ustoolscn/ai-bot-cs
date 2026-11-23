@@ -56,7 +56,7 @@
             <el-option v-for="row in overview.pipelines" :key="row.id" :value="row.id" :label="row.time + ' · ' + (row.content || '群消息')" />
           </el-select>
         </header>
-        <StageBars :stages="shownStages" />
+        <StageBars :stages="shownStages" :waterfall="traceScope !== 'average'" />
         <p class="total-line">{{ traceScope === 'average' ? '平均总用时' : '总用时' }} <strong>{{ shownTotal == null ? '—' : (shownTotal / 1000).toFixed(2) + ' 秒' }}</strong></p>
       </section>
 
@@ -99,6 +99,7 @@ import QueueFlow from '@/components/fx/QueueFlow.vue'
 import StageBars from '@/components/fx/StageBars.vue'
 import type { PipelineRow, SystemOverview, TimingStage } from '@/types'
 import { createEmptyOverview } from '@/utils/overview'
+import { sortByFlow } from '@/utils/stage-meta'
 import { useAuthStore } from '@/stores/auth'
 import { useShellStore } from '@/stores/shell'
 
@@ -156,18 +157,18 @@ const selected = computed(() => overview.value.pipelines.find(row => row.id === 
 const shownTotal = computed(() => traceScope.value === 'average' ? avgTotal.value || null : selected.value ? rowTotal(selected.value) : null)
 const shownStages = computed((): TimingStage[] => {
   if (selected.value) return selected.value.timeline?.stages || legacyStages([selected.value])
-  if (overview.value.stageAverages.length) return overview.value.stageAverages
   const rows = overview.value.pipelines
   const samples = rows.flatMap(row => row.timeline?.stages || [])
+  if (overview.value.stageAverages.length) return sortByFlow(overview.value.stageAverages, samples)
   if (!samples.length) return rows.length ? legacyStages(rows) : []
   const groups = new Map<string, TimingStage[]>()
   for (const stage of samples) groups.set(stage.label, [...(groups.get(stage.label) || []), stage])
-  return Array.from(groups, ([label, group]) => ({
+  return sortByFlow(Array.from(groups, ([label, group]) => ({
     label,
     ms: average(group.map(s => s.ms)),
     elapsedMs: average(group.map(s => s.elapsedMs)),
     status: group.some(s => s.status === 'failed') ? 'failed' : group.some(s => s.status === 'processing') ? 'processing' : 'success',
-  })).sort((a, b) => (a.elapsedMs ?? Infinity) - (b.elapsedMs ?? Infinity))
+  })), samples)
 })
 
 async function load(background: unknown = false) {

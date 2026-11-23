@@ -6,7 +6,7 @@
     </PageHeader>
     <div class="toolbar">
       <el-input v-model="search" placeholder="搜索问题、回复、发送者或消息 ID" :prefix-icon="Search" clearable />
-      <el-segmented v-model="status" :options="[{ label: '全部', value: 'all' }, { label: '成功', value: 'success' }, { label: '失败', value: 'failed' }]" />
+      <el-segmented v-model="status" :options="[{ label: '全部', value: 'all' }, { label: '成功', value: 'success' }, { label: '无需回复', value: 'skipped' }, { label: '失败', value: 'failed' }]" />
       <span class="spacer" />
       <span class="muted" style="font-size: 13px">{{ filtered.length }} 条</span>
     </div>
@@ -27,42 +27,77 @@
       </el-table>
     </section>
 
-    <el-drawer v-model="drawer" title="消息处理详情" size="720px">
-      <div v-if="selected" v-loading="detailLoading">
-        <div class="trace-summary">
-          <StatusBadge :status="selected.status" />
-          <div class="trace-identity">
-            <small>消息记录 ID</small>
-            <el-tooltip :content="selected.traceId" placement="bottom"><strong>{{ selected.traceId }}</strong></el-tooltip>
+    <el-drawer v-model="drawer" title="消息处理详情" size="760px" class="message-drawer">
+      <div v-if="selected" v-loading="detailLoading" class="md">
+        <header class="md-head">
+          <div class="md-who">
+            <StatusBadge :status="selected.status" />
+            <strong>{{ selected.sender }}</strong>
+            <span>{{ selected.conversationName }} · {{ selected.botName }}</span>
           </div>
-          <span>{{ selected.time }}</span>
-        </div>
+          <dl class="md-facts">
+            <div><dt>时间</dt><dd class="num">{{ selected.time }}</dd></div>
+            <div><dt>总用时</dt><dd class="num">{{ selected.latency ? formatDuration(selected.latency) : '—' }}</dd></div>
+            <div><dt>模型</dt><dd class="truncate" :title="selected.model">{{ selected.model || '未调用' }}</dd></div>
+            <div><dt>记录 ID</dt><dd><el-tooltip :content="selected.traceId" placement="bottom"><button class="md-id" type="button" @click="copy(selected.traceId)">{{ selected.traceId.slice(0, 8) }}<el-icon><CopyDocument /></el-icon></button></el-tooltip></dd></div>
+          </dl>
+        </header>
 
-        <div class="detail-section"><h3>用户消息</h3><div class="content-box">{{ selected.question }}</div><div v-if="selected.attachments?.length" class="message-image-grid"><div v-for="(v,i) in selected.attachments.filter(p=>p.type==='voice')" :key="i"><audio v-if="v.waveUrl" controls preload="none" :src="v.waveUrl"/><p>{{v.transcript}}</p></div><el-image v-for="(image,index) in selected.attachments.filter(p=>p.type==='image')" :key="image.previewUrl || index" :src="image.previewUrl" :preview-src-list="previewUrls(selected.attachments)" fit="cover" loading="lazy" /></div></div>
-
-        <div class="detail-section">
-          <h3>本次模型完整上下文 <small>（{{ selected.contextMessages?.length || 0 }} 条）</small></h3>
-          <div v-if="selected.contextMessages?.length" class="context-message-list">
-            <article v-for="(message, index) in selected.contextMessages" :key="`${index}-${message.role}`" class="context-message-item">
-              <span :class="`role-${message.role}`">{{ roleText(message.role) }}</span>
-              <div><pre>{{ message.content }}</pre><div v-if="message.parts?.length" class="message-image-grid compact"><el-image v-for="(image,imageIndex) in message.parts" :key="image.previewUrl || imageIndex" :src="image.previewUrl" :preview-src-list="previewUrls(message.parts)" fit="cover" loading="lazy" /></div></div>
-            </article>
+        <section class="md-section">
+          <h3>对话</h3>
+          <div class="md-chat">
+            <div class="md-bubble is-user">
+              <small>{{ selected.sender }}</small>
+              <p>{{ selected.question }}</p>
+              <div v-if="selected.attachments?.length" class="message-image-grid"><div v-for="(v,i) in selected.attachments.filter(p=>p.type==='voice')" :key="i"><audio v-if="v.waveUrl" controls preload="none" :src="v.waveUrl"/><p>{{v.transcript}}</p></div><el-image v-for="(image,index) in selected.attachments.filter(p=>p.type==='image')" :key="image.previewUrl || index" :src="image.previewUrl" :preview-src-list="previewUrls(selected.attachments)" fit="cover" loading="lazy" /></div>
+            </div>
+            <div class="md-bubble is-bot" :class="{ 'is-empty': !selected.answer && !selected.answerAttachments?.length }">
+              <small>{{ selected.botName }}</small>
+              <p>{{ selected.answer || (selected.answerAttachments?.length ? '图片回复' : selected.status === 'skipped' ? '判断这条消息无需回复。' : '处理尚未完成或失败，未生成回复。') }}</p>
+              <div v-if="selected.answerAttachments?.length" class="message-image-grid"><el-image v-for="(image,index) in selected.answerAttachments" :key="image.previewUrl || index" :src="image.previewUrl" :preview-src-list="previewUrls(selected.answerAttachments)" fit="cover" loading="lazy" /></div>
+            </div>
           </div>
-          <EmptyState v-else compact mood="thinking" title="这条消息没有保存上下文" description="比较早的消息没有记录当时发给模型的内容，新消息会完整显示。" />
-        </div>
+        </section>
 
-        <PipelineFlow compact class="detail-flow"  :stages="selected.timeline?.stages || flowStages" :total-ms="selected.timeline?.totalMs" />
-        <div v-if="!selected.timeline" class="trace-flow">
-          <div v-for="(step,index) in traceSteps" :key="step.title" class="trace-step" :class="step.status"><span>{{ index + 1 }}</span><div><strong>{{ step.title }}</strong><p>{{ step.description }}</p></div><em>{{ step.duration }}</em></div>
-        </div>
+        <section class="md-section">
+          <h3>处理过程 <small v-if="selected.timeline?.totalMs != null">共 {{ formatDuration(selected.timeline.totalMs) }} · 悬停查看每步说明</small></h3>
+          <StageBars :stages="selected.timeline?.stages || flowStages" waterfall />
+        </section>
 
-        <div class="detail-section"><h3>机器人回复</h3><div class="content-box">{{ selected.answer || (selected.answerAttachments?.length ? '图片回复' : '处理尚未完成或失败，未生成回复。') }}</div><div v-if="selected.answerAttachments?.length" class="message-image-grid"><el-image v-for="(image,index) in selected.answerAttachments" :key="image.previewUrl || index" :src="image.previewUrl" :preview-src-list="previewUrls(selected.answerAttachments)" fit="cover" loading="lazy" /></div></div>
-
-        <div v-if="selected.retrievedChunks?.length" class="detail-section"><h3>知识召回详情</h3><div class="retrieved-chunk-list"><article v-for="(chunk,index) in selected.retrievedChunks" :key="chunk.id || index"><strong>片段 {{ index + 1 }}<span v-if="chunk.score !== undefined"> · 相似度 {{ (chunk.score * 100).toFixed(1) }}%</span></strong><p>{{ chunk.content }}</p></article></div></div>
+        <section class="md-section">
+          <h3>Token 与成本</h3>
+          <div class="md-tokens">
+            <div><span>输入</span><strong class="num">{{ selected.inputTokens.toLocaleString() }}</strong></div>
+            <div><span>输出</span><strong class="num">{{ selected.outputTokens.toLocaleString() }}</strong></div>
+            <div><span>缓存读取</span><strong class="num">{{ (selected.cachedInputTokens || 0).toLocaleString() }}</strong></div>
+            <div><span>缓存写入</span><strong class="num">{{ (selected.cacheWriteTokens || 0).toLocaleString() }}</strong></div>
+            <div><span>缓存命中率</span><strong class="num">{{ cacheRate }}</strong><i class="md-meter"><b :style="{ transform: `scaleX(${cacheRatio})` }" /></i></div>
+            <div><span>估算成本</span><strong class="num" v-if="selected.estimatedCost != null">¥{{ formatCost(selected.estimatedCost) }}</strong><el-button v-else link type="primary" @click="$router.push('/models')">设置价格</el-button></div>
+          </div>
+        </section>
 
         <MessageAgentPanel :message-id="selected.id" />
 
-        <div class="detail-section"><h3>请求信息</h3><dl class="detail-list"><div><dt>事件类型</dt><dd>{{ selected.eventType }}</dd></div><div><dt>模型</dt><dd>{{ selected.model || '未调用' }}</dd></div><div><dt>输入 / 输出 Token</dt><dd>{{ selected.inputTokens }} / {{ selected.outputTokens }}</dd></div><div><dt>知识命中</dt><dd>{{ selected.knowledgeHits }} 条</dd></div><div><dt>QQ 消息 ID</dt><dd class="detail-id"><el-tooltip :content="selected.platformMessageId || '—'"><span>{{ selected.platformMessageId || '—' }}</span></el-tooltip></dd></div><div><dt>投递状态</dt><dd><StatusBadge :status="selected.deliveryStatus" /></dd></div><div v-if="selected.deliveryError"><dt>投递失败原因</dt><dd class="delivery-error">{{ selected.deliveryError }}</dd></div></dl></div>
+        <el-collapse class="md-collapse">
+          <el-collapse-item v-if="selected.retrievedChunks?.length" name="chunks">
+            <template #title><strong>知识召回</strong><small>{{ selected.retrievedChunks.length }} 个片段</small></template>
+            <div class="retrieved-chunk-list"><article v-for="(chunk,index) in selected.retrievedChunks" :key="chunk.id || index"><strong>片段 {{ index + 1 }}<span v-if="chunk.score !== undefined"> · 相似度 {{ (chunk.score * 100).toFixed(1) }}%</span></strong><p>{{ chunk.content }}</p></article></div>
+          </el-collapse-item>
+          <el-collapse-item name="context">
+            <template #title><strong>模型完整上下文</strong><small>{{ selected.contextMessages?.length || 0 }} 条</small></template>
+            <div v-if="selected.contextMessages?.length" class="context-message-list">
+              <article v-for="(message, index) in contextView" :key="`${index}-${message.role}`" class="context-message-item">
+                <span :class="`role-${message.role}`" :title="message.speaker">{{ message.speaker }}</span>
+                <div><pre>{{ message.text }}</pre><div v-if="message.parts?.length" class="message-image-grid compact"><el-image v-for="(image,imageIndex) in message.parts" :key="image.previewUrl || imageIndex" :src="image.previewUrl" :preview-src-list="previewUrls(message.parts)" fit="cover" loading="lazy" /></div></div>
+              </article>
+            </div>
+            <p v-else class="muted md-note">这条消息没有保存上下文。比较早的消息没有记录当时发给模型的内容。</p>
+          </el-collapse-item>
+          <el-collapse-item name="request">
+            <template #title><strong>请求信息</strong><small>{{ selected.eventType }}</small></template>
+            <dl class="detail-list"><div><dt>事件类型</dt><dd>{{ selected.eventType }}</dd></div><div><dt>知识命中</dt><dd>{{ selected.knowledgeHits }} 条</dd></div><div><dt>QQ 消息 ID</dt><dd class="detail-id"><el-tooltip :content="selected.platformMessageId || '—'"><span>{{ selected.platformMessageId || '—' }}</span></el-tooltip></dd></div><div><dt>投递状态</dt><dd><StatusBadge :status="selected.deliveryStatus" /></dd></div><div v-if="selected.deliveryError" style="grid-column: 1 / -1"><dt>投递失败原因</dt><dd class="delivery-error">{{ selected.deliveryError }}</dd></div></dl>
+          </el-collapse-item>
+        </el-collapse>
       </div>
     </el-drawer>
   </div>
@@ -71,9 +106,9 @@
 <script setup lang="ts">
 import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, onMounted, ref } from 'vue'
-import { Download, Refresh, Search } from '@element-plus/icons-vue'
+import { CopyDocument, Download, Refresh, Search } from '@element-plus/icons-vue'
 import { connection } from '@/utils/connection'
-import PipelineFlow from '@/components/fx/PipelineFlow.vue'
+import StageBars from '@/components/fx/StageBars.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api'
@@ -97,7 +132,11 @@ const flowStages = computed(() => {
   if (!m) return []
   const labels = ['接收', '上下文', '检索', '模型', '投递']
   const ms = [undefined, m.contextLatency, m.retrievalLatency, m.modelLatency, m.deliveryLatency]
-  return traceSteps.value.map((step, index) => ({ label: labels[index], ms: ms[index], status: step.status }))
+  let elapsed = 0
+  return traceSteps.value.map((step, index) => {
+    elapsed += ms[index] || 0
+    return { label: labels[index], ms: ms[index] ?? 0, elapsedMs: elapsed, status: step.status, detail: step.description }
+  })
 })
 const traceSteps = computed(() => {
   if (!selected.value) return []
@@ -136,7 +175,30 @@ async function open(row: MessageRecord) {
 }
 function duration(value: number) { return value > 0 ? formatDuration(value) : '—' }
 function previewUrls(parts?: MessageAttachment[]) { return (parts || []).flatMap(part => part.previewUrl ? [part.previewUrl] : []) }
-function roleText(role: string) { return ({ system: '系统', developer: '开发者', user: '用户', assistant: '助手' } as Record<string, string>)[role] || role }
+function roleText(role: string) { return ({ system: '系统提示', developer: '开发者', user: '用户', assistant: '助手', tool: '工具结果' } as Record<string, string>)[role] || role }
+// 群聊历史把发言人拼在内容前面（“昵称: 内容”），这里拆出来当标签；当前提问那条用消息的发送者。
+const speakerPrefix = /^(【官方客服】)?([^\n:：]{1,40})[:：] /
+const contextView = computed(() => {
+  const m = selected.value
+  const list = m?.contextMessages || []
+  const lastUser = list.map(x => x.role).lastIndexOf('user')
+  return list.map((message, index) => {
+    if (message.role === 'assistant') return { ...message, speaker: message.name || m?.botName || '助手', text: message.content }
+    if (message.role !== 'user') return { ...message, speaker: roleText(message.role), text: message.content }
+    if (message.name) return { ...message, speaker: message.name, text: message.content.replace(speakerPrefix, '') }
+    const hit = message.content.match(speakerPrefix)
+    if (hit) return { ...message, speaker: (hit[1] ? '客服 ' : '') + hit[2], text: message.content.slice(hit[0].length) }
+    return { ...message, speaker: index === lastUser ? m?.sender || '用户' : '用户', text: message.content }
+  })
+})
+const cacheRatio = computed(() => {
+  const m = selected.value
+  if (m?.cacheHitRate != null) return Math.min(1, Math.max(0, m.cacheHitRate))
+  return m && m.inputTokens > 0 ? Math.min(1, (m.cachedInputTokens || 0) / m.inputTokens) : 0
+})
+const cacheRate = computed(() => selected.value?.cacheHitRate != null || selected.value?.inputTokens ? (cacheRatio.value * 100).toFixed(1) + '%' : '—')
+function formatCost(value: number) { return value >= 0.01 ? value.toFixed(4) : value.toPrecision(2) }
+async function copy(text: string) { try { await navigator.clipboard.writeText(text); ElMessage.success('已复制记录 ID') } catch { ElMessage.error('复制失败') } }
 function exportRows() { const csv = ['时间,机器人,会话,问题,状态,Token', ...filtered.value.map(m => `"${m.time}","${m.botName}","${m.conversationName}","${m.question.replaceAll('"','""')}","${m.status}","${m.tokens}"`)].join('\n'); const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv'})); a.download='messages.csv'; a.click(); URL.revokeObjectURL(a.href); ElMessage.success('消息记录已导出') }
 useAdminEvents(['messages','message_retractions','agent_runs','model_calls','tool_calls','outbox_tasks','inbox_tasks','message_stages','group_reviews'], async () => {
   await load(true)
@@ -147,3 +209,49 @@ useAdminEvents(['messages','message_retractions','agent_runs','model_calls','too
   }
 })
 </script>
+
+<style scoped>
+.md { display: flex; flex-direction: column; gap: 24px; }
+.md-head { display: flex; flex-direction: column; gap: 12px; }
+.md-who { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.md-who strong { font-size: 16px; font-weight: 600; }
+.md-who span:last-child { overflow: hidden; color: var(--muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.md-facts { display: grid; grid-template-columns: 1.4fr .8fr 1.2fr .8fr; margin: 0; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.md-facts > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 8px 12px; border-left: 1px solid var(--line); }
+.md-facts > div:first-child { border-left: 0; }
+.md-facts dt { color: var(--muted); font-size: 12px; }
+.md-facts dd { margin: 0; font-size: 13px; }
+.md-id { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: var(--text); font: 12px var(--font-mono); cursor: pointer; }
+.md-id:hover { color: var(--primary-text); }
+
+.md-section h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
+.md-section h3 small { margin-left: 6px; color: var(--muted); font-size: 12px; font-weight: 400; }
+
+.md-chat { display: flex; flex-direction: column; gap: 8px; }
+.md-bubble { max-width: 88%; padding: 10px 14px; border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--line); }
+.md-bubble small { display: block; margin-bottom: 2px; color: var(--muted); font-size: 12px; }
+.md-bubble p { margin: 0; font-size: 14px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.md-bubble.is-bot { align-self: flex-end; background: var(--primary-light); border-color: var(--primary-soft); }
+.md-bubble.is-empty { background: var(--surface-2); border-style: dashed; border-color: var(--line-strong); }
+.md-bubble.is-empty p { color: var(--muted); }
+
+.md-tokens { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.md-tokens > div { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border-left: 1px solid var(--line); border-top: 1px solid var(--line); min-width: 0; }
+.md-tokens > div:nth-child(3n+1) { border-left: 0; }
+.md-tokens > div:nth-child(-n+3) { border-top: 0; }
+.md-tokens span { color: var(--muted); font-size: 12px; }
+.md-tokens strong { font-size: 16px; font-weight: 600; }
+.md-tokens .el-button { align-self: flex-start; height: 24px; padding: 0; font-size: 13px; }
+.md-meter { display: block; height: 4px; margin-top: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+.md-meter b { display: block; height: 100%; background: var(--success); transform-origin: left; transition: transform .6s var(--ease); }
+
+.md-collapse { border-top: 1px solid var(--line); border-bottom: 0; }
+.md-collapse :deep(.el-collapse-item__header) { gap: 8px; height: 44px; font-size: 14px; }
+.md-collapse :deep(.el-collapse-item__header small) { margin-left: 8px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.md-collapse :deep(.el-collapse-item__header strong) { font-weight: 600; }
+.md-note { margin: 0; font-size: 13px; }
+.context-message-item { grid-template-columns: 88px minmax(0, 1fr); }
+.context-message-item > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) { .md-facts, .md-tokens { grid-template-columns: 1fr 1fr; } .md-facts > div:nth-child(3) { border-left: 0; } }
+@media (prefers-reduced-motion: reduce) { .md-meter b { transition: none; } }
+</style>

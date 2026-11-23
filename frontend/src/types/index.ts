@@ -1,7 +1,7 @@
 export interface ApiEnvelope<T> { data: T }
 export interface ApiErrorEnvelope { error: { code: string; message: string } }
 
-export type Status = 'online' | 'offline' | 'warning' | 'success' | 'failed' | 'processing' | 'pending' | 'unindexed'
+export type Status = 'online' | 'offline' | 'warning' | 'success' | 'failed' | 'processing' | 'pending' | 'unindexed' | 'skipped'
 
 export interface Bot {
   id: string
@@ -28,6 +28,10 @@ export interface ModelProfile {
   webSearchMode: 'disabled' | 'qwen' | 'openai' | 'responses' | 'custom'
   reasoningEffort: 'default' | 'none' | 'minimal' | 'low' | 'medium' | 'high'
   extraBody: Record<string, unknown>
+  inputPricePerMillion?: number | null
+  outputPricePerMillion?: number | null
+  cacheReadPricePerMillion?: number | null
+  cacheWritePricePerMillion?: number | null
 }
 
 export interface ModelTestInput {
@@ -67,6 +71,7 @@ export interface TimingStage {
   detail?: string
   ms?: number | null
   elapsedMs?: number | null
+  startMs?: number | null
 }
 export interface MessageTimeline {
   stages: TimingStage[]
@@ -89,6 +94,10 @@ export interface MessageRecord {
   tokens: number
   inputTokens: number
   outputTokens: number
+  cachedInputTokens?: number
+  cacheWriteTokens?: number
+  cacheHitRate?: number | null
+  estimatedCost?: number | null
   knowledgeHits: number
   deliveryStatus: Status
   deliveryError?: string
@@ -105,6 +114,7 @@ export interface MessageRecord {
 }
 
 export interface ContextMessage {
+  name?: string
   role: 'system' | 'developer' | 'user' | 'assistant' | string
   content: string
   parts?: MessageAttachment[]
@@ -140,6 +150,7 @@ export interface KnowledgeBase {
   description: string
   scope: 'global' | 'bot' | 'conversation'
   documents: number
+  entries?: number
   chunks: number
   progress: number
   status: Status

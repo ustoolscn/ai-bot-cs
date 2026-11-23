@@ -1,5 +1,5 @@
 // 开发模式下后端不可用时的示例数据，仅用于本地预览界面。
-import type { AgentSettings, BuiltinTool, Candidate, CustomTool, Entry, EvalCase, EvalRun, Feedback, Gap, Handoff, LearningStats, LiveData, Memory, Skill } from '@/api/agent'
+import type { AgentSettings, BuiltinTool, Candidate, CustomTool, Entry, EvalCase, EvalRun, Feedback, Gap, Handoff, LearningStats, LiveData, Memory, MessageAgentDetail, Skill } from '@/api/agent'
 
 const now = Date.now()
 const ago = (minutes: number) => new Date(now - minutes * 60000).toISOString()
@@ -60,7 +60,7 @@ export const mockTools: { builtin: BuiltinTool[]; custom: CustomTool[] } = {
   custom: [{ id: 'tl1', name: 'query_order', description: '按订单号查询订单状态', enabled: true, method: 'GET', url: 'https://example.com/api/orders', headerNames: ['Authorization'], timeoutSeconds: 10, parameters: {} }],
 }
 
-export const mockLearningStats: LearningStats = { pendingCandidates: 3, publishedEntries: 128, openGaps: 5, feedback7d: 42, negativeFeedback7d: 6, activeMemories: 310, openHandoffs: 2 }
+export const mockLearningStats: LearningStats = { pendingCandidates: 3, publishedEntries: 128, openGaps: 5, feedback7d: 42, negativeFeedback7d: 6, unreadNegativeFeedback: 1, activeMemories: 310, openHandoffs: 2 }
 export const mockCandidates: Candidate[] = [
   { id: 'c1', knowledgeBaseName: '常见问题库', question: '为什么调用返回 429？', aliases: ['提示请求过多', '限流了'], answer: '429 是触发了分组限流，换个分组或稍后重试就行。', source: 'staff', evidence: [], confidence: 0.92, status: 'pending', reviewNote: '', createdAt: ago(25) },
   { id: 'c2', knowledgeBaseName: '常见问题库', question: '可以开发票吗？', aliases: [], answer: '可以，在控制台“账单 → 发票”里申请，3 个工作日内开出。', source: 'feedback', evidence: [], confidence: 0.8, status: 'pending', reviewNote: '', createdAt: ago(90) },
@@ -74,7 +74,8 @@ export const mockGaps: Gap[] = [
   { id: 'g2', question: 'gpt-image 怎么计费？', occurrences: 4, status: 'open', firstSeenAt: ago(2000), lastSeenAt: ago(80) },
 ]
 export const mockFeedback: Feedback[] = [
-  { id: 'f1', source: 'admin', rating: 'too_long', comment: '太啰嗦', correctedAnswer: '', createdAt: ago(200), answer: '您好，关于这个问题……', question: '怎么改密码', conversationName: '产品运营交流群' },
+  { id: 'f1', source: 'admin', rating: 'too_long', comment: '太啰嗦', correctedAnswer: '', createdAt: ago(200), answer: '您好，关于这个问题……', question: '怎么改密码', conversationName: '产品运营交流群', read: false },
+  { id: 'f2', source: 'user_implicit', rating: 'wrong', comment: '', correctedAnswer: '在 设置 → 账号安全 中修改。', createdAt: ago(900), answer: '请联系管理员。', question: '密码忘了怎么办', conversationName: '售后服务群', read: true },
 ]
 export const mockMemories: Memory[] = [
   { id: 'm1', botId: 'bot-qq-service', botName: '客服小Q', userId: 'u1', displayName: '林晓', kind: 'profile', content: '使用 vip 分组，主要调用 Claude', hasEmbedding: true, confidence: 0.9, pinned: false, source: 'auto', updatedAt: ago(100) },
@@ -97,3 +98,21 @@ export const mockEvalRuns: EvalRun[] = [
   { id: 'run1', name: '调整风格后', chatProfileName: 'qwen-plus', status: 'completed', total: 2, completed: 2, avgScore: 8.2, avgLength: 46, createdAt: ago(60), finishedAt: ago(58) },
   { id: 'run0', name: '基线', chatProfileName: 'qwen-plus', status: 'completed', total: 2, completed: 2, avgScore: 6.4, avgLength: 92, createdAt: ago(1500), finishedAt: ago(1498) },
 ]
+export const mockMessageAgentDetail: MessageAgentDetail = {
+  id: 'm1', question: '@客服小Q 怎么申请七天无理由退款？', answer: '您可以在订单详情中发起退款申请。', senderName: '林晓', eventAt: ago(3),
+  agentRuns: [{
+    rewrittenQuery: '七天无理由退款的申请流程和条件',
+    steps: [
+      { type: 'rewrite', name: '问题改写', input: '怎么申请七天无理由退款？', output: '七天无理由退款的申请流程和条件', latencyMs: 640 },
+      { type: 'model', name: '第 1 次模型调用', output: '调用 search_knowledge', latencyMs: 820 },
+      { type: 'tool', name: 'search_knowledge', input: '{"query":"七天无理由退款"}', output: '命中 3 条：退款政策、售后时效、商品完好要求', latencyMs: 210 },
+      { type: 'model', name: '第 2 次模型调用', output: '您可以在订单详情中发起退款申请…', latencyMs: 1460 },
+    ],
+    evaluation: { answered: true, too_long: false },
+  }],
+  feedback: [{ id: 'f1', source: 'admin', rating: 'good', comment: '', correctedAnswer: '', createdAt: ago(1) }],
+  replies: [
+    { id: 'r1', eventType: 'AI_RESPONSE', content: '您可以在订单详情中发起退款申请，商品需保持完好。', status: 'sent', eventAt: ago(3) },
+    { id: 'r2', eventType: 'AI_RESPONSE', content: '具体步骤：打开订单 → 申请售后 → 选择七天无理由。', status: 'sent', eventAt: ago(3) },
+  ],
+}

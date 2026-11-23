@@ -4,7 +4,7 @@
       <aside class="knowledge-list-panel">
         <el-input v-model="search" placeholder="搜索知识库" :prefix-icon="Search" clearable />
         <button v-for="kb in filtered" :key="kb.id" class="knowledge-list-item" :class="{ active: selected?.id === kb.id }" @click="selectKb(kb)">
-          <span><strong>{{ kb.name }}</strong><small>{{ kb.documents }} 篇文档 · {{ kb.chunks }} 分块</small></span>
+          <span><strong>{{ kb.name }}</strong><small>{{ kb.documents }} 篇文档 · {{ kb.entries ?? 0 }} 条问答</small></span>
           <em :class="{ 'danger-text': kb.status === 'failed' }">{{ kb.status === 'failed' ? '有失败' : kb.progress + '%' }}</em>
         </button>
         <p v-if="!filtered.length" class="muted" style="padding: 8px 10px; font-size: 13px">{{ bases.length ? '没有匹配的知识库' : '还没有知识库' }}</p>
@@ -22,6 +22,7 @@
         </div>
         <div class="knowledge-summary">
           <div><span>文档</span><strong>{{ selected.documents }}</strong></div>
+          <div><span>知识问答</span><button type="button" class="summary-link" title="查看这个知识库的问答" @click="$router.push({ query: { tab: 'entries', kb: selected.id } })">{{ selected.entries ?? 0 }}</button></div>
           <div><span>分块</span><strong>{{ selected.chunks.toLocaleString() }}</strong></div>
           <div><span>Embedding 模型</span><strong class="truncate" style="font-size: 14px" :title="selected.model">{{ selected.model }}</strong></div>
           <div><span>索引进度</span><strong>{{ selected.progress }}%</strong><div class="progress-line" :class="{ 'is-failed': selected.status === 'failed' }"><i :style="{ width: selected.progress + '%' }" /></div></div>
@@ -54,3 +55,9 @@ onMounted(load);async function load(){[bases.value,models.value]=await Promise.a
 useAdminEvents(['knowledge_documents','knowledge_bases','model_profiles'], async () => { await load(); if (selected.value) await selectKb(selected.value) })
 </script>
 
+
+<style scoped>
+.summary-link { display: block; padding: 0; border: 0; background: none; color: var(--primary-text); font: inherit; margin-top: 2px; font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; }
+.summary-link:hover { text-decoration: underline; }
+.summary-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+</style>

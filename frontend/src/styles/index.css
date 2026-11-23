@@ -244,6 +244,8 @@ code, kbd, pre, .mono { font-family: var(--font-mono); }
 .status-badge.is-warning .status-dot, .status-badge.is-pending .status-dot, .status-badge.is-processing .status-dot, .status-badge.is-indexing .status-dot { background: #d18a12; }
 .status-badge.is-failed .status-dot, .status-badge.is-offline .status-dot, .status-badge.is-error .status-dot { background: var(--danger); }
 .status-badge.is-failed, .status-badge.is-error { color: var(--danger); }
+.status-badge.is-skipped { color: var(--muted); }
+.status-badge.is-skipped .status-dot { background: var(--faint); }
 
 .count-pill { display: inline-block; min-width: 20px; margin-left: 6px; padding: 0 6px; border-radius: 9px; background: var(--surface-3); color: var(--text-2); font-size: 12px; font-weight: 600; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
 .count-pill.hot { background: var(--danger); color: #fff; }
@@ -477,7 +479,7 @@ code, kbd, pre, .mono { font-family: var(--font-mono); }
 .knowledge-detail-head p { margin-top: 2px; color: var(--muted); font-size: 13px; }
 .knowledge-detail-head > div:last-child { display: flex; gap: 8px; flex: none; }
 .scope-tag { display: inline-block; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
-.knowledge-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.knowledge-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .knowledge-summary > div { padding: 12px 20px; border-left: 1px solid var(--line); min-width: 0; }
 .knowledge-summary > div:first-child { border-left: 0; }
 .knowledge-summary span { display: block; color: var(--muted); font-size: 12px; }
