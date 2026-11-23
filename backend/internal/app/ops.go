@@ -2,10 +2,11 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5"
 )
 
 // --- handoffs & human replies ---
@@ -14,16 +15,18 @@ func (a *App) listHandoffs(c *gin.Context) {
 	status := c.DefaultQuery("status", "open")
 	queryList(c, a, `SELECT h.id::text,h.bot_id::text AS "botId",h.conversation_id::text AS "conversationId",c.name AS "conversationName",c.type AS "conversationType",
 		h.platform_user_id AS "userId",h.display_name AS "displayName",h.message_id::text AS "messageId",COALESCE(m.content,'') AS "messageContent",
-		h.reason,h.status,h.paused_until AS "pausedUntil",h.created_at AS "createdAt",h.resolved_at AS "resolvedAt",
+		h.ticket_number::text AS "ticketNumber",hr.sender_name AS "humanRepliedBy",hr.content AS "humanReplyContent",CASE WHEN h.status='replied' THEN h.resolved_at END AS "humanRepliedAt",
+   COALESCE((SELECT json_agg(json_build_object('conversationId',n.conversation_id,'status',t.status,'error',t.last_error) ORDER BY n.created_at)
+    FROM messages n JOIN outbox_tasks t ON t.message_id=n.id WHERE n.handoff_id=h.id AND n.event_type='HANDOFF_NOTICE'),'[]') AS notifications,h.reason,h.status,h.paused_until AS "pausedUntil",h.created_at AS "createdAt",h.resolved_at AS "resolvedAt",
 		COALESCE((SELECT json_agg(x ORDER BY x."eventAt") FROM (SELECT mm.id::text AS id,mm.direction,mm.sender_name AS "senderName",mm.content,mm.event_type AS "eventType",mm.event_at AS "eventAt",mm.status,COALESCE(ot.last_error,'') AS "deliveryError"
 			FROM messages mm LEFT JOIN outbox_tasks ot ON ot.message_id=mm.id WHERE mm.conversation_id=h.conversation_id AND mm.event_type<>'PROCESSING_ACK' AND mm.content<>'' AND mm.event_at>h.created_at-interval '30 minutes'
 			AND (mm.sender_id=h.platform_user_id OR mm.direction='outbound') ORDER BY mm.event_at DESC LIMIT 30) x),'[]') AS recent
-		FROM handoffs h JOIN conversations c ON c.id=h.conversation_id LEFT JOIN messages m ON m.id=h.message_id
+		FROM handoffs h JOIN conversations c ON c.id=h.conversation_id LEFT JOIN messages m ON m.id=h.message_id LEFT JOIN messages hr ON hr.id=h.reply_id
 		WHERE ($1='all' OR h.status=$1) ORDER BY h.created_at DESC LIMIT 200`, status)
 }
 
 func (a *App) resolveHandoff(c *gin.Context) {
-	tag, err := a.db.Exec(c, "UPDATE handoffs SET status='resolved',resolved_by=$1,resolved_at=now(),paused_until=now(),updated_at=now() WHERE id=$2 AND status='open'", c.GetString("userId"), c.Param("id"))
+	tag, err := a.db.Exec(c, "UPDATE handoffs SET status='resolved',resolved_by=$1,resolved_at=now(),paused_until=now(),updated_at=now() WHERE id=$2 AND status='open' AND NOT EXISTS(SELECT FROM outbox_tasks WHERE message_id=handoffs.reply_id AND status NOT IN ('expired','failed'))", c.GetString("userId"), c.Param("id"))
 	if err != nil || tag.RowsAffected() == 0 {
 		fail(c, 404, "not_found", "工单不存在或已处理")
 		return
@@ -41,35 +44,20 @@ func (a *App) humanReply(c *gin.Context) {
 		fail(c, 400, "invalid_request", "回复内容必填")
 		return
 	}
-	var botID, convID, convType, platformID string
-	var eventAt time.Time
-	if err := a.db.QueryRow(c, `SELECT m.bot_id::text,m.conversation_id::text,c.type,COALESCE(m.platform_message_id,''),m.event_at FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=$1 AND m.direction='inbound'`, c.Param("id")).
-		Scan(&botID, &convID, &convType, &platformID, &eventAt); err != nil || platformID == "" {
-		fail(c, 404, "not_found", "消息不存在或不可回复")
-		return
-	}
-	deadline := eventAt.Add(time.Hour)
 	tx, err := a.db.Begin(c)
 	if err != nil {
 		fail(c, 500, "database_error", "发送失败")
 		return
 	}
 	defer tx.Rollback(c)
-	// Serialize sequence allocation with other human replies in this conversation.
-	if _, err = tx.Exec(c, "SELECT id FROM conversations WHERE id=$1 FOR UPDATE", convID); err != nil {
-		fail(c, 500, "database_error", "发送失败")
+	outID, err := queueHuman(c, tx, c.Param("id"), c.GetString("username"), strings.TrimSpace(in.Text))
+	if errors.Is(err, pgx.ErrNoRows) {
+		fail(c, 404, "not_found", "消息不存在或不可回复")
 		return
 	}
-	var seq int
-	if err = tx.QueryRow(c, `SELECT COALESCE(max(t.msg_seq),1)+1 FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.bot_id=$1 AND m.reply_to_message_id=$2`, botID, platformID).Scan(&seq); err != nil {
-		fail(c, 500, "database_error", "发送失败")
+	if errors.Is(err, errTicketHandled) {
+		fail(c, 409, "ticket_handled", err.Error())
 		return
-	}
-	var outID string
-	err = tx.QueryRow(c, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,content,parts,reply_to_message_id,status,event_at,reply_deadline) VALUES('qq',$1,$2,'outbound','HUMAN_REPLY',$3,'[]'::jsonb,$4,'pending',now(),$5) RETURNING id::text`,
-		botID, convID, strings.TrimSpace(in.Text), platformID, deadline).Scan(&outID)
-	if err == nil {
-		_, err = tx.Exec(c, "INSERT INTO outbox_tasks(message_id,msg_seq) VALUES($1,$2)", outID, seq)
 	}
 	if err != nil || tx.Commit(c) != nil {
 		fail(c, 500, "database_error", "发送失败")

@@ -474,16 +474,16 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	requestJSON(t, client, http.MethodPost, server.URL+"/api/messages/"+m7+"/reply", map[string]any{"text": "您好，我是人工客服", "learn": false}, http.StatusOK)
 	eventually(t, 8*time.Second, "human reply sent", func() (bool, error) {
 		for _, s := range mock.Sends() {
-			if s["content"] == "您好，我是人工客服" && s["msg_id"] == "m7" && s["msg_type"] == float64(0) {
+			if s["content"] == "【人工客服】您好，我是人工客服" && s["msg_id"] == "m7" && s["msg_type"] == float64(0) {
 				return true, nil
 			}
 		}
 		return false, nil
 	})
-	handoffs := dataSlice(t, requestJSON(t, client, http.MethodGet, server.URL+"/api/handoffs", nil, http.StatusOK))
-	hid, _ := object(t, handoffs[0])["id"].(string)
-	requestJSON(t, client, http.MethodPost, server.URL+"/api/handoffs/"+hid+"/resolve", nil, http.StatusOK)
-
+	eventually(t, 3*time.Second, "delivered human reply closes ticket", func() (bool, error) {
+		detail := dataMap(t, requestJSON(t, client, http.MethodGet, server.URL+"/api/messages/"+m7, nil, http.StatusOK))
+		return detail["status"] == "human_replied" && detail["humanReplyContent"] == "您好，我是人工客服" && detail["humanRepliedAt"] != nil, nil
+	})
 	// Admin correction published directly.
 	var m3 string
 	_ = pool.QueryRow(ctx, `SELECT id::text FROM messages WHERE platform_message_id='m3'`).Scan(&m3)

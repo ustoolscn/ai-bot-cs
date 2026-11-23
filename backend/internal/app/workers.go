@@ -337,6 +337,16 @@ func (a *App) processOutbox(ctx context.Context) error {
 			return err
 		}
 	}
+	if j.EventType == "HANDOFF_NOTICE" {
+		var enabled bool
+		if err = a.db.QueryRow(ctx, "SELECT human_operator FROM conversations WHERE id=$1", j.ConversationRecordID).Scan(&enabled); err != nil {
+			return a.retryOutbox(ctx, j, err)
+		}
+		if !enabled {
+			_, err = a.db.Exec(ctx, "UPDATE outbox_tasks SET status='expired',last_error='operator removed',updated_at=now() WHERE id=$1", j.TaskID)
+			return err
+		}
+	}
 	if j.EventType == "SCHEDULED_POST" || j.EventType == "DAILY_REPORT" {
 		var enabled bool
 		if err = a.db.QueryRow(ctx, "SELECT EXISTS(SELECT FROM schedule_deliveries d JOIN schedule_runs r ON r.id=d.run_id JOIN scheduled_posts s ON s.id=r.schedule_id AND s.revision=r.revision JOIN schedule_recipients dest ON dest.schedule_id=s.id AND dest.conversation_id=d.conversation_id WHERE d.message_id=$1 AND (s.enabled OR r.is_test))", j.MessageID).Scan(&enabled); err != nil {
@@ -395,7 +405,18 @@ func (a *App) processOutbox(ctx context.Context) error {
 		}
 		quote = agent.TruncateRunes(quote, 120)
 	}
+	if j.EventType == "HUMAN_REPLY" && j.ConversationType == "group" {
+		if err = a.db.QueryRow(ctx, "SELECT raw_event,COALESCE(NULLIF(sender_name,''),sender_id) FROM messages WHERE conversation_id=$1 AND platform_message_id=$2", j.ConversationRecordID, j.ReplyTo).Scan(&raw, &mentionName); err != nil {
+			return a.retryOutbox(ctx, j, err)
+		}
+	}
 	reference := qq.ReferenceIndex(raw)
+	if j.EventType == "HUMAN_REPLY" && reference == "" && mentionName != "" {
+		j.Text = "@" + mentionName + " " + j.Text
+	}
+	if j.EventType == "HUMAN_REPLY" {
+		j.Text = "【人工客服】" + j.Text
+	}
 	if j.EventType == "AI_RESPONSE" && j.Sequence == 1 {
 		var own string
 		err = a.db.QueryRow(ctx, `SELECT COALESCE((SELECT o.qq_ref_idx FROM messages o WHERE o.conversation_id=i.conversation_id AND o.direction='outbound' AND o.status='sent' AND NOT o.context_excluded AND o.qq_ref_idx<>'' AND (i.raw_event#>'{d,message_scene,ext}') ? ('ref_msg_idx='||o.qq_ref_idx) LIMIT 1),'') FROM messages i WHERE i.conversation_id=$1 AND i.platform_message_id=$2`, j.ConversationRecordID, j.ReplyTo).Scan(&own)
@@ -453,6 +474,9 @@ func (a *App) processOutbox(ctx context.Context) error {
 	_, err = tx.Exec(ctx, "UPDATE outbox_tasks SET status='sent',platform_message_id=$1,updated_at=now() WHERE id=$2", receipt.ID, j.TaskID)
 	if err == nil {
 		_, err = tx.Exec(ctx, "UPDATE messages SET status='sent',platform_message_id=$1,qq_ref_idx=$3,qq_sent_at=$4 WHERE id=$2", nullString(receipt.ID), j.MessageID, receipt.Ext.Index, parseQQTime(receipt.Timestamp))
+	}
+	if err == nil && j.EventType == "HUMAN_REPLY" {
+		_, err = tx.Exec(ctx, "UPDATE handoffs SET status='replied',resolved_at=now(),paused_until=now(),updated_at=now() WHERE reply_id=$1", j.MessageID)
 	}
 	if err == nil && j.EventType == "AI_RESPONSE" {
 		_, err = tx.Exec(ctx, scheduleProcessingAckRetractionSQL, j.BotID, j.ConversationRecordID, j.ReplyTo)

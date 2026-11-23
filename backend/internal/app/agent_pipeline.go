@@ -63,8 +63,13 @@ func (a *App) processInbox(ctx context.Context) error {
 
 	// A user handed off to a human is left to the human while the pause lasts.
 	var paused bool
-	_ = a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM handoffs WHERE conversation_id=$1 AND platform_user_id=$2 AND status='open' AND paused_until>now())`, j.ConversationID, senderID).Scan(&paused)
-	if paused && !isStaff {
+	if !isStaff {
+		paused, err = a.handoffTurn(ctx, j.BotID, j.ConversationID, senderID, senderName, j.MessageID, "", time.Time{}, false)
+		if err != nil {
+			return a.retryInbox(ctx, j, err)
+		}
+	}
+	if paused {
 		finishCheck("人工接管中", nil)
 		if err := a.finishInbox(ctx, j.TaskID, "handoff", nil); err != nil {
 			return err
@@ -105,13 +110,15 @@ func (a *App) processInbox(ctx context.Context) error {
 			return a.retryInbox(ctx, j, err)
 		}
 	}
+	skipKB := len(imageParts) == 0 && socialOnly(j.Content)
 	if j.ConversationType == "group" && (j.TriggerMode == "smart" || j.TriggerMode == "always") {
 		judge := settings
 		if settings.DecisionProfileID != "" {
 			judge.AuxChatProfileID = settings.DecisionProfileID
 		}
 		var decision struct {
-			Reply *bool `json:"reply"`
+			Reply      *bool `json:"reply"`
+			SocialOnly bool  `json:"socialOnly"`
 		}
 		finish := a.startStage(ctx, j.MessageID, "判断是否回复")
 		recent, err := a.decisionHistory(ctx, j, senderID)
@@ -146,6 +153,7 @@ func (a *App) processInbox(ctx context.Context) error {
 		if err != nil {
 			return a.retryInbox(ctx, j, err)
 		}
+		skipKB = skipKB || (decision.SocialOnly && len(imageParts) == 0)
 		if !*decision.Reply {
 			return a.finishInbox(ctx, j.TaskID, "skipped", nil)
 		}
@@ -168,6 +176,9 @@ func (a *App) processInbox(ctx context.Context) error {
 	if settings.KnowledgeBaseIDs != nil {
 		rt.knowledgeBases = settings.KnowledgeBaseIDs
 	}
+	if skipKB {
+		rt.knowledgeBases = nil
+	}
 	rt.snapshot, rt.snapshotStale, rt.snapshotOK = a.liveSnapshot(ctx, settings)
 
 	// Working memory.
@@ -184,7 +195,11 @@ func (a *App) processInbox(ctx context.Context) error {
 	}
 	var memories []agent.Memory
 	if settings.MemoryEnabled && senderID != "" {
-		memories = a.loadMemories(ctx, settings, j.BotID, j.ConversationID, senderID, j.Content, &rt.embeddings)
+		memoryQuery := j.Content
+		if skipKB {
+			memoryQuery = ""
+		} // Recent and pinned memories suffice for social turns.
+		memories = a.loadMemories(ctx, settings, j.BotID, j.ConversationID, senderID, memoryQuery, &rt.embeddings)
 	}
 	contextLatency := time.Since(contextStarted).Milliseconds()
 	finishContext(fmt.Sprintf("历史 %d 条，记忆 %d 条", len(turns), len(memories)), nil)

@@ -55,7 +55,7 @@ type builtinTool struct {
 var builtinTools = []builtinTool{
 	{spec: domain.ToolSpec{Name: "quote_previous_reply", Description: "当用户要求引用机器人此前的答复时，用上一条答复中的原文片段定位本会话内的回复，为即将发送的答复附上 QQ 原生引用。请核对返回的原文。", Parameters: objSchema(map[string]any{"excerpt": strProp("目标回复中连续出现的原文片段")}, "excerpt")}},
 	{spec: domain.ToolSpec{Name: "publish_html_page", Description: "内容较多或一两句难以解释时主动发布静态 HTML 网页，向用户发送返回的临时链接。只写可公开的信息。", Parameters: objSchema(map[string]any{"html": strProp("静态 HTML 正文及内联样式")}, "html")}},
-	{spec: domain.ToolSpec{Name: "render_html_image", Description: "把你编写的静态 HTML/CSS 排版成 PNG，直接作为本次 QQ 回复发送。可主动用图片强调信息、展示对比或表格。长内容优先发布网页。使用内联样式或 style，按 1000px 宽排版，不使用脚本和外部资源。", Parameters: objSchema(map[string]any{"html": strProp("完整 HTML 网页或片段")}, "html")}},
+	{spec: domain.ToolSpec{Name: "render_html_image", Description: "把你编写的静态 HTML/CSS 排版成 PNG，直接作为本次 QQ 回复发送。可主动用图片强调信息、展示对比或表格。长内容优先发布网页。可用静态 SVG 和本地渐变绘制插画。使用内联样式或 style，按 1000px 宽排版，不使用脚本和外部资源。", Parameters: objSchema(map[string]any{"html": strProp("完整 HTML 网页或片段")}, "html")}},
 	{spec: domain.ToolSpec{Name: "search_knowledge", Description: "在知识库中检索资料。当预先提供的知识库结果不足以回答、或用户换了话题时使用。", Parameters: objSchema(map[string]any{"query": strProp("要检索的完整问题")}, "query")}, needsKB: true},
 	{spec: domain.ToolSpec{Name: "get_model_price", Description: "查询分组实际价格，按提问语言给出人民币或美元报价。支持模糊模型名，如 4o、claude sonnet、deepseek。", Parameters: objSchema(map[string]any{"model": strProp("模型名称或关键词"), "group": strProp("指定用户分组；省略时按模型展示可用分组的最低倍率报价，并说明适用条件")}, "model")}, needsLive: true},
 	{spec: domain.ToolSpec{Name: "get_service_status", Description: "按全站、模型或计费分组查询成功率（%）、请求数、首个 Token 延迟中位数（毫秒）和趋势。问状态时调用此工具，已配置状态页则自动发送截图。无数据时不要推断故障。", Parameters: objSchema(map[string]any{
@@ -346,8 +346,7 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 			return `{"ok":true,"message":"已通知人工客服"}`, nil
 		}
 		pause := time.Now().Add(time.Duration(rt.settings.HandoffPauseMinutes) * time.Minute)
-		_, err := a.db.Exec(ctx, `INSERT INTO handoffs(bot_id,conversation_id,platform_user_id,display_name,message_id,reason,paused_until) VALUES($1,$2,$3,$4,$5,$6,$7)`,
-			rt.botID, rt.conversationID, rt.senderID, rt.senderName, nullString(rt.messageID), str("reason"), pause)
+		_, err := a.handoffTurn(ctx, rt.botID, rt.conversationID, rt.senderID, rt.senderName, rt.messageID, str("reason"), pause, true)
 		if err != nil {
 			return "", err
 		}

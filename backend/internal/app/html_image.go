@@ -27,6 +27,12 @@ func browserPath() string {
 			return path
 		}
 	}
+	if runtime.GOOS == "darwin" {
+		path := "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
 	if runtime.GOOS == "windows" {
 		for _, root := range []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramFiles(x86)")} {
 			for _, sub := range []string{"Microsoft/Edge/Application/msedge.exe", "Google/Chrome/Application/chrome.exe"} {
@@ -50,7 +56,7 @@ func staticDocument(src string) (string, error) {
 	if src == "" || len(src) > 256<<10 {
 		return "", fmt.Errorf("HTML 为空或超过 256 KB")
 	}
-	doc, err := html.Parse(strings.NewReader(src))
+	doc, err := html.Parse(strings.NewReader(normalizeHTMLAttributes(src)))
 	if err != nil {
 		return "", err
 	}
@@ -59,7 +65,10 @@ func staticDocument(src string) (string, error) {
 	clean = func(n *html.Node) {
 		for c := n.FirstChild; c != nil; {
 			next := c.NextSibling
-			if c.Type == html.ElementNode && c.Namespace == "" && strings.Contains(allowed, " "+c.Data+" ") {
+			if c.Type == html.ElementNode && c.Namespace == "svg" && strings.Contains(svgNodes, " "+c.Data+" ") {
+				cleanSVG(c)
+				clean(c)
+			} else if c.Type == html.ElementNode && c.Namespace == "" && strings.Contains(allowed, " "+c.Data+" ") {
 				attrs := c.Attr[:0]
 				for _, attr := range c.Attr {
 					switch attr.Key {

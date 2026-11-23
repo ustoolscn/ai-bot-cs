@@ -121,6 +121,8 @@ func (a *App) Router() http.Handler {
 	auth.POST("/bots", a.saveBot)
 	auth.PUT("/bots/:id", a.saveBot)
 	auth.DELETE("/bots/:id", a.deleteBot)
+	a.proxyRoutes(auth)
+	a.operatorRoutes(auth)
 	auth.GET("/model-profiles", a.listModels)
 	auth.POST("/model-profiles", a.saveModel)
 	auth.PUT("/model-profiles/:id", a.saveModel)
@@ -402,6 +404,7 @@ func (a *App) deleteBot(c *gin.Context) {
 }
 
 type modelInput struct {
+	ProxyID                   json.RawMessage `json:"proxyId"`
 	InputPricePerMillion      json.RawMessage `json:"inputPricePerMillion"`
 	OutputPricePerMillion     json.RawMessage `json:"outputPricePerMillion"`
 	CacheReadPricePerMillion  json.RawMessage `json:"cacheReadPricePerMillion"`
@@ -420,7 +423,7 @@ type modelInput struct {
 }
 
 func (a *App) listModels(c *gin.Context) {
-	queryList(c, a, `SELECT id::text,name,kind,base_url AS "baseUrl",model,dimension,enabled,is_default AS "isDefault",api_key_enc<>'' AS "hasApiKey",web_search_mode AS "webSearchMode",reasoning_effort AS "reasoningEffort",extra_body AS "extraBody",input_price AS "inputPricePerMillion",output_price AS "outputPricePerMillion",cache_read_price AS "cacheReadPricePerMillion",cache_write_price AS "cacheWritePricePerMillion",created_at AS "createdAt" FROM model_profiles ORDER BY kind,name`)
+	queryList(c, a, `SELECT id::text,proxy_id::text AS "proxyId",name,kind,base_url AS "baseUrl",model,dimension,enabled,is_default AS "isDefault",api_key_enc<>'' AS "hasApiKey",web_search_mode AS "webSearchMode",reasoning_effort AS "reasoningEffort",extra_body AS "extraBody",input_price AS "inputPricePerMillion",output_price AS "outputPricePerMillion",cache_read_price AS "cacheReadPricePerMillion",cache_write_price AS "cacheWritePricePerMillion",created_at AS "createdAt" FROM model_profiles ORDER BY kind,name`)
 }
 func (a *App) saveModel(c *gin.Context) {
 	var in modelInput
@@ -489,6 +492,17 @@ func (a *App) saveModel(c *gin.Context) {
 	} else {
 		_, err = tx.Exec(c, "UPDATE model_profiles SET name=$1,kind=$2,base_url=$3,model=$4,dimension=$5,enabled=$6,is_default=$7,web_search_mode=$8,reasoning_effort=$9,extra_body=$10,updated_at=now() WHERE id=$11", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ReasoningEffort, in.ExtraBody, id)
 	}
+	if err == nil && in.ProxyID != nil {
+		var proxy string
+		if json.Unmarshal(in.ProxyID, &proxy) != nil || (proxy != "" && uuid.Validate(proxy) != nil) {
+			fail(c, 400, "invalid_proxy", "代理 ID 无效")
+			return
+		}
+		if _, err = tx.Exec(c, "UPDATE model_profiles SET proxy_id=NULLIF($2::text,'')::uuid WHERE id=$1", id, proxy); err != nil {
+			fail(c, 400, "invalid_proxy", "所选代理不存在")
+			return
+		}
+	}
 	var savedRates [4]*float64
 	if err == nil {
 		err = tx.QueryRow(c, `UPDATE model_profiles SET
@@ -523,8 +537,9 @@ func (a *App) loadModel(ctx context.Context, id string) (*openai.Client, string,
 func (a *App) loadModelDetails(ctx context.Context, id string) (*openai.Client, string, string, *int, error) {
 	var base, keyEnc, model, kind, webSearchMode, reasoningEffort string
 	var dimension *int
+	var proxy string
 	var extraBodyRaw []byte
-	err := a.db.QueryRow(ctx, "SELECT base_url,api_key_enc,model,kind,dimension,web_search_mode,reasoning_effort,extra_body FROM model_profiles WHERE id=$1 AND enabled", id).Scan(&base, &keyEnc, &model, &kind, &dimension, &webSearchMode, &reasoningEffort, &extraBodyRaw)
+	err := a.db.QueryRow(ctx, "SELECT base_url,api_key_enc,model,kind,dimension,web_search_mode,reasoning_effort,extra_body,COALESCE((SELECT address FROM model_proxies WHERE id=proxy_id),'') FROM model_profiles WHERE id=$1 AND enabled", id).Scan(&base, &keyEnc, &model, &kind, &dimension, &webSearchMode, &reasoningEffort, &extraBodyRaw, &proxy)
 	if err != nil {
 		return nil, "", "", nil, err
 	}
@@ -537,6 +552,10 @@ func (a *App) loadModelDetails(ctx context.Context, id string) (*openai.Client, 
 		return nil, "", "", nil, fmt.Errorf("读取运行时设置失败: %w", err)
 	}
 	client := openai.New(base, key, model, time.Duration(settings.AIRequestTimeoutSeconds)*time.Second)
+	client.HTTP.Transport, err = modelTransport(proxy)
+	if err != nil {
+		return nil, "", "", nil, err
+	}
 	client.ReasoningEffort = reasoningEffort
 	if len(extraBodyRaw) > 0 {
 		_ = json.Unmarshal(extraBodyRaw, &client.ExtraBody)
@@ -697,7 +716,7 @@ func (a *App) listMessages(c *gin.Context) {
 	}
 	query := `SELECT m.id::text,m.content AS question,m.parts,m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",
 		m.platform_message_id AS "platformMessageId",c.name AS "conversationName",b.name AS "botName",
-		COALESCE((SELECT string_agg(x.content, E'\n\n' ORDER BY x.event_at) FROM messages x WHERE x.conversation_id=m.conversation_id AND x.direction='outbound' AND x.event_type IN ('AI_RESPONSE','HUMAN_REPLY') AND x.reply_to_message_id=m.platform_message_id),'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",COALESCE(ar.status,t.status,(SELECT status FROM group_reviews WHERE message_id=m.id)) AS status,
+		COALESCE((SELECT string_agg(x.content, E'\n\n' ORDER BY x.event_at) FROM messages x WHERE x.conversation_id=m.conversation_id AND x.direction='outbound' AND x.event_type IN ('AI_RESPONSE','HUMAN_REPLY') AND x.reply_to_message_id=m.platform_message_id),'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",` + handoffStatusColumns + `, COALESCE(hs.state,ar.status,t.status,(SELECT status FROM group_reviews WHERE message_id=m.id)) AS status,
 		COALESCE(mp.name,mp.model,'') AS model,` + messageUsageColumns + `,
 		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
 		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END AS "knowledgeHits",
@@ -709,7 +728,8 @@ func (a *App) listMessages(c *gin.Context) {
 	FROM messages m LEFT JOIN inbox_tasks t ON t.message_id=m.id
 	JOIN conversations c ON c.id=m.conversation_id
 	JOIN bots b ON b.id=m.bot_id
-	LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true
+ ` + handoffStatusJoin + `
+ LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true
 	` + messageUsageJoin + `
  LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY (kind='chat') DESC,created_at DESC LIMIT 1) mc ON true
 	LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
@@ -736,7 +756,7 @@ func (a *App) getMessage(c *gin.Context) {
 	var msg map[string]any
 	rows, err := a.db.Query(c, `SELECT message_timeline(m) AS timeline,m.id::text,m.content AS question,m.parts,m.sender_id AS "senderId",m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",m.raw_event AS "rawEvent",
 		m.platform_message_id AS "platformMessageId",c.name AS "conversationName",b.name AS "botName",
-		COALESCE((SELECT string_agg(x.content, E'\n\n' ORDER BY x.event_at) FROM messages x WHERE x.conversation_id=m.conversation_id AND x.direction='outbound' AND x.event_type IN ('AI_RESPONSE','HUMAN_REPLY') AND x.reply_to_message_id=m.platform_message_id),'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",COALESCE(ar.status,t.status,(SELECT status FROM group_reviews WHERE message_id=m.id)) AS status,
+		COALESCE((SELECT string_agg(x.content, E'\n\n' ORDER BY x.event_at) FROM messages x WHERE x.conversation_id=m.conversation_id AND x.direction='outbound' AND x.event_type IN ('AI_RESPONSE','HUMAN_REPLY') AND x.reply_to_message_id=m.platform_message_id),'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",`+handoffStatusColumns+`, COALESCE(hs.state,ar.status,t.status,(SELECT status FROM group_reviews WHERE message_id=m.id)) AS status,
 		COALESCE(mp.name,mp.model,'') AS model,`+messageUsageColumns+`,
 		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
 		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END AS "knowledgeHits",
@@ -748,7 +768,8 @@ func (a *App) getMessage(c *gin.Context) {
 	FROM messages m LEFT JOIN inbox_tasks t ON t.message_id=m.id
 	JOIN conversations c ON c.id=m.conversation_id
 	JOIN bots b ON b.id=m.bot_id
-	LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true
+ `+handoffStatusJoin+`
+ LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true
 	`+messageUsageJoin+`
  LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY (kind='chat') DESC,created_at DESC LIMIT 1) mc ON true
 	LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
@@ -976,7 +997,7 @@ func (a *App) retryFailedTasks(c *gin.Context) {
 		return
 	}
 	outbox, err := tx.Exec(c, `UPDATE outbox_tasks t SET status='pending',attempts=0,next_attempt_at=now(),locked_at=NULL,last_error=NULL,updated_at=now()
-		FROM messages m WHERE t.message_id=m.id AND t.status='failed' AND m.event_type<>'PROCESSING_ACK'`)
+		FROM messages m WHERE t.message_id=m.id AND t.status='failed' AND m.event_type<>'PROCESSING_ACK' AND (m.event_type<>'HUMAN_REPLY' OR m.handoff_id IS NULL OR EXISTS(SELECT FROM handoffs h WHERE h.id=m.handoff_id AND h.reply_id=m.id AND h.status='open'))`)
 	if err != nil {
 		fail(c, 500, "database_error", "重新入队失败")
 		return
@@ -1120,6 +1141,15 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 			if err = a.queueBlockedKick(ctx, tx, msg.BotID, cid, msg.SenderID); err != nil {
 				return err
 			}
+		}
+	}
+	if !blocked {
+		handled, e := a.operatorCommand(ctx, tx, msg, cid, mid)
+		if e != nil {
+			return e
+		}
+		if handled {
+			return tx.Commit(ctx)
 		}
 	}
 	needsReview := !blocked && guardEnabled && msg.ConversationType == "group"

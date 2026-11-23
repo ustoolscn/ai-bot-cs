@@ -72,3 +72,16 @@ func TestDecisionHistoryVisibilityAndWindow(t *testing.T) {
 		t.Fatalf("limited history: %+v, %v", got, err)
 	}
 }
+
+func TestSocialOnlyRequiresWholeMessage(t *testing.T) {
+	for _, q := range []string{"你好！", "您好", "谢谢你", " Hello! "} {
+		if !socialOnly(q) {
+			t.Errorf("unnecessary retrieval for %q", q)
+		}
+	}
+	for _, q := range []string{"你好，怎么退款？", "还是不行", "hi, what is the price?", "你好\n用户引用的原文：支付失败"} {
+		if socialOnly(q) {
+			t.Errorf("business context lost for %q", q)
+		}
+	}
+}
