@@ -13,7 +13,7 @@
     <section class="table-panel">
       <el-table v-loading="loading" class="clickable-rows" :data="filtered" empty-text="还没有触发机器人的消息。机器人在群里被 @ 或收到私聊后会出现在这里。" @row-click="open">
         <el-table-column prop="time" label="时间" width="175" />
-        <el-table-column label="消息" min-width="340"><template #default="{ row }"><div class="message-preview"><strong>{{ row.question }}</strong><span>{{ row.attachments?.length ? `包含 ${row.attachments.length} 张图片 · ` : '' }}{{ row.answer || '未生成回复' }}</span></div></template></el-table-column>
+        <el-table-column label="消息" min-width="340"><template #default="{ row }"><div class="message-preview"><strong>{{ row.question }}</strong><span>{{ row.attachments?.length ? `包含 ${row.attachments.length} 个附件 · ` : '' }}{{ row.answer || '未生成回复' }}</span></div></template></el-table-column>
         <el-table-column label="机器人 / 会话" min-width="180"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.botName }}</strong><span>{{ row.conversationName }}</span></div></template></el-table-column>
         <el-table-column prop="sender" label="发送者" width="100" />
         <el-table-column label="模型" width="150"><template #default="{ row }"><div class="stacked-cell"><strong class="truncate">{{ row.model || '—' }}</strong><span>{{ row.tokens }} tokens</span></div></template></el-table-column>
@@ -35,7 +35,7 @@
           <span>{{ selected.time }}</span>
         </div>
 
-        <div class="detail-section"><h3>用户消息</h3><div class="content-box">{{ selected.question }}</div><div v-if="selected.attachments?.length" class="message-image-grid"><el-image v-for="(image,index) in selected.attachments" :key="image.previewUrl || index" :src="image.previewUrl" :preview-src-list="previewUrls(selected.attachments)" fit="cover" loading="lazy" /></div></div>
+        <div class="detail-section"><h3>用户消息</h3><div class="content-box">{{ selected.question }}</div><div v-if="selected.attachments?.length" class="message-image-grid"><div v-for="(v,i) in selected.attachments.filter(p=>p.type==='voice')" :key="i"><audio v-if="v.waveUrl" controls preload="none" :src="v.waveUrl"/><p>{{v.transcript}}</p></div><el-image v-for="(image,index) in selected.attachments.filter(p=>p.type==='image')" :key="image.previewUrl || index" :src="image.previewUrl" :preview-src-list="previewUrls(selected.attachments)" fit="cover" loading="lazy" /></div></div>
 
         <div class="detail-section">
           <h3>本次模型完整上下文 <small>（{{ selected.contextMessages?.length || 0 }} 条）</small></h3>

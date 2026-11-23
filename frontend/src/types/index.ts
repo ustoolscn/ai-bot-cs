@@ -110,6 +110,8 @@ export interface ContextMessage {
 }
 
 export interface MessageAttachment {
+  waveUrl?:string
+  transcript?:string
   type: string
   text?: string
   filename?: string

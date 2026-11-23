@@ -11,6 +11,8 @@ type ContentPart struct {
 	URL         string `json:"url,omitempty"`
 	Filename    string `json:"filename,omitempty"`
 	ContentType string `json:"contentType,omitempty"`
+	WaveURL     string `json:"waveUrl,omitempty"`
+	Transcript  string `json:"transcript,omitempty"`
 	StorageKey  string `json:"storageKey,omitempty"`
 	SizeBytes   int64  `json:"sizeBytes,omitempty"`
 	Width       int    `json:"width,omitempty"`

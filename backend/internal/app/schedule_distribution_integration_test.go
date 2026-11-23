@@ -9,6 +9,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestScheduleDistributionAndReviewDeletion(t *testing.T) {
 	mock := &agentMock{}
 	mock.Server = httptest.NewServer(http.HandlerFunc(mock.serve))
 	defer mock.Close()
-	a, err := New(ctx, config.Config{MasterKey: []byte("0123456789abcdef0123456789abcdef"), AdminUsername: "admin", AdminPassword: "test-password", DataDir: t.TempDir(), QQTokenURL: mock.URL + "/token", QQAPIBaseURL: mock.URL}, pool, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a, err := New(ctx, config.Config{MasterKey: []byte("0123456789abcdef0123456789abcdef"), PublicBaseURL: "https://reports.example.org", AdminUsername: "admin", AdminPassword: "test-password", DataDir: t.TempDir(), QQTokenURL: mock.URL + "/token", QQAPIBaseURL: mock.URL}, pool, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	check := func(err error) {
 		t.Helper()
 		if err != nil {
@@ -64,7 +65,7 @@ func TestScheduleDistributionAndReviewDeletion(t *testing.T) {
 	bot, one := makeGroup(1)
 	_, two := makeGroup(2)
 	insert("INSERT INTO model_profiles(name,kind,base_url,api_key_enc,model,enabled,is_default,web_search_mode) VALUES('search','chat',$1,$2,'search',true,true,'responses')", mock.URL+"/v1", secret)
-	input := map[string]any{"name": "天气", "sendTime": "08:00", "instruction": "查询天气", "source": "web", "format": "text", "enabled": true, "groupIds": []string{one, two}}
+	input := map[string]any{"name": "天气", "sendTime": "08:00", "instruction": "查询天气", "source": "web", "format": "link", "enabled": true, "groupIds": []string{one, two}}
 	id := createdID(t, requestJSON(t, client, "POST", api+"schedules", input, 200))
 	items := dataSlice(t, requestJSON(t, client, "GET", api+"schedules", nil, 200))
 	if len(items) != 1 {
@@ -92,6 +93,25 @@ func TestScheduleDistributionAndReviewDeletion(t *testing.T) {
 	check(a.processOutbox(ctx))
 	count(2, "SELECT count(DISTINCT m.bot_id) FROM messages m JOIN schedule_deliveries d ON m.id=d.message_id WHERE m.status='sent'")
 	count(1, "SELECT count(*) FROM model_calls WHERE kind='scheduled_post'")
+	var page, link string
+	check(pool.QueryRow(ctx, "SELECT id::text FROM scheduled_web_pages WHERE expires_at BETWEEN now()+interval '167 hours' AND now()+interval '168 hours'").Scan(&page))
+	link = a.cfg.PublicBaseURL + "/p/" + page
+	count(2, "SELECT count(*) FROM messages WHERE content=$1 AND status='sent'", link)
+	readPage := func(status int) {
+		t.Helper()
+		response, err := http.Get(server.URL + "/p/" + page)
+		check(err)
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		check(err)
+		if response.StatusCode != status || response.Header.Get("Cache-Control") != "no-store" {
+			t.Fatalf("page status %d", response.StatusCode)
+		}
+		if status == 200 && (!strings.Contains(string(body), "查证后的测试资讯") || !strings.Contains(response.Header.Get("Content-Security-Policy"), "sandbox")) {
+			t.Fatalf("unexpected document: %s", body)
+		}
+	}
+	readPage(200)
 	requestJSON(t, client, "GET", path+"/runs", nil, 200)
 	input["allGroups"] = true
 	requestJSON(t, client, "PUT", path, input, 200)
@@ -107,6 +127,12 @@ func TestScheduleDistributionAndReviewDeletion(t *testing.T) {
 	}
 	count(3, "SELECT count(DISTINCT m.conversation_id) FROM messages m JOIN schedule_deliveries d ON d.message_id=m.id JOIN schedule_runs r ON r.id=d.run_id WHERE NOT is_test AND m.status='sent'")
 	requestJSON(t, client, "GET", api+"schedules", nil, 200)
+	count(2, "SELECT count(*) FROM scheduled_web_pages")
+	_, err = pool.Exec(ctx, "UPDATE scheduled_web_pages SET expires_at=now() WHERE id=$1", page)
+	check(err)
+	readPage(404)
+	check(a.processMaintenance(ctx))
+	count(1, "SELECT count(*) FROM scheduled_web_pages")
 	kb := insert("INSERT INTO knowledge_bases(name) VALUES('test')")
 	msg := insert("INSERT INTO messages(channel,bot_id,conversation_id,direction) VALUES('qq',$1,$2,'inbound')", bot, one)
 	for _, tc := range []struct {

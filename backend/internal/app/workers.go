@@ -81,6 +81,9 @@ func (a *App) processMaintenance(ctx context.Context) error {
 	if _, err = tx.Exec(ctx, "DELETE FROM system_alerts WHERE created_at<$1", cutoff); err != nil {
 		return fmt.Errorf("清理告警失败: %w", err)
 	}
+	if _, err = tx.Exec(ctx, "DELETE FROM scheduled_web_pages WHERE expires_at<=now()"); err != nil {
+		return fmt.Errorf("清理过期定时网页失败: %w", err)
+	}
 	if _, err = tx.Exec(ctx, "DELETE FROM admin_sessions WHERE expires_at<now()"); err != nil {
 		return fmt.Errorf("清理过期管理会话失败: %w", err)
 	}
@@ -288,10 +291,12 @@ func (a *App) retryDocumentJob(ctx context.Context, j documentJob, cause error) 
 }
 
 type outboxJob struct {
+	Extended                                                                                                                     bool
 	TaskID, MessageID, BotID, ConversationRecordID, ConversationType, ConversationID, ReplyTo, Text, EventType, AppID, SecretEnc string
 	Sequence, Attempts                                                                                                           int
 	Deadline                                                                                                                     *time.Time
 	Parts                                                                                                                        []domain.ContentPart
+	Payload                                                                                                                      []byte
 }
 
 func (a *App) claimOutbox(ctx context.Context) (outboxJob, error) {
@@ -302,7 +307,7 @@ func (a *App) claimOutbox(ctx context.Context) (outboxJob, error) {
 	defer tx.Rollback(ctx)
 	var j outboxJob
 	var partsRaw []byte
-	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,c.id::text,c.type,c.platform_id,COALESCE(m.reply_to_message_id,''),m.content,m.event_type,m.parts,b.app_id,b.app_secret_enc,t.msg_seq,t.attempts,m.reply_deadline FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='pending' AND t.next_attempt_at<=now() ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationRecordID, &j.ConversationType, &j.ConversationID, &j.ReplyTo, &j.Text, &j.EventType, &partsRaw, &j.AppID, &j.SecretEnc, &j.Sequence, &j.Attempts, &j.Deadline)
+	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,c.id::text,c.type,c.platform_id,COALESCE(m.reply_to_message_id,''),m.content,m.event_type,m.parts,b.app_id,b.app_secret_enc,t.msg_seq,t.attempts,m.reply_deadline,m.qq_send_payload,c.qq_extended_replies FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='pending' AND t.next_attempt_at<=now() ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationRecordID, &j.ConversationType, &j.ConversationID, &j.ReplyTo, &j.Text, &j.EventType, &partsRaw, &j.AppID, &j.SecretEnc, &j.Sequence, &j.Attempts, &j.Deadline, &j.Payload, &j.Extended)
 	if err != nil {
 		return j, err
 	}
@@ -387,7 +392,44 @@ func (a *App) processOutbox(ctx context.Context) error {
 		}
 		quote = agent.TruncateRunes(quote, 120)
 	}
-	pid, err := client.Send(sendCtx, domain.OutboundMessage{ID: j.MessageID, Channel: "qq", BotID: j.BotID, ConversationType: j.ConversationType, ConversationID: j.ConversationID, ReplyToMessageID: replyTo, MentionUserID: mention, MentionUserName: mentionName, ReferenceMessageID: qq.ReferenceIndex(raw), QuotedText: quote, Text: j.Text, Format: format, Parts: j.Parts, ReplyDeadline: j.Deadline, Sequence: j.Sequence})
+	reference := qq.ReferenceIndex(raw)
+	if j.EventType == "AI_RESPONSE" && j.Sequence == 1 {
+		var own string
+		err = a.db.QueryRow(ctx, `SELECT COALESCE((SELECT o.qq_ref_idx FROM messages o WHERE o.conversation_id=i.conversation_id AND o.direction='outbound' AND o.status='sent' AND NOT o.context_excluded AND o.qq_ref_idx<>'' AND (i.raw_event#>'{d,message_scene,ext}') ? ('ref_msg_idx='||o.qq_ref_idx) LIMIT 1),'') FROM messages i WHERE i.conversation_id=$1 AND i.platform_message_id=$2`, j.ConversationRecordID, j.ReplyTo).Scan(&own)
+		if err != nil {
+			return a.retryOutbox(ctx, j, err)
+		}
+		if own != "" {
+			reference = own
+		} else if j.ConversationType == "private" {
+			if err = a.db.QueryRow(ctx, "SELECT qq_ref_idx FROM messages WHERE conversation_id=$1 AND platform_message_id=$2", j.ConversationRecordID, j.ReplyTo).Scan(&reference); err != nil {
+				return a.retryOutbox(ctx, j, err)
+			}
+		}
+	}
+	if j.EventType == "AI_RESPONSE" {
+		var selected string
+		if err = a.db.QueryRow(ctx, `SELECT COALESCE(q.qq_ref_idx,'') FROM messages m LEFT JOIN messages q ON q.id=m.qq_quote_target AND q.conversation_id=m.conversation_id AND q.status='sent' AND NOT q.context_excluded WHERE m.id=$1`, j.MessageID).Scan(&selected); err != nil {
+			return a.retryOutbox(ctx, j, err)
+		}
+		if selected != "" {
+			reference = selected
+		}
+	}
+	var receipt qq.Receipt
+	if len(j.Payload) > 0 {
+		var p map[string]any
+		if err = json.Unmarshal(j.Payload, &p); err != nil {
+			return a.retryOutbox(ctx, j, err)
+		}
+		if replyTo != "" {
+			p["msg_id"] = replyTo
+			p["msg_seq"] = j.Sequence
+		}
+		receipt, err = client.SendConfigured(sendCtx, qq.Prefix(j.ConversationType, j.ConversationID), p)
+	} else {
+		receipt, err = client.SendWithReceipt(sendCtx, domain.OutboundMessage{ID: j.MessageID, Channel: "qq", BotID: j.BotID, ConversationType: j.ConversationType, ConversationID: j.ConversationID, ReplyToMessageID: replyTo, MentionUserID: mention, MentionUserName: mentionName, ReferenceMessageID: reference, QuotedText: quote, Text: j.Text, Format: format, Parts: j.Parts, ReplyDeadline: j.Deadline, Sequence: j.Sequence})
+	}
 	if err != nil {
 		if hasContentPart(j.Parts, "ark_ack") {
 			a.log.Warn("QQ processing ARK failed", "bot_id", j.BotID, "conversation_type", j.ConversationType, "conversation_id", j.ConversationID, "error", err)
@@ -405,9 +447,9 @@ func (a *App) processOutbox(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	_, err = tx.Exec(ctx, "UPDATE outbox_tasks SET status='sent',platform_message_id=$1,updated_at=now() WHERE id=$2", pid, j.TaskID)
+	_, err = tx.Exec(ctx, "UPDATE outbox_tasks SET status='sent',platform_message_id=$1,updated_at=now() WHERE id=$2", receipt.ID, j.TaskID)
 	if err == nil {
-		_, err = tx.Exec(ctx, "UPDATE messages SET status='sent',platform_message_id=$1 WHERE id=$2", nullString(pid), j.MessageID)
+		_, err = tx.Exec(ctx, "UPDATE messages SET status='sent',platform_message_id=$1,qq_ref_idx=$3,qq_sent_at=$4 WHERE id=$2", nullString(receipt.ID), j.MessageID, receipt.Ext.Index, parseQQTime(receipt.Timestamp))
 	}
 	if err == nil && j.EventType == "AI_RESPONSE" {
 		_, err = tx.Exec(ctx, scheduleProcessingAckRetractionSQL, j.BotID, j.ConversationRecordID, j.ReplyTo)
@@ -420,7 +462,8 @@ func (a *App) processOutbox(ctx context.Context) error {
 
 // Keep the persisted reply association for history and sequence accounting.
 func humanReplyNeedsActive(j outboxJob, now time.Time) bool {
-	return j.EventType == "HUMAN_REPLY" && (j.ReplyTo == "" || j.Sequence > 5 || (j.Deadline != nil && !now.Before(*j.Deadline)))
+	limit := qqReplyLimit(j.ConversationType, j.Extended)
+	return j.EventType == "HUMAN_REPLY" && (j.ReplyTo == "" || j.Sequence > limit || (j.Deadline != nil && !now.Before(*j.Deadline)))
 }
 
 const scheduleProcessingAckRetractionSQL = `INSERT INTO message_retractions(message_id)

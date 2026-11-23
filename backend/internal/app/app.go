@@ -104,6 +104,7 @@ func (a *App) Router() http.Handler {
 	r := gin.New()
 	r.Use(gin.Recovery(), a.requestLog())
 	r.GET("/healthz", func(c *gin.Context) { ok(c, gin.H{"status": "ok"}) })
+	r.GET("/p/:id", a.scheduledWebPage)
 	r.POST("/callbacks/qq/:botId", a.qqWebhook)
 	api := r.Group("/api")
 	api.POST("/auth/login", a.login)
@@ -164,6 +165,13 @@ func (a *App) Router() http.Handler {
 	auth.DELETE("/blocked-users/:id", a.deleteBlockedUser)
 	auth.GET("/conversations/:id/staff-learning", a.getStaffLearning)
 	auth.POST("/conversations/:id/staff-learning", a.startStaffLearning)
+	auth.GET("/conversations/:id/delivery/options", a.qqDeliveryOptions)
+	auth.GET("/conversations/:id/delivery/assets", a.qqAssets)
+	auth.POST("/conversations/:id/delivery/upload", a.qqUpload)
+	auth.POST("/conversations/:id/delivery/send", a.qqQueue)
+	auth.GET("/conversations/:id/qq/:section", a.qqGroupRead)
+	auth.POST("/conversations/:id/qq/:section", a.qqGroupAction)
+	auth.POST("/conversations/:id/name/sync", a.syncGroupName)
 	auth.POST("/conversations/:id/members/sync", a.syncGroupMembers)
 	auth.GET("/conversations/:id/members", a.listMembers)
 	auth.PUT("/conversations/:id/members/:userId", a.updateMember)
@@ -1009,6 +1017,17 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 	}
 	_, _ = tx.Exec(ctx, "UPDATE bots SET last_event_at=now(),status='online' WHERE id=$1", botID)
 	if msg == nil {
+		if env.T == "INTERACTION_CREATE" {
+			var interaction struct {
+				ID   string
+				Type int
+			}
+			if json.Unmarshal(env.D, &interaction) == nil && interaction.ID != "" && (interaction.Type == 11 || interaction.Type == 12) {
+				if _, err = tx.Exec(ctx, `INSERT INTO agent_jobs(kind,payload,dedupe_key) VALUES('qq_interaction_ack',jsonb_build_object('bot',$1::text,'interaction',$2::text),$3) ON CONFLICT DO NOTHING`, botID, interaction.ID, "qq_ack:"+botID+":"+interaction.ID); err != nil {
+					return err
+				}
+			}
+		}
 		if err := a.persistQQGroupEvent(ctx, tx, botID, env, settings.DefaultContextLimit); err != nil {
 			return err
 		}
@@ -1022,7 +1041,7 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 		return err
 	}
 	if msg.SenderID != "" {
-		_, err = tx.Exec(ctx, `INSERT INTO conversation_members(conversation_id,platform_user_id,display_name,active,last_seen_at) VALUES($1,$2,$3,true,$4) ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET display_name=CASE WHEN EXCLUDED.display_name<>'' THEN EXCLUDED.display_name ELSE conversation_members.display_name END,active=true,membership_updated_at=clock_timestamp(),last_seen_at=EXCLUDED.last_seen_at`, cid, msg.SenderID, msg.SenderName, msg.EventTime)
+		_, err = tx.Exec(ctx, `INSERT INTO conversation_members(conversation_id,platform_user_id,display_name,active,last_seen_at,qq_avatar,qq_union_id) VALUES($1,$2,$3,true,$4,COALESCE($5::jsonb#>>'{d,author,avatar}',''),COALESCE($5::jsonb#>>'{d,author,union_openid}','')) ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET qq_avatar=COALESCE(NULLIF(EXCLUDED.qq_avatar,''),conversation_members.qq_avatar),qq_union_id=COALESCE(NULLIF(EXCLUDED.qq_union_id,''),conversation_members.qq_union_id),display_name=CASE WHEN EXCLUDED.display_name<>'' THEN EXCLUDED.display_name ELSE conversation_members.display_name END,active=true,membership_updated_at=clock_timestamp(),last_seen_at=EXCLUDED.last_seen_at`, cid, msg.SenderID, msg.SenderName, msg.EventTime, string(msg.Raw))
 		if err != nil {
 			return err
 		}
@@ -1043,6 +1062,11 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 		RETURNING id::text`, msg.BotID, cid, msg.SenderID, msg.SenderName, msg.PlatformMessageID, msg.EventType, msg.Text, string(parts), string(msg.Raw), msg.EventTime, msg.ReplyDeadline, msg.MentionsBot).Scan(&mid)
 	if err != nil {
 		return err
+	}
+	if index := qq.ReferenceIndex(msg.Raw); index != "" {
+		if _, err = tx.Exec(ctx, "UPDATE messages SET qq_ref_idx=$2 WHERE id=$1 AND qq_ref_idx=''", mid, index); err != nil {
+			return err
+		}
 	}
 	var senderIsStaff bool
 	if msg.ConversationType == "group" && msg.SenderID != "" {
@@ -1111,6 +1135,9 @@ func (a *App) persistQQGroupEvent(ctx context.Context, tx pgx.Tx, botID string, 
 		return nil
 	}
 	var event struct {
+		Timestamp    int64  `json:"timestamp"`
+		Union        string `json:"union_group_openid"`
+		User         string `json:"user_openid"`
 		GroupOpenID  string `json:"group_openid"`
 		MemberOpenID string `json:"member_openid"`
 		OpMemberID   string `json:"op_member_openid"`
@@ -1123,17 +1150,29 @@ func (a *App) persistQQGroupEvent(ctx context.Context, tx pgx.Tx, botID string, 
 	if err != nil {
 		return err
 	}
+	occurred := time.Now()
+	if event.Timestamp > 0 {
+		occurred = time.Unix(event.Timestamp, 0)
+	}
+	if event.Union != "" {
+		if _, err = tx.Exec(ctx, "UPDATE conversations SET qq_group_info=qq_group_info||jsonb_build_object('union_group_openid',$2::text) WHERE id=$1", conversationID, event.Union); err != nil {
+			return err
+		}
+	}
 	if env.T == "GROUP_DEL_ROBOT" {
 		_, err = tx.Exec(ctx, "UPDATE conversations SET enabled=false,updated_at=now() WHERE id=$1", conversationID)
 		return err
 	}
 	memberID := event.MemberOpenID
 	if memberID == "" && (env.T == "GROUP_MEMBER_ADD" || env.T == "GROUP_MEMBER_REMOVE") {
-		memberID = event.OpMemberID
+		memberID = event.User
+		if memberID == "" {
+			memberID = event.OpMemberID
+		}
 	}
 	if memberID != "" {
 		active := env.T != "GROUP_MEMBER_REMOVE"
-		_, err = tx.Exec(ctx, `INSERT INTO conversation_members(conversation_id,platform_user_id,active,last_seen_at) VALUES($1,$2,$3,now()) ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET active=EXCLUDED.active,membership_updated_at=clock_timestamp(),last_seen_at=now()`, conversationID, memberID, active)
+		_, err = tx.Exec(ctx, `INSERT INTO conversation_members(conversation_id,platform_user_id,active,last_seen_at,membership_updated_at,qq_joined_at) VALUES($1,$2,$3,$4,$4,CASE WHEN $5 THEN $4::timestamptz END) ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET active=EXCLUDED.active,membership_updated_at=EXCLUDED.membership_updated_at,last_seen_at=GREATEST(conversation_members.last_seen_at,EXCLUDED.last_seen_at),qq_joined_at=COALESCE(EXCLUDED.qq_joined_at,conversation_members.qq_joined_at) WHERE conversation_members.membership_updated_at<=EXCLUDED.membership_updated_at`, conversationID, memberID, active, occurred, env.T == "GROUP_MEMBER_ADD")
 	}
 	if err == nil && env.T == "GROUP_MEMBER_ADD" && event.MemberOpenID != "" {
 		err = a.queueBlockedKick(ctx, tx, botID, conversationID, memberID)

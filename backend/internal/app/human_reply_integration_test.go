@@ -59,7 +59,7 @@ func TestHumanReplyDelivery(t *testing.T) {
 		exhausted, rejected bool
 	}{
 		{"passive group", "group", time.Minute, false, false},
-		{"expired group", "group", 6 * time.Minute, false, false},
+		{"group after six minutes", "group", 6 * time.Minute, false, false},
 		{"expired private", "private", 61 * time.Minute, false, false},
 		{"passive private", "private", 30 * time.Minute, false, false},
 		{"exhausted", "group", time.Minute, true, false},
@@ -109,7 +109,7 @@ func TestHumanReplyDelivery(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			active := tc.exhausted || tc.age > time.Hour || (tc.kind == "group" && tc.age > 5*time.Minute)
+			active := tc.exhausted || tc.age >= time.Hour
 			if len(bodies) != attempts {
 				t.Fatalf("calls=%d want=%d", len(bodies), attempts)
 			}

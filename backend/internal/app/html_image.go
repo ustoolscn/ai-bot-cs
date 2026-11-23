@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,6 +65,11 @@ func staticDocument(src string) (string, error) {
 					switch attr.Key {
 					case "id", "class", "style", "colspan", "rowspan", "alt", "width", "height", "lang", "dir":
 						attrs = append(attrs, attr)
+					case "href":
+						u, err := url.Parse(attr.Val)
+						if c.Data == "a" && err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Hostname() != "" && u.User == nil {
+							attrs = append(attrs, attr)
+						}
 					case "src":
 						if c.Data == "img" && (strings.HasPrefix(attr.Val, "data:image/png;base64,") || strings.HasPrefix(attr.Val, "data:image/jpeg;base64,")) {
 							attrs = append(attrs, attr)
@@ -86,7 +92,7 @@ func staticDocument(src string) (string, error) {
 	if err := html.Render(&body, doc); err != nil {
 		return "", err
 	}
-	const policy = "<meta charset=utf-8><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'\"><style>html{background:white;font:18px/1.55 sans-serif}*{box-sizing:border-box;animation:none!important;transition:none!important}body{overflow-wrap:anywhere}</style>"
+	const policy = "<meta charset=utf-8><meta name=viewport content=\"width=device-width, initial-scale=1\"><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'\"><style>html{background:white;font:18px/1.55 sans-serif}*{box-sizing:border-box;animation:none!important;transition:none!important}body{overflow-wrap:anywhere}</style>"
 	return "<!doctype html>" + strings.Replace(body.String(), "<head>", "<head>"+policy, 1), nil
 }
 

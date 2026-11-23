@@ -257,6 +257,14 @@ func publicContentParts(messageID string, value any) []map[string]any {
 		if part.Text != "" {
 			item["text"] = part.Text
 		}
+		if strings.HasPrefix(part.WaveURL, "https://") {
+			item["waveUrl"] = part.WaveURL
+			item["type"] = "voice"
+		}
+		if part.Transcript != "" {
+			item["transcript"] = part.Transcript
+			item["type"] = "voice"
+		}
 		if part.Filename != "" {
 			item["filename"] = part.Filename
 		}

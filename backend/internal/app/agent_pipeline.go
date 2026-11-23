@@ -67,6 +67,10 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.scheduleProcessingAckRetraction(ctx, j.BotID, j.ConversationID, j.PlatformMessageID)
 	}
 
+	j.Content, err = a.qqContext(ctx, j)
+	if err != nil {
+		return a.retryInbox(ctx, j, err)
+	}
 	finishCheck("会话可接待", nil)
 	var imageParts []domain.ChatContentPart
 	imageID := j.MessageID
@@ -225,6 +229,13 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.retryInbox(ctx, j, err)
 	}
 	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, "SELECT id FROM conversations WHERE id=$1 FOR UPDATE", j.ConversationID); err != nil {
+		return a.retryInbox(ctx, j, err)
+	}
+	var firstSeq int
+	if err = tx.QueryRow(ctx, `SELECT COALESCE(max(t.msg_seq),0)+1 FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.bot_id=$1 AND m.reply_to_message_id=$2 AND m.event_type<>'PROCESSING_ACK'`, j.BotID, j.PlatformMessageID).Scan(&firstSeq); err != nil {
+		return a.retryInbox(ctx, j, err)
+	}
 	for i, part := range replyParts {
 		if err != nil {
 			break
@@ -236,8 +247,11 @@ func (a *App) processInbox(ctx context.Context) error {
 		partsJSON, _ := json.Marshal(mediaParts)
 		var outID string
 		err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,content,parts,reply_to_message_id,status,event_at,reply_deadline) VALUES('qq',$1,$2,'outbound','AI_RESPONSE',$3,$4::jsonb,$5,'pending',now()+($6 * interval '1 millisecond'),$7) RETURNING id::text`, j.BotID, j.ConversationID, part, string(partsJSON), j.PlatformMessageID, i, j.Deadline).Scan(&outID)
+		if err == nil && i == 0 && rt.quoteTarget != "" {
+			_, err = tx.Exec(ctx, "UPDATE messages SET qq_quote_target=$2 WHERE id=$1", outID, rt.quoteTarget)
+		}
 		if err == nil {
-			_, err = tx.Exec(ctx, "INSERT INTO outbox_tasks(message_id,msg_seq,next_attempt_at) VALUES($1,$2,now()+($3 * interval '1500 milliseconds'))", outID, 1+i, i)
+			_, err = tx.Exec(ctx, "INSERT INTO outbox_tasks(message_id,msg_seq,next_attempt_at) VALUES($1,$2,now()+($3 * interval '1500 milliseconds'))", outID, firstSeq+i, i)
 		}
 	}
 	if err == nil {

@@ -53,6 +53,34 @@ func TestGroupRosterAndGuard(t *testing.T) {
 		switch r.URL.Path {
 		case "/token":
 			fmt.Fprint(w, `{"access_token":"token"}`)
+		case "/v2/groups/g/info":
+			if r.Method != "GET" || r.Header.Get("Authorization") != "QQBot token" {
+				t.Error("invalid group info request")
+			}
+			if deny {
+				fmt.Fprint(w, `{"code":11253}`)
+				return
+			}
+			fmt.Fprint(w, `{"group_openid":"g","group_name":"QQ 测试群"}`)
+		case "/v2/groups/g/join_request_list":
+			if r.URL.Query().Get("limit") != "50" {
+				t.Error("missing application page size")
+			}
+			fmt.Fprint(w, `{"list":[{"member_openid":"user","username":"Alice","verify_info":{"review_qa_list":[{"question":"q","answer":"a"}]}}],"next_cursor":""}`)
+		case "/v2/groups/g/approval_join_request/review":
+			var p map[string]any
+			json.NewDecoder(r.Body).Decode(&p)
+			if p["op"] != "decline" || p["reject_reason"] != "reason" || p["add_to_member_blacklist"] != true {
+				t.Errorf("bad decline: %#v", p)
+			}
+			fmt.Fprint(w, "{}")
+		case "/v2/groups/g/messages":
+			var p map[string]any
+			json.NewDecoder(r.Body).Decode(&p)
+			if ref, ok := p["message_reference"].(map[string]any); !ok || ref["message_id"] != "own-index" {
+				t.Errorf("bad sent reference: %v", p)
+			}
+			fmt.Fprint(w, `{"id":"out-test","ext_info":{"ref_idx":"out-ref"},"timestamp":"2026-11-24T03:40:00+08:00"}`)
 		case "/v2/groups/g/members":
 			if deny {
 				w.WriteHeader(403)
@@ -83,7 +111,18 @@ func TestGroupRosterAndGuard(t *testing.T) {
 			if r.Method != "DELETE" {
 				t.Errorf("unexpected method %s", r.Method)
 			}
-		case "/v2/groups/g/restrict_chat_setting", "/v2/groups/g/approval_join_request/new":
+		case "/v2/groups/g/restrict_chat_setting":
+			if r.Method == "GET" {
+				fmt.Fprint(w, `{"members":[],"global_rule":{"mode":"none"}}`)
+				return
+			}
+			var p struct{ Members []struct{ Op string } }
+			json.NewDecoder(r.Body).Decode(&p)
+			if len(p.Members) != 1 || (p.Members[0].Op != "add" && p.Members[0].Op != "update" && p.Members[0].Op != "del") {
+				t.Errorf("invalid mute %v", p)
+			}
+			fmt.Fprint(w, "{}")
+		case "/v2/groups/g/approval_join_request/new":
 			if r.Method != "POST" {
 				t.Errorf("unexpected method %s", r.Method)
 			}
@@ -115,9 +154,39 @@ func TestGroupRosterAndGuard(t *testing.T) {
 	client := &http.Client{Jar: jar}
 	requestJSON(t, client, "POST", server.URL+"/api/auth/login", map[string]string{"username": "admin", "password": "test-password"}, 200)
 	path := server.URL + "/api/conversations/" + cid
+	requestJSON(t, client, "GET", path+"/qq/applications", nil, 200)
+	requestJSON(t, client, "GET", path+"/qq/mutes", nil, 200)
+	requestJSON(t, client, "POST", path+"/qq/applications", map[string]any{"member": "review", "id": "request", "op": "decline", "block": true, "reason": "reason"}, 200)
+	for _, op := range []string{"add", "update", "del"} {
+		requestJSON(t, client, "POST", path+"/qq/mutes", map[string]any{"member": "test", "op": op, "minutes": 20}, 200)
+	}
+	requestJSON(t, client, "POST", path+"/qq/mutes", map[string]any{"member": "test", "op": "update", "minutes": 50000}, 400)
+	var oldID, inID string
+	check(pool.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,platform_message_id,content,status,qq_ref_idx) VALUES('qq',$1,$2,'outbound','AI_RESPONSE','own','原来的回复','sent','own-index') RETURNING id::text`, bot, cid).Scan(&oldID))
+	check(pool.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,content,raw_event) VALUES('qq',$1,$2,'inbound','继续','{"d":{"message_scene":{"ext":["ref_msg_idx=own-index"]},"msg_elements":[{"content":"备用原文"}]}}') RETURNING id::text`, bot, cid).Scan(&inID))
+	quoted, e := a.qqContext(ctx, inboxJob{MessageID: inID, ConversationID: cid, Content: "继续"})
+	check(e)
+	if !strings.Contains(quoted, "机器人：原来的回复") {
+		t.Fatal(quoted)
+	}
+	requestJSON(t, client, "GET", path+"/delivery/options", nil, 200)
+	requestJSON(t, client, "POST", path+"/delivery/send", map[string]any{"kind": "text", "text": "test", "reference": oldID}, 200)
+	check(a.processOutbox(ctx))
+	var sent bool
+	check(pool.QueryRow(ctx, `SELECT EXISTS(SELECT FROM messages WHERE platform_message_id='out-test' AND qq_ref_idx='out-ref' AND qq_sent_at IS NOT NULL)`).Scan(&sent))
+	if !sent {
+		t.Fatal("missing QQ receipt")
+	}
+	requestJSON(t, client, "POST", path+"/name/sync", nil, 200)
 	requestJSON(t, client, "POST", path+"/members/sync", nil, 200)
 	deny = true
 	requestJSON(t, client, "POST", path+"/members/sync?refresh=true", nil, 403)
+	requestJSON(t, client, "POST", path+"/name/sync", nil, 403)
+	var savedName string
+	check(pool.QueryRow(ctx, "SELECT name FROM conversations WHERE id=$1", cid).Scan(&savedName))
+	if savedName != "QQ 测试群" {
+		t.Fatalf("unexpected saved name %q", savedName)
+	}
 	count := func(want int, sql string) {
 		t.Helper()
 		var n int

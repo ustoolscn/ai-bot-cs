@@ -159,6 +159,8 @@ docker image inspect ai-bot:latest >/dev/null
 
 ### 3. 启动单应用容器
 
+HTML 截图使用 Chromium 的用户命名空间沙箱。将 `chromium-seccomp.json` 与 `docker-compose.yml` 放在同一目录。自定义 Compose 部署也要在应用服务的 `security_opt` 中加入 `no-new-privileges:true` 和 `seccomp=./chromium-seccomp.json`，并在更新配置后重建应用容器。该配置基于 [Moby seccomp 默认配置](https://github.com/moby/profiles/blob/a0fa70805f742f7da15b367770d802ea2a86c68b/seccomp/default.json)，仅调整 Chromium 使用的 user、PID、network 命名空间规则。
+
 复制生产环境模板并填写真实配置：
 
 ```bash

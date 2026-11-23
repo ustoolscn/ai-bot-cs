@@ -13,14 +13,14 @@
         <el-table-column label="知识库" min-width="190"><template #default="{ row }"><span :class="row.knowledgeBaseNames.length ? '' : 'faint'">{{ row.knowledgeBaseNames.join('、') || '未绑定' }}</span></template></el-table-column>
         <el-table-column label="成员 / 消息" width="120"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.memberCount }} 人</strong><span>{{ row.messageCount.toLocaleString() }} 条</span></div></template></el-table-column>
         <el-table-column prop="lastActiveAt" label="最近活跃" width="140" />
-        <el-table-column label="操作" width="245" fixed="right"><template #default="{ row }"><el-button link type="primary" @click.stop="edit(row)">配置</el-button><el-button link type="primary" @click.stop="openMembers(row)">成员</el-button><el-button v-if="row.type === 'group'" link type="primary" @click.stop="guardGroup=row">群管理</el-button></template></el-table-column>
+        <el-table-column label="操作" width="290" fixed="right"><template #default="{ row }"><el-button v-if="row.type === 'group'" link type="primary" :loading="syncingNames.has(row.id)" @click.stop="syncName(row)">同步群名</el-button><el-button link type="primary" @click.stop="edit(row)">配置</el-button><el-button link type="primary" @click.stop="compose=row">发送</el-button><el-button link type="primary" @click.stop="openMembers(row)">成员</el-button><el-button v-if="row.type === 'group'" link type="primary" @click.stop="guardGroup=row">群管理</el-button></template></el-table-column>
       </el-table>
     </section>
     <el-drawer v-model="drawer" :title="`配置 · ${editing.name || ''}`" size="520px">
       <el-form label-position="top">
         <div class="drawer-section">
           <h3>名称</h3>
-          <p>QQ 不提供群名或昵称，起个好认的名字方便查找。</p>
+          <p>可自定义显示名称。点击列表里的“同步群名”会用 QQ 当前的群名替换显示名称。</p>
           <el-input v-model="editing.name" />
         </div>
         <div class="drawer-section">
@@ -50,6 +50,7 @@
       </el-form>
       <template #footer><el-button @click="drawer = false">取消</el-button><el-button type="primary" @click="save">保存</el-button></template>
     </el-drawer>
+    <QQCompose v-if="compose" :key="compose.id" :row="compose" @close="compose=null"/>
     <GroupGuardDrawer v-if="guardGroup" :group="guardGroup" @close="guardGroup=null"/>
     <MembersDrawer v-model="membersOpen" :conversation-id="membersConv.id" :conversation-name="membersConv.name" :is-group="membersConv.isGroup" @synced="load" :bot-id="membersConv.botId" :bot-name="membersConv.botName" />
   </div>
@@ -60,11 +61,28 @@ import { useAdminEvents } from '@/composables/useAdminEvents'
 import { botServices, type BotService } from "@/api/support"
 import { computed, onMounted, reactive, ref } from 'vue'; import { ChatDotRound, Refresh, Search, User } from '@element-plus/icons-vue'; import { ElMessage } from 'element-plus'; import { api } from '@/api'; import PageHeader from '@/components/PageHeader.vue'; import MembersDrawer from '@/components/agent/MembersDrawer.vue'; import type { Conversation, KnowledgeBase } from '@/types'
 import GroupGuardDrawer from "@/components/agent/GroupGuardDrawer.vue"
+import QQCompose from '@/components/agent/QQCompose.vue'
+const compose=ref<Conversation|null>(null)
 const guardGroup=ref<Conversation|null>(null)
 const conversations = ref<Conversation[]>([]); const knowledgeBases=ref<KnowledgeBase[]>([]); const search = ref(''); const type = ref('all'); const trigger = ref('all'); const drawer = ref(false); const editing = reactive<Conversation>({} as Conversation)
 const filtered = computed(() => conversations.value.filter(c => (!search.value || `${c.name}${c.id}`.includes(search.value)) && (type.value === 'all' || c.type === type.value) && (trigger.value === 'all' || c.triggerMode === trigger.value)))
 onMounted(load); async function load() { const [items,kbs]=await Promise.all([api.conversations.list(),api.knowledge.list()]);knowledgeBases.value=kbs;for (const item of items) item.knowledgeBaseNames=(item.knowledgeBaseIds || []).map(id=>kbs.find(kb=>kb.id===id)?.name || id);conversations.value=items }
 function triggerText(value: string) { return ({ mention_only: '被 @ 时回复', smart: 'AI 判断后回复', disabled: '已停用' } as Record<string,string>)[value] }
+const syncingNames = reactive(new Set<string>())
+async function syncName(row: Conversation) {
+  if (syncingNames.has(row.id)) return
+  syncingNames.add(row.id)
+  try {
+    const { name } = await api.conversations.syncName(row.id)
+    const current = conversations.value.find(item => item.id === row.id)
+    if (current) current.name = name
+    ElMessage.success(`已同步群名：${name}`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '群名同步失败')
+  } finally {
+    syncingNames.delete(row.id)
+  }
+}
 const services = ref<BotService[]>([])
 const loadingServices = ref(false)
 const serviceError = ref('')

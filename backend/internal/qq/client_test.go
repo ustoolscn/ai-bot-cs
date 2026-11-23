@@ -296,8 +296,8 @@ func TestGroupReferencePayload(t *testing.T) {
 		t.Fatalf("incorrect reference: %#v", p)
 	}
 	m.ConversationType = "private"
-	if _, ok := textPayload(m)["message_reference"]; ok {
-		t.Fatal("group reference leaked into private reply")
+	if textPayload(m)["message_reference"].(map[string]any)["message_id"] != m.ReferenceMessageID {
+		t.Fatal("private reference missing")
 	}
 }
 

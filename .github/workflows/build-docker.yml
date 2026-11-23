@@ -70,8 +70,15 @@ jobs:
             PNPM_REGISTRY=https://registry.npmmirror.com
             ALPINE_MIRROR=https://mirrors.aliyun.com/alpine
 
+      - name: Verify sandboxed HTML screenshot
+        run: |
+          docker run --rm --network none --user aibot --entrypoint sh \
+            --security-opt no-new-privileges --security-opt seccomp=deploy/chromium-seccomp.json \
+            ai-bot:latest -ec 'timeout 30 chromium --headless --disable-gpu --user-data-dir=/tmp/chrome --screenshot=/tmp/card.png "data:text/html,<h1>Screenshot</h1>" && test "$(od -An -tx1 -N8 /tmp/card.png | tr -d " \n")" = 89504e470d0a1a0a'
+
       - name: Export image
         run: |
+          cp deploy/chromium-seccomp.json .
           docker save ai-bot:latest | gzip -9 > ai-bot-linux-amd64.tar.gz
           sha256sum ai-bot-linux-amd64.tar.gz > ai-bot-linux-amd64.tar.gz.sha256
 
@@ -82,5 +89,6 @@ jobs:
           path: |
             ai-bot-linux-amd64.tar.gz
             ai-bot-linux-amd64.tar.gz.sha256
+            chromium-seccomp.json
           if-no-files-found: error
           retention-days: 14

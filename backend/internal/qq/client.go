@@ -3,13 +3,15 @@ package qq
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
+
 	"encoding/json"
 	"fmt"
 	"html"
 	"io"
 	"net/http"
 	"net/url"
+	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,8 +27,18 @@ func NewClient(appID, secret, apiBase, tokenURL string) *Client {
 	return &Client{AppID: appID, AppSecret: secret, APIBase: strings.TrimRight(apiBase, "/"), TokenURL: tokenURL, HTTP: &http.Client{Timeout: 20 * time.Second}}
 }
 func (c *Client) token(ctx context.Context) (string, error) {
+	key := credentialKey(c)
+	entry := cachedToken(key)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if time.Until(entry.until) > time.Minute {
+		return entry.value, nil
+	}
 	b, _ := json.Marshal(map[string]string{"appId": c.AppID, "clientSecret": c.AppSecret})
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.TokenURL, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.TokenURL, bytes.NewReader(b))
+	if err != nil {
+		return "", err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	r, err := c.HTTP.Do(req)
 	if err != nil {
@@ -38,20 +50,44 @@ func (c *Client) token(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("QQ token status %d", r.StatusCode)
 	}
 	var out struct {
-		AccessToken string `json:"access_token"`
+		AccessToken string          `json:"access_token"`
+		Expires     json.RawMessage `json:"expires_in"`
+		Code        int
+		Message     string
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
 		return "", err
 	}
+	if out.Code != 0 {
+		return "", fmt.Errorf("QQ token error %d: %s", out.Code, out.Message)
+	}
 	if out.AccessToken == "" {
 		return "", fmt.Errorf("empty QQ access token")
 	}
+	seconds, _ := strconv.Atoi(strings.Trim(string(out.Expires), `"`))
+	if seconds > 0 && seconds <= 86400 {
+		entry.value = out.AccessToken
+		entry.until = time.Now().Add(time.Duration(seconds) * time.Second)
+	}
 	return out.AccessToken, nil
 }
+
+type Receipt struct {
+	ID        string `json:"id"`
+	Timestamp string `json:"timestamp"`
+	Ext       struct {
+		Index string `json:"ref_idx"`
+	} `json:"ext_info"`
+}
+
 func (c *Client) Send(ctx context.Context, m domain.OutboundMessage) (string, error) {
+	receipt, err := c.SendWithReceipt(ctx, m)
+	return receipt.ID, err
+}
+func (c *Client) SendWithReceipt(ctx context.Context, m domain.OutboundMessage) (Receipt, error) {
 	token, err := c.token(ctx)
 	if err != nil {
-		return "", err
+		return Receipt{}, err
 	}
 	var prefix string
 	if m.ConversationType == "private" {
@@ -69,7 +105,7 @@ func (c *Client) Send(ctx context.Context, m domain.OutboundMessage) (string, er
 		if m.ConversationType == "group" && m.MentionUserID != "" {
 			content = `<qqbot-at-user id="` + html.EscapeString(m.MentionUserID) + `" /> ` + content
 		}
-		payload["markdown"] = map[string]any{"content": content}
+		payload["markdown"] = map[string]any{"content": content, "force_verify_image_resource": strings.Contains(content, "![")}
 		delete(payload, "content")
 	}
 	isAck := hasPartType(m.Parts, "ark_ack")
@@ -80,7 +116,7 @@ func (c *Client) Send(ctx context.Context, m domain.OutboundMessage) (string, er
 	} else if image := firstImage(m.Parts); image != nil && m.Format != "markdown" {
 		fileInfo, err := c.uploadImage(ctx, token, prefix+"/files", *image)
 		if err != nil {
-			return "", err
+			return Receipt{}, err
 		}
 		payload["msg_type"] = 7
 		payload["media"] = map[string]any{"file_info": fileInfo}
@@ -95,7 +131,7 @@ func (c *Client) Send(ctx context.Context, m domain.OutboundMessage) (string, er
 		fallback["content"] = "👀"
 		fallbackID, fallbackErr := c.sendPayload(ctx, token, prefix+"/messages", fallback)
 		if fallbackErr != nil {
-			return "", fmt.Errorf("QQ ARK send failed (%v); text fallback failed: %w", err, fallbackErr)
+			return Receipt{}, fmt.Errorf("QQ ARK send failed (%v); text fallback failed: %w", err, fallbackErr)
 		}
 		return fallbackID, nil
 	}
@@ -103,7 +139,7 @@ func (c *Client) Send(ctx context.Context, m domain.OutboundMessage) (string, er
 		fallback := textPayload(m)
 		fallbackID, fallbackErr := c.sendPayload(ctx, token, prefix+"/messages", fallback)
 		if fallbackErr != nil {
-			return "", fmt.Errorf("QQ markdown send failed (%v); text fallback failed: %w", err, fallbackErr)
+			return Receipt{}, fmt.Errorf("QQ markdown send failed (%v); text fallback failed: %w", err, fallbackErr)
 		}
 		return fallbackID, nil
 	}
@@ -124,7 +160,7 @@ func textPayload(m domain.OutboundMessage) map[string]any {
 		text = "回复「" + m.QuotedText + "」\n" + text
 	}
 	payload := map[string]any{"content": text, "msg_type": 0}
-	if m.ConversationType == "group" && m.ReferenceMessageID != "" {
+	if m.ReferenceMessageID != "" {
 		payload["message_reference"] = map[string]any{"message_id": m.ReferenceMessageID}
 	}
 	if m.ReplyToMessageID != "" {
@@ -172,32 +208,32 @@ func (c *Client) retract(ctx context.Context, conversationType, conversationID, 
 	return nil
 }
 
-func (c *Client) sendPayload(ctx context.Context, token, path string, payload map[string]any) (string, error) {
+func (c *Client) sendPayload(ctx context.Context, token, path string, payload map[string]any) (Receipt, error) {
 	b, _ := json.Marshal(payload)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.APIBase+path, bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "QQBot "+token)
 	r, err := c.HTTP.Do(req)
 	if err != nil {
-		return "", err
+		return Receipt{}, err
 	}
 	defer r.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if r.StatusCode/100 != 2 {
-		return "", fmt.Errorf("QQ send status %d: %s", r.StatusCode, string(data))
+		return Receipt{}, fmt.Errorf("QQ send status %d: %s", r.StatusCode, string(data))
 	}
 	var out struct {
-		ID      string `json:"id"`
+		Receipt
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
-		return "", fmt.Errorf("QQ send returned invalid JSON: %w", err)
+		return Receipt{}, fmt.Errorf("QQ send returned invalid JSON: %w", err)
 	}
-	if out.ID == "" {
-		return "", fmt.Errorf("QQ send returned no message id (code=%d message=%s)", out.Code, out.Message)
+	if out.ID == "" || out.Code != 0 {
+		return Receipt{}, fmt.Errorf("QQ send returned no message id (code=%d message=%s)", out.Code, out.Message)
 	}
-	return out.ID, nil
+	return out.Receipt, nil
 }
 
 func hasPartType(parts []domain.ContentPart, partType string) bool {
@@ -234,33 +270,25 @@ func firstImage(parts []domain.ContentPart) *domain.ContentPart {
 	return nil
 }
 
+func pathBase(s string) string {
+	s = path.Base(strings.ReplaceAll(strings.TrimSpace(s), "\\", "/"))
+	if s == "." || s == ".." || s == "/" {
+		return ""
+	}
+	return s
+}
 func (c *Client) uploadImage(ctx context.Context, token, path string, image domain.ContentPart) (string, error) {
-	payload := map[string]any{"file_type": 1}
+	var reader io.ReaderAt
+	name := pathBase(image.Filename)
 	if len(image.Data) > 0 {
-		payload["file_data"] = base64.StdEncoding.EncodeToString(image.Data)
-	} else if strings.HasPrefix(image.URL, "https://") {
-		payload["url"] = image.URL
-	} else {
-		return "", fmt.Errorf("QQ 图片发送需要 HTTPS URL 或本地图片数据")
+		reader = bytes.NewReader(image.Data)
+		if name == "" {
+			name = "image.png"
+			if http.DetectContentType(image.Data) == "image/jpeg" {
+				name = "image.jpg"
+			}
+		}
 	}
-	b, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.APIBase+path, bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "QQBot "+token)
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode/100 != 2 {
-		return "", fmt.Errorf("QQ media upload status %d: %s", resp.StatusCode, string(data))
-	}
-	var out struct {
-		FileInfo string `json:"file_info"`
-	}
-	if err := json.Unmarshal(data, &out); err != nil || out.FileInfo == "" {
-		return "", fmt.Errorf("QQ media upload returned empty file_info")
-	}
-	return out.FileInfo, nil
+	out, err := c.upload(ctx, token, strings.TrimSuffix(path, "/files"), name, image.URL, 1, reader, int64(len(image.Data)), false)
+	return out.FileInfo, err
 }

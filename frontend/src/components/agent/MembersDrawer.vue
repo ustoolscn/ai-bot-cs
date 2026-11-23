@@ -44,7 +44,7 @@
     <div v-if="isGroup" class="gap"><el-button :loading="syncing" @click="sync(true)">同步 QQ 群成员</el-button> <small>{{ rosterStatus }}</small></div>
     <el-input v-model="filter" class="gap" placeholder="搜索昵称或 ID" clearable />
     <el-table v-loading="loading" :data="filtered" max-height="480">
-      <el-table-column label="成员" min-width="200"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.displayName || '未知昵称' }} {{ row.role === 'owner' ? '· 群主' : row.role === 'admin' ? '· 管理员' : '' }} {{ row.isBot ? '· 机器人' : '' }}</strong><span>{{ row.userId }}</span></div></template></el-table-column>
+      <el-table-column label="成员" min-width="200"><template #default="{ row }"><div class="stacked-cell"><el-avatar v-if="row.avatar" :src="row.avatar" :size="28"/><small v-if="row.joinedAt">入群于 {{formatTime(row.joinedAt)}}</small><small v-if="row.unionId">跨应用标识 {{row.unionId}}</small><strong>{{ row.displayName || '未知昵称' }} {{ row.role === 'owner' ? '· 群主' : row.role === 'admin' ? '· 管理员' : '' }} {{ row.isBot ? '· 机器人' : '' }}</strong><span>{{ row.userId }}</span></div></template></el-table-column>
       <el-table-column prop="messageCount" label="消息" width="70" />
       <el-table-column label="记忆" width="70"><template #default="{ row }"><el-button v-if="Number(row.memoryCount) > 0" link type="primary" @click="showMemories(row)">{{ row.memoryCount }}</el-button><span v-else>0</span></template></el-table-column>
       <el-table-column label="官方客服" width="90"><template #default="{ row }"><el-switch v-model="row.isStaff" :disabled="row.isBlocked" @change="toggle(row)" /></template></el-table-column>

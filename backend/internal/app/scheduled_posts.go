@@ -100,6 +100,13 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 	if time.Now().After(deadline) {
 		return fmt.Errorf("已超过本次发送时间窗口")
 	}
+	var pageBase string
+	if format == "link" {
+		pageBase, err = scheduledPageBase(a.cfg.PublicBaseURL)
+		if err != nil {
+			return err
+		}
+	}
 	if profile == "" {
 		profile = a.defaultChatProfile(ctx)
 	}
@@ -137,19 +144,33 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 		return fmt.Errorf("模型返回了空内容")
 	}
 	parts := []domain.ContentPart{}
-	if format == "image" {
+	var pageID, document string
+	if format == "image" || format == "link" {
+		layoutPrompt := "将给定成稿排版为一张 1000px 宽的中文网页长图。只输出静态 HTML 和内联 CSS。完整保留标题、正文、日期与来源，来源用可见文字。高度随内容自然增长。"
+		if format == "link" {
+			layoutPrompt = "将给定成稿排版成适合手机阅读的中文网页。只输出静态 HTML 和内联 CSS，保留标题、日期和完整正文，将原文提供的来源链接做成可点击的超链接，不补造来源。"
+		}
 		start := time.Now()
-		layout, e := client.ChatWith(ctx, []domain.ChatMessage{{Role: "system", Content: "将给定成稿排版为一张 1000px 宽的中文网页长图。只输出静态 HTML 和内联 CSS。完整保留标题、正文、日期与来源，来源用可见文字。高度随内容自然增长。"}, {Role: "user", Content: text}}, domain.ChatOptions{DisableWebSearch: true})
+		layout, e := client.ChatWith(ctx, []domain.ChatMessage{{Role: "system", Content: layoutPrompt}, {Role: "user", Content: text}}, domain.ChatOptions{DisableWebSearch: true})
 		a.recordModelCall(ctx, "", profile, "scheduled_layout", layout, time.Since(start).Milliseconds(), e)
 		if e != nil {
 			return e
 		}
-		pic, e := a.htmlImage(ctx, layout.Content)
-		if e != nil {
-			return e
+		if format == "link" {
+			document, e = staticDocument(layout.Content)
+			if e != nil {
+				return e
+			}
+			pageID = uuid.NewString()
+			text = pageBase + "/p/" + pageID
+		} else {
+			pic, e := a.htmlImage(ctx, layout.Content)
+			if e != nil {
+				return e
+			}
+			parts = append(parts, pic)
+			text = "定时推送"
 		}
-		parts = append(parts, pic)
-		text = "定时推送"
 	}
 	raw, _ := json.Marshal(parts)
 	// Recheck that this exact occurrence is still active after model/render latency.
@@ -163,6 +184,8 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
     ), marked AS (
        UPDATE schedule_deliveries d SET message_id=m.id FROM msg m JOIN target t ON t.mid=m.id
        WHERE d.run_id=t.run_id AND d.conversation_id=t.cid RETURNING m.id
-    ) INSERT INTO outbox_tasks(message_id,msg_seq) SELECT id,1 FROM marked`, jobID, text, string(raw), deadline)
+    ), page AS (
+       INSERT INTO scheduled_web_pages(id,document) SELECT $5::uuid,$6::text WHERE $5::uuid IS NOT NULL AND EXISTS(SELECT FROM marked)
+    ) INSERT INTO outbox_tasks(message_id,msg_seq) SELECT id,1 FROM marked`, jobID, text, string(raw), deadline, nullString(pageID), document)
 	return err
 }

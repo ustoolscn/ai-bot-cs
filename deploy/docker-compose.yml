@@ -5,6 +5,9 @@ services:
     image: ${AI_BOT_IMAGE:-ai-bot:latest}
     container_name: ai-bot
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./chromium-seccomp.json
     env_file:
       - .env
     extra_hosts:

@@ -48,11 +48,7 @@ func (a *App) humanReply(c *gin.Context) {
 		fail(c, 404, "not_found", "消息不存在或不可回复")
 		return
 	}
-	window := 5 * time.Minute
-	if convType == "private" {
-		window = 60 * time.Minute
-	}
-	deadline := eventAt.Add(window)
+	deadline := eventAt.Add(time.Hour)
 	tx, err := a.db.Begin(c)
 	if err != nil {
 		fail(c, 500, "database_error", "发送失败")
@@ -65,7 +61,7 @@ func (a *App) humanReply(c *gin.Context) {
 		return
 	}
 	var seq int
-	if err = tx.QueryRow(c, `SELECT COALESCE(max(t.msg_seq),1)+1 FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.conversation_id=$1 AND m.reply_to_message_id=$2`, convID, platformID).Scan(&seq); err != nil {
+	if err = tx.QueryRow(c, `SELECT COALESCE(max(t.msg_seq),1)+1 FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.bot_id=$1 AND m.reply_to_message_id=$2`, botID, platformID).Scan(&seq); err != nil {
 		fail(c, 500, "database_error", "发送失败")
 		return
 	}
@@ -89,7 +85,7 @@ func (a *App) humanReply(c *gin.Context) {
 // --- members / staff ---
 
 func (a *App) listMembers(c *gin.Context) {
-	queryList(c, a, `SELECT cm.platform_user_id AS "userId",cm.display_name AS "displayName",cm.active,cm.qq_role AS "role",cm.is_bot AS "isBot",cm.is_staff AS "isStaff",
+	queryList(c, a, `SELECT cm.platform_user_id AS "userId",cm.display_name AS "displayName",cm.qq_avatar AS avatar,cm.qq_joined_at AS "joinedAt",cm.qq_union_id AS "unionId",cm.active,cm.qq_role AS "role",cm.is_bot AS "isBot",cm.is_staff AS "isStaff",
         EXISTS(SELECT 1 FROM blocked_users bu JOIN conversations bc ON bc.bot_id=bu.bot_id WHERE bc.id=cm.conversation_id AND bu.platform_user_id=cm.platform_user_id AND (bu.conversation_id IS NULL OR bu.conversation_id=cm.conversation_id)) AS "isBlocked",
         COALESCE((SELECT jsonb_agg(bu.id::text) FROM blocked_users bu JOIN conversations bc ON bc.bot_id=bu.bot_id WHERE bc.id=cm.conversation_id AND bu.platform_user_id=cm.platform_user_id AND (bu.conversation_id IS NULL OR bu.conversation_id=cm.conversation_id)),'[]') AS "blockedUserIds",cm.first_seen_at AS "firstSeenAt",cm.last_seen_at AS "lastSeenAt",
 		(SELECT count(*) FROM user_memories um JOIN conversations c ON c.bot_id=um.bot_id WHERE c.id=cm.conversation_id AND um.conversation_id=c.id AND um.platform_user_id=cm.platform_user_id AND um.status='active') AS "memoryCount",

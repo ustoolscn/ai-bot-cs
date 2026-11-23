@@ -2,6 +2,7 @@
   <el-drawer :model-value="true" :title="group.name+' · 群管理'" size="min(600px, 96vw)" @closed="$emit('close')">
     <el-alert v-if="error" type="error" :title="error" :closable="false"><el-button link @click="load">重试</el-button></el-alert>
     <el-form v-else v-loading="loading" label-position="top">
+      <QQGroupConsole :key="group.id" :id="group.id" />
       <h3>入群自动审批</h3>
       <el-form-item label="自动通过的验证答案"><el-input v-model="form.joinAnswer" maxlength="200" placeholder="留空关闭，例如：活动报名口令" /><small class="form-tip">新申请的验证消息或问答答案与此项完全一致时通过。其他申请留给管理员处理。需订阅 QQ 群成员事件。</small></el-form-item>
       <h3>发言审核</h3>
@@ -23,6 +24,7 @@
 </template>
 
 <script setup lang="ts">
+import QQGroupConsole from "./QQGroupConsole.vue"
 import { useAdminEvents } from '@/composables/useAdminEvents'
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'

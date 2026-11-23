@@ -94,7 +94,7 @@ func (a *App) saveSchedule(c *gin.Context) {
 	}
 	at, err := time.Parse("15:04", in.SendTime)
 	if in.Name == "" || len([]rune(in.Name)) > 120 || err != nil || at.Format("15:04") != in.SendTime || in.Instruction == "" || len([]rune(in.Instruction)) > 4000 ||
-		(in.Source != "web" && in.Source != "group" && in.Source != "instruction") || (in.Format != "text" && in.Format != "image") || (!in.AllGroups && len(in.GroupIDs) == 0) ||
+		(in.Source != "web" && in.Source != "group" && in.Source != "instruction") || (in.Format != "text" && in.Format != "image" && in.Format != "link") || (!in.AllGroups && len(in.GroupIDs) == 0) ||
 		(in.ServiceID != "" && parseUUID(in.ServiceID) != nil) {
 		fail(c, 400, "invalid_request", "请检查任务名称、时间、内容和目标群")
 		return

@@ -75,6 +75,8 @@ func (a *App) runJob(ctx context.Context, j agentJob) error {
 	var err error
 	str := func(k string) string { v, _ := j.Payload[k].(string); return v }
 	switch j.Kind {
+	case "qq_interaction_ack":
+		err = a.ackInteraction(ctx, str("bot"), str("interaction"))
 	case "group_review":
 		err = a.reviewGroupMessage(ctx, str("messageId"))
 	case "scheduled_post":

@@ -64,7 +64,11 @@ func (a *App) syncGroupMembers(c *gin.Context) {
 	names := make([]string, 0, len(roster))
 	roles := make([]string, 0, len(roster))
 	bots := make([]bool, 0, len(roster))
+	joins := make([]*time.Time, 0, len(roster))
+	unions := make([]string, 0, len(roster))
 	for _, m := range roster {
+		joins = append(joins, m.Joined)
+		unions = append(unions, m.Union)
 		ids = append(ids, m.ID)
 		names = append(names, m.Username)
 		roles = append(roles, m.Role)
@@ -74,11 +78,11 @@ func (a *App) syncGroupMembers(c *gin.Context) {
 		fail(c, 500, "database_error", "锁定群成员名单失败")
 		return
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO conversation_members(conversation_id,platform_user_id,display_name,qq_username,qq_role,is_bot,active,membership_updated_at)
-      SELECT $1,id,name,name,role,bot,true,$6 FROM unnest($2::text[],$3::text[],$4::text[],$5::bool[]) m(id,name,role,bot)
+	_, err = tx.Exec(ctx, `INSERT INTO conversation_members(conversation_id,platform_user_id,display_name,qq_username,qq_role,is_bot,active,membership_updated_at,qq_joined_at,qq_union_id)
+      SELECT $1,id,name,name,role,bot,true,$6,joined,unified FROM unnest($2::text[],$3::text[],$4::text[],$5::bool[],$7::timestamptz[],$8::text[]) m(id,name,role,bot,joined,unified)
       ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET active=true,
-      display_name=CASE WHEN conversation_members.display_name IN ('',conversation_members.qq_username) THEN COALESCE(NULLIF(EXCLUDED.qq_username,''),conversation_members.display_name) ELSE conversation_members.display_name END,qq_username=EXCLUDED.qq_username,qq_role=EXCLUDED.qq_role,is_bot=EXCLUDED.is_bot,
-      membership_updated_at=EXCLUDED.membership_updated_at WHERE conversation_members.membership_updated_at <= $6`, id, ids, names, roles, bots, started)
+      display_name=CASE WHEN conversation_members.display_name IN ('',conversation_members.qq_username) THEN COALESCE(NULLIF(EXCLUDED.qq_username,''),conversation_members.display_name) ELSE conversation_members.display_name END,qq_username=EXCLUDED.qq_username,qq_role=EXCLUDED.qq_role,is_bot=EXCLUDED.is_bot,qq_joined_at=COALESCE(EXCLUDED.qq_joined_at,conversation_members.qq_joined_at),qq_union_id=COALESCE(NULLIF(EXCLUDED.qq_union_id,''),conversation_members.qq_union_id),
+      membership_updated_at=EXCLUDED.membership_updated_at WHERE conversation_members.membership_updated_at <= $6`, id, ids, names, roles, bots, started, joins, unions)
 	if err == nil {
 		_, err = tx.Exec(ctx, `UPDATE conversation_members SET active=false,membership_updated_at=$3
        WHERE conversation_id=$1 AND active AND NOT(platform_user_id=ANY($2::text[])) AND membership_updated_at <= $3`, id, ids, started)

@@ -35,6 +35,7 @@ type turnRuntime struct {
 	handoff          bool
 	hits             []map[string]any
 	toolsUsed        []string
+	quoteTarget      string
 	screenshot       *domain.ContentPart
 }
 
@@ -45,6 +46,7 @@ type builtinTool struct {
 }
 
 var builtinTools = []builtinTool{
+	{spec: domain.ToolSpec{Name: "quote_previous_reply", Description: "当用户要求引用机器人此前的答复时，用上一条答复中的原文片段定位本会话内的回复，为即将发送的答复附上 QQ 原生引用。请核对返回的原文。", Parameters: objSchema(map[string]any{"excerpt": strProp("目标回复中连续出现的原文片段")}, "excerpt")}},
 	{spec: domain.ToolSpec{Name: "render_html_image", Description: "把你编写的静态 HTML/CSS 排版成 PNG，直接作为本次 QQ 回复发送。适用于用户要求图片、海报、表格或网页截图。使用内联样式或 style，按 1000px 宽排版，不使用脚本和外部资源。", Parameters: objSchema(map[string]any{"html": strProp("完整 HTML 网页或片段")}, "html")}},
 	{spec: domain.ToolSpec{Name: "search_knowledge", Description: "在知识库中检索资料。当预先提供的知识库结果不足以回答、或用户换了话题时使用。", Parameters: objSchema(map[string]any{"query": strProp("要检索的完整问题")}, "query")}, needsKB: true},
 	{spec: domain.ToolSpec{Name: "get_model_price", Description: "查询网站上模型的实时价格（美元）。支持模糊模型名，如 4o、claude sonnet、deepseek。", Parameters: objSchema(map[string]any{"model": strProp("模型名称或关键词"), "group": strProp("分组名，可选，默认 default")}, "model")}, needsLive: true},
@@ -163,6 +165,18 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 	str := func(k string) string { v, _ := args[k].(string); return strings.TrimSpace(v) }
 	rt.toolsUsed = append(rt.toolsUsed, call.Name)
 	switch call.Name {
+	case "quote_previous_reply":
+		excerpt := str("excerpt")
+		if excerpt == "" {
+			return "", fmt.Errorf("需要提供引用原文片段")
+		}
+		var id, body string
+		err := a.db.QueryRow(ctx, `SELECT id::text,content FROM messages WHERE conversation_id=$1 AND direction='outbound' AND status='sent' AND NOT context_excluded AND qq_ref_idx<>'' AND strpos(content,$2)>0 ORDER BY event_at DESC LIMIT 1`, rt.conversationID, excerpt).Scan(&id, &body)
+		if err != nil {
+			return "", fmt.Errorf("未找到可引用的本会话回复")
+		}
+		rt.quoteTarget = id
+		return jsonString(map[string]any{"quoted": agent.TruncateRunes(body, 1500)}), nil
 	case "render_html_image":
 		if rt.dryRun {
 			return jsonString(map[string]any{"preview": true}), nil

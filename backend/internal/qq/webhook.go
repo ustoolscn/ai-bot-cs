@@ -49,6 +49,8 @@ type MessageData struct {
 }
 
 type MessageAttachment struct {
+	Transcript  string `json:"asr_refer_text"`
+	Wave        string `json:"voice_wav_url"`
 	URL         string `json:"url"`
 	ContentType string `json:"content_type"`
 	Filename    string `json:"filename"`
@@ -57,12 +59,19 @@ type MessageAttachment struct {
 	Height      int    `json:"height"`
 }
 type MessageElement struct {
+	Content     string              `json:"content"`
+	Index       string              `json:"msg_idx"`
+	Kind        int                 `json:"message_type"`
 	Attachments []MessageAttachment `json:"attachments"`
 	Elements    []MessageElement    `json:"msg_elements"`
 	Card        struct {
 		Type   string `json:"ark_type"`
+		Prompt string `json:"prompt"`
 		Fields struct {
-			Preview string `json:"preview"`
+			Preview     string `json:"preview"`
+			Title       string `json:"title"`
+			Description string `json:"desc"`
+			Link        string `json:"jump_url"`
 		} `json:"fields"`
 	} `json:"ark_data"`
 }
@@ -196,7 +205,7 @@ func Parse(body []byte, botID string) (Envelope, *domain.InboundMessage, error) 
 		if strings.HasPrefix(mime, "image/") || mime == "image" || generic && (knownExt || a.Width > 0 && a.Height > 0) {
 			partType = "image"
 		}
-		parts = append(parts, domain.ContentPart{Type: partType, URL: a.URL, Text: a.Filename, Filename: a.Filename, ContentType: a.ContentType, SizeBytes: a.Size, Width: a.Width, Height: a.Height})
+		parts = append(parts, domain.ContentPart{Type: partType, URL: a.URL, WaveURL: a.Wave, Transcript: a.Transcript, Text: a.Filename, Filename: a.Filename, ContentType: a.ContentType, SizeBytes: a.Size, Width: a.Width, Height: a.Height})
 	}
 	eventTime := time.Now().UTC()
 	if d.Timestamp != "" {

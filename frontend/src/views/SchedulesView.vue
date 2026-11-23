@@ -26,7 +26,8 @@
         <el-form-item label="内容来源"><el-radio-group v-model="form.source"><el-radio-button value="web">联网查询</el-radio-button><el-radio-button value="group">昨日群统计</el-radio-button><el-radio-button value="instruction">按指令创作</el-radio-button></el-radio-group>
           <small class="form-tip">{{ form.source==='group' ? '按每个群自己的数据分别生成。' : '每次生成一份内容，再分发到所有目标群。' }}</small></el-form-item>
         <el-form-item label="内容指令"><el-input v-model="form.instruction" type="textarea" :rows="4" maxlength="4000" placeholder="查询当天杭州天气，发布气温、降雨概率和出行提醒。" /></el-form-item>
-        <el-form-item label="发送格式"><el-radio-group v-model="form.format"><el-radio-button value="text">文字</el-radio-button><el-radio-button value="image">网页截图</el-radio-button></el-radio-group></el-form-item>
+        <el-form-item label="发送格式"><el-radio-group v-model="form.format"><el-radio-button value="text">文字</el-radio-button><el-radio-button value="image">网页截图</el-radio-button><el-radio-button value="link">网页链接</el-radio-button></el-radio-group>
+          <small v-if="form.format === 'link'" class="form-tip">群成员点开链接即可阅读，有效期 7 天。转发后，持有链接的人也能打开。</small></el-form-item>
         <el-form-item label="启用定时执行"><el-switch v-model="form.enabled" /></el-form-item>
         <el-button type="primary" :loading="saving" :disabled="!form.name.trim() || !form.sendTime || !form.instruction.trim() || (!form.allGroups && !form.groupIds.length)" @click="save">保存任务</el-button>
       </el-form>

@@ -14,10 +14,12 @@ import (
 var ErrRosterPermission = errors.New("QQ 群成员列表接口尚未向此机器人开放（11253），需向 QQ 平台运营申请白名单")
 
 type GroupMember struct {
-	ID       string `json:"member_openid"`
-	Username string `json:"username"`
-	Role     string `json:"member_role"`
-	Bot      bool   `json:"bot"`
+	ID       string     `json:"member_openid"`
+	Username string     `json:"username"`
+	Joined   *time.Time `json:"joined_at"`
+	Union    string     `json:"union_openid"`
+	Role     string     `json:"member_role"`
+	Bot      bool       `json:"bot"`
 }
 
 func (c *Client) GroupMembers(ctx context.Context, group string) ([]GroupMember, error) {
