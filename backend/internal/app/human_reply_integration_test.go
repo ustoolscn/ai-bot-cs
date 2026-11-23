@@ -84,18 +84,27 @@ func TestHumanReplyDelivery(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			var adminID string
+			if err := pool.QueryRow(ctx, "SELECT id::text FROM admin_users WHERE username='admin'").Scan(&adminID); err != nil {
+				t.Fatal(err)
+			}
+			_, err := pool.Exec(ctx, `WITH h AS(INSERT INTO handoffs(bot_id,conversation_id,message_id,status,claimed_via,claimed_by_id,claimed_by_name,paused_until) VALUES($1,$2,$3,'processing','web',$4,'admin',now()+interval '30 minutes') RETURNING id)
+			UPDATE messages SET handoff_id=h.id FROM h WHERE messages.id=$3`, botID, convID, inboundID, adminID)
+			if err != nil {
+				t.Fatal(err)
+			}
 			w := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(w)
 			c.Request = httptest.NewRequest("POST", "/reply", bytes.NewBufferString(`{"text":"人工回复"}`))
 			c.Request.Header.Set("Content-Type", "application/json")
 			c.Params = gin.Params{{Key: "id", Value: inboundID}}
+			c.Set("userId", adminID)
+			c.Set("username", "admin")
 			a.humanReply(c)
 			if w.Code != 200 {
 				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 			}
-			if _, err := pool.Exec(ctx, `INSERT INTO handoffs(bot_id,conversation_id,message_id) VALUES($1,$2,$3)`, botID, convID, inboundID); err != nil {
-				t.Fatal(err)
-			}
+
 			assertHandoffReplyDelivery(t, a, convID, "pending", "")
 			attempts := 1
 			if reject {

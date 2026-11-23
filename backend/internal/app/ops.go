@@ -12,26 +12,63 @@ import (
 // --- handoffs & human replies ---
 
 func (a *App) listHandoffs(c *gin.Context) {
-	status := c.DefaultQuery("status", "open")
-	queryList(c, a, `SELECT h.id::text,h.bot_id::text AS "botId",h.conversation_id::text AS "conversationId",c.name AS "conversationName",c.type AS "conversationType",
+	status := c.DefaultQuery("status", "active")
+	rows, err := a.db.Query(c, `SELECT h.id::text,h.bot_id::text AS "botId",h.conversation_id::text AS "conversationId",c.name AS "conversationName",c.type AS "conversationType",
 		h.platform_user_id AS "userId",h.display_name AS "displayName",h.message_id::text AS "messageId",COALESCE(m.content,'') AS "messageContent",
-		h.ticket_number::text AS "ticketNumber",hr.sender_name AS "humanRepliedBy",hr.content AS "humanReplyContent",CASE WHEN h.status='replied' THEN h.resolved_at END AS "humanRepliedAt",
+		h.ticket_number::text AS "ticketNumber",hr.sender_name AS "humanRepliedBy",hr.content AS "humanReplyContent",CASE WHEN hot.status='sent' THEN hot.updated_at END AS "humanRepliedAt",
    COALESCE((SELECT json_agg(json_build_object('conversationId',n.conversation_id,'status',t.status,'error',t.last_error) ORDER BY n.created_at)
-    FROM messages n JOIN outbox_tasks t ON t.message_id=n.id WHERE n.handoff_id=h.id AND n.event_type='HANDOFF_NOTICE'),'[]') AS notifications,h.reason,h.status,h.paused_until AS "pausedUntil",h.created_at AS "createdAt",h.resolved_at AS "resolvedAt",
-		COALESCE((SELECT json_agg(x ORDER BY x."eventAt") FROM (SELECT mm.id::text AS id,mm.direction,mm.sender_name AS "senderName",mm.content,mm.event_type AS "eventType",mm.event_at AS "eventAt",mm.status,COALESCE(ot.last_error,'') AS "deliveryError"
-			FROM messages mm LEFT JOIN outbox_tasks ot ON ot.message_id=mm.id WHERE mm.conversation_id=h.conversation_id AND mm.event_type<>'PROCESSING_ACK' AND mm.content<>'' AND mm.event_at>h.created_at-interval '30 minutes'
-			AND (mm.sender_id=h.platform_user_id OR mm.direction='outbound') ORDER BY mm.event_at DESC LIMIT 30) x),'[]') AS recent
-		FROM handoffs h JOIN conversations c ON c.id=h.conversation_id LEFT JOIN messages m ON m.id=h.message_id LEFT JOIN messages hr ON hr.id=h.reply_id
-		WHERE ($1='all' OR h.status=$1) ORDER BY h.created_at DESC LIMIT 200`, status)
-}
-
-func (a *App) resolveHandoff(c *gin.Context) {
-	tag, err := a.db.Exec(c, "UPDATE handoffs SET status='resolved',resolved_by=$1,resolved_at=now(),paused_until=now(),updated_at=now() WHERE id=$2 AND status='open' AND NOT EXISTS(SELECT FROM outbox_tasks WHERE message_id=handoffs.reply_id AND status NOT IN ('expired','failed'))", c.GetString("userId"), c.Param("id"))
-	if err != nil || tag.RowsAffected() == 0 {
-		fail(c, 404, "not_found", "工单不存在或已处理")
+    FROM messages n JOIN outbox_tasks t ON t.message_id=n.id WHERE n.handoff_id=h.id AND n.event_type='HANDOFF_NOTICE'),'[]') AS notifications,h.reason,h.status,h.claimed_by_id::text AS "claimedById",h.claimed_by_name AS "claimedByName",h.claimed_via AS "claimedVia",h.claimed_at AS "claimedAt",h.close_method AS "closeMethod",h.paused_until AS "pausedUntil",h.created_at AS "createdAt",h.resolved_at AS "resolvedAt",
+		COALESCE((SELECT json_agg(x ORDER BY x."eventAt") FROM (SELECT mm.id::text AS id,mm.direction,mm.sender_name AS "senderName",mm.content,mm.parts,mm.event_type AS "eventType",mm.event_at AS "eventAt",mm.status,COALESCE(ot.last_error,'') AS "deliveryError"
+			FROM messages mm LEFT JOIN outbox_tasks ot ON ot.message_id=mm.id WHERE mm.conversation_id=h.conversation_id AND mm.handoff_id=h.id
+			AND (mm.direction='inbound' OR mm.event_type IN ('HUMAN_REPLY','AI_RESPONSE')) ORDER BY mm.event_at DESC) x),'[]') AS recent
+		FROM handoffs h JOIN conversations c ON c.id=h.conversation_id LEFT JOIN messages m ON m.id=h.message_id LEFT JOIN messages hr ON hr.id=h.reply_id LEFT JOIN outbox_tasks hot ON hot.message_id=hr.id
+		WHERE ($1='all' OR h.status=$1 OR ($1='active' AND h.status IN ('open','processing'))) ORDER BY h.created_at DESC LIMIT 200`, status)
+	if err != nil {
+		fail(c, 500, "database_error", "读取工单失败")
 		return
 	}
-	ok(c, gin.H{"resolved": true})
+	items, err := rowsJSON(rows)
+	if err != nil {
+		fail(c, 500, "database_error", "读取工单失败")
+		return
+	}
+	for _, item := range items {
+		recent, _ := item["recent"].([]any)
+		for _, value := range recent {
+			if m, ok := value.(map[string]any); ok {
+				id, _ := m["id"].(string)
+				m["parts"] = publicContentParts(id, m["parts"])
+			}
+		}
+	}
+	ok(c, items)
+}
+
+func webActor(c *gin.Context) ticketActor {
+	return ticketActor{"web", c.GetString("userId"), c.GetString("username")}
+}
+func (a *App) claimHandoff(c *gin.Context)   { a.webTicketAction(c, true) }
+func (a *App) resolveHandoff(c *gin.Context) { a.webTicketAction(c, false) }
+func (a *App) webTicketAction(c *gin.Context, claim bool) {
+	id := c.Param("id")
+	if parseUUID(id) != nil {
+		fail(c, 400, "invalid_id", "工单编号无效")
+		return
+	}
+	err := pgx.BeginFunc(c, a.db, func(tx pgx.Tx) error { return ticketAction(c, tx, id, webActor(c), claim) })
+	var conflict ticketConflict
+	switch {
+	case errors.As(err, &conflict):
+		fail(c, 409, "ticket_conflict", err.Error())
+	case errors.Is(err, pgx.ErrNoRows):
+		fail(c, 404, "not_found", "工单不存在")
+	case err != nil:
+		fail(c, 500, "database_error", "更新工单失败")
+	case claim:
+		ok(c, gin.H{"status": "processing"})
+	default:
+		ok(c, gin.H{"status": "resolved", "resolved": true})
+	}
 }
 
 // humanReply queues an admin reply; delivery falls back to active sending when needed.
@@ -50,12 +87,13 @@ func (a *App) humanReply(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback(c)
-	outID, err := queueHuman(c, tx, c.Param("id"), c.GetString("username"), strings.TrimSpace(in.Text))
+	outID, err := queueHuman(c, tx, c.Param("id"), webActor(c), strings.TrimSpace(in.Text))
 	if errors.Is(err, pgx.ErrNoRows) {
 		fail(c, 404, "not_found", "消息不存在或不可回复")
 		return
 	}
-	if errors.Is(err, errTicketHandled) {
+	var conflict ticketConflict
+	if errors.As(err, &conflict) {
 		fail(c, 409, "ticket_handled", err.Error())
 		return
 	}

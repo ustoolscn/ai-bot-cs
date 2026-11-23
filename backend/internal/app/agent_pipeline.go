@@ -62,12 +62,9 @@ func (a *App) processInbox(ctx context.Context) error {
 	}
 
 	// A user handed off to a human is left to the human while the pause lasts.
-	var paused bool
-	if !isStaff {
-		paused, err = a.handoffTurn(ctx, j.BotID, j.ConversationID, senderID, senderName, j.MessageID, "", time.Time{}, false)
-		if err != nil {
-			return a.retryInbox(ctx, j, err)
-		}
+	paused, err := a.handoffTurn(ctx, j.BotID, j.ConversationID, senderID, senderName, j.MessageID, "", 0)
+	if err != nil {
+		return a.retryInbox(ctx, j, err)
 	}
 	if paused {
 		finishCheck("人工接管中", nil)
@@ -300,7 +297,7 @@ func (a *App) processInbox(ctx context.Context) error {
 		}
 		partsJSON, _ := json.Marshal(mediaParts)
 		var outID string
-		err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,content,parts,reply_to_message_id,status,event_at,reply_deadline) VALUES('qq',$1,$2,'outbound','AI_RESPONSE',$3,$4::jsonb,$5,'pending',now()+($6 * interval '1 millisecond'),$7) RETURNING id::text`, j.BotID, j.ConversationID, part, string(partsJSON), j.PlatformMessageID, i, j.Deadline).Scan(&outID)
+		err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,content,parts,reply_to_message_id,status,event_at,reply_deadline,handoff_id) VALUES('qq',$1,$2,'outbound','AI_RESPONSE',$3,$4::jsonb,$5,'pending',now()+($6 * interval '1 millisecond'),$7,(SELECT id FROM handoffs WHERE message_id=$8 ORDER BY created_at DESC LIMIT 1)) RETURNING id::text`, j.BotID, j.ConversationID, part, string(partsJSON), j.PlatformMessageID, i, j.Deadline, j.MessageID).Scan(&outID)
 		if err == nil && i == 0 && rt.quoteTarget != "" {
 			_, err = tx.Exec(ctx, "UPDATE messages SET qq_quote_target=$2 WHERE id=$1", outID, rt.quoteTarget)
 		}
@@ -683,6 +680,11 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 				_, _ = a.db.Exec(ctx, "INSERT INTO tool_calls(agent_run_id,tool_name,arguments,result,error) VALUES($1,$2,$3::jsonb,$4::jsonb,$5)", rt.runID, call.Name, args, resultJSON, errorText(terr))
 			}
 			messages = append(messages, domain.ChatMessage{Role: "tool", ToolCallID: call.ID, Content: agent.TruncateRunes(result, 6000)})
+			if rt.handoff && terr == nil && !rt.dryRun {
+				out.content = "已转人工，请稍等客服接单。"
+				out.messages = messages
+				return out
+			}
 			if rt.screenshot != nil {
 				out.content = "内容已整理成图片。"
 				out.messages = messages

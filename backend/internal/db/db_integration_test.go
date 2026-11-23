@@ -80,3 +80,57 @@ func TestPostgresPgvectorAndSkipLocked(t *testing.T) {
 		t.Fatalf("SKIP LOCKED returned the same row twice: %d", first)
 	}
 }
+
+func TestLegacyHandoffMigration(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	ctx := context.Background()
+	pool, err := Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	run := func(query string) {
+		t.Helper()
+		if _, err := tx.Exec(ctx, query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	schema := "handoff_migration_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	run("CREATE SCHEMA " + schema)
+	run("SET LOCAL search_path TO " + schema + ",public")
+	files, err := migrations.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply := func(name string) {
+		t.Helper()
+		sql, err := migrations.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run(string(sql))
+	}
+	for _, f := range files {
+		if f.Name() < "026" {
+			apply(f.Name())
+		}
+	}
+	run(`WITH b AS(INSERT INTO bots(name,app_id,app_secret_enc) VALUES('test','app','secret') RETURNING id),
+	c AS(INSERT INTO conversations(channel,bot_id,platform_id,type) SELECT 'qq',id,'group','group' FROM b RETURNING id,bot_id)
+	INSERT INTO handoffs(bot_id,conversation_id,platform_user_id,status,resolved_at) SELECT bot_id,id,'alice','replied',now() FROM c`)
+	apply("026_handoff_lifecycle.sql")
+	apply("025_proxy_handoff.sql")
+	apply("026_handoff_lifecycle.sql")
+	var valid bool
+	if err := tx.QueryRow(ctx, "SELECT status='resolved' AND close_method IS NULL AND resolved_at IS NOT NULL FROM handoffs WHERE platform_user_id='alice'").Scan(&valid); err != nil || !valid {
+		t.Fatal("historical replied ticket was not migrated", err)
+	}
+}

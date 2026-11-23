@@ -53,6 +53,9 @@ func (a *App) maintenanceLoop(ctx context.Context) {
 	}
 }
 func (a *App) processMaintenance(ctx context.Context) error {
+	if err := a.expireHandoffs(ctx); err != nil {
+		return err
+	}
 	settings, err := a.runtimeSettings(ctx)
 	if err != nil {
 		return fmt.Errorf("读取消息保留设置失败: %w", err)
@@ -125,7 +128,12 @@ func (a *App) claimInbox(ctx context.Context) (inboxJob, error) {
 	}
 	defer tx.Rollback(ctx)
 	var j inboxJob
-	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,m.conversation_id::text,c.type,c.platform_id,COALESCE(m.platform_message_id,''),m.content,c.system_prompt,c.context_limit,c.enabled,m.reply_deadline,t.attempts,m.event_type,c.trigger_mode,m.parts @> '[{"type":"image"}]'::jsonb,COALESCE((m.raw_event#>'{d,mentions}') @> '[{"is_you":true}]'::jsonb,false) FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id WHERE t.status='pending' AND t.next_attempt_at<=now() ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationID, &j.ConversationType, &j.PlatformConversationID, &j.PlatformMessageID, &j.Content, &j.SystemPrompt, &j.ContextLimit, &j.Enabled, &j.Deadline, &j.Attempts, &j.EventType, &j.TriggerMode, &j.HasImage, &j.MentionsBot)
+	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,m.conversation_id::text,c.type,c.platform_id,COALESCE(m.platform_message_id,''),m.content,c.system_prompt,c.context_limit,c.enabled,m.reply_deadline,t.attempts,m.event_type,c.trigger_mode,m.parts @> '[{"type":"image"}]'::jsonb,COALESCE((m.raw_event#>'{d,mentions}') @> '[{"is_you":true}]'::jsonb,false) FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id WHERE t.status='pending' AND t.next_attempt_at<=now()
+	AND (m.handoff_id IS NULL OR NOT EXISTS (
+	  SELECT FROM messages prior JOIN outbox_tasks pt ON pt.message_id=prior.id
+	  WHERE prior.handoff_id=m.handoff_id AND prior.conversation_id=m.conversation_id
+	  AND pt.status IN ('pending','processing') AND (prior.created_at,prior.id)<(m.created_at,m.id)))
+	ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationID, &j.ConversationType, &j.PlatformConversationID, &j.PlatformMessageID, &j.Content, &j.SystemPrompt, &j.ContextLimit, &j.Enabled, &j.Deadline, &j.Attempts, &j.EventType, &j.TriggerMode, &j.HasImage, &j.MentionsBot)
 	if err != nil {
 		return inboxJob{}, err
 	}
@@ -310,7 +318,12 @@ func (a *App) claimOutbox(ctx context.Context) (outboxJob, error) {
 	defer tx.Rollback(ctx)
 	var j outboxJob
 	var partsRaw []byte
-	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,c.id::text,c.type,c.platform_id,COALESCE(m.reply_to_message_id,''),m.content,m.event_type,m.parts,b.app_id,b.app_secret_enc,t.msg_seq,t.attempts,m.reply_deadline,m.qq_send_payload,c.qq_extended_replies FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='pending' AND t.next_attempt_at<=now() ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationRecordID, &j.ConversationType, &j.ConversationID, &j.ReplyTo, &j.Text, &j.EventType, &partsRaw, &j.AppID, &j.SecretEnc, &j.Sequence, &j.Attempts, &j.Deadline, &j.Payload, &j.Extended)
+	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,c.id::text,c.type,c.platform_id,COALESCE(m.reply_to_message_id,''),m.content,m.event_type,m.parts,b.app_id,b.app_secret_enc,t.msg_seq,t.attempts,m.reply_deadline,m.qq_send_payload,c.qq_extended_replies FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='pending' AND t.next_attempt_at<=now()
+	AND (m.handoff_id IS NULL OR NOT EXISTS (
+	  SELECT FROM messages prior JOIN outbox_tasks pt ON pt.message_id=prior.id
+	  WHERE prior.handoff_id=m.handoff_id AND prior.conversation_id=m.conversation_id
+	  AND pt.status IN ('pending','processing') AND (prior.created_at,prior.id)<(m.created_at,m.id)))
+	ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationRecordID, &j.ConversationType, &j.ConversationID, &j.ReplyTo, &j.Text, &j.EventType, &partsRaw, &j.AppID, &j.SecretEnc, &j.Sequence, &j.Attempts, &j.Deadline, &j.Payload, &j.Extended)
 	if err != nil {
 		return j, err
 	}
@@ -328,7 +341,7 @@ func (a *App) processOutbox(ctx context.Context) error {
 	}
 	if j.EventType == "AI_RESPONSE" && j.ReplyTo != "" {
 		var blocked bool
-		err = a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=$1 AND m.platform_message_id=$2 AND m.direction='inbound' AND (m.context_excluded OR EXISTS(SELECT 1 FROM blocked_users bu WHERE bu.bot_id=m.bot_id AND bu.platform_user_id=m.sender_id AND (bu.conversation_id IS NULL OR bu.conversation_id=m.conversation_id))))`, j.ConversationRecordID, j.ReplyTo).Scan(&blocked)
+		err = a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=$1 AND m.platform_message_id=$2 AND m.direction='inbound' AND (m.context_excluded OR EXISTS(SELECT FROM handoffs h WHERE h.conversation_id=m.conversation_id AND h.platform_user_id=m.sender_id AND h.status IN ('open','processing') AND h.message_id IS DISTINCT FROM m.id) OR EXISTS(SELECT 1 FROM blocked_users bu WHERE bu.bot_id=m.bot_id AND bu.platform_user_id=m.sender_id AND (bu.conversation_id IS NULL OR bu.conversation_id=m.conversation_id))))`, j.ConversationRecordID, j.ReplyTo).Scan(&blocked)
 		if err != nil {
 			return a.retryOutbox(ctx, j, err)
 		}
@@ -361,7 +374,7 @@ func (a *App) processOutbox(ctx context.Context) error {
 		_, err = a.db.Exec(ctx, "UPDATE outbox_tasks SET status='expired',updated_at=now() WHERE id=$1", j.TaskID)
 		return err
 	}
-	if j.EventType != "HUMAN_REPLY" && j.Deadline != nil && time.Now().After(*j.Deadline) {
+	if j.EventType != "HUMAN_REPLY" && j.EventType != "HANDOFF_UPDATE" && j.Deadline != nil && time.Now().After(*j.Deadline) {
 		_, err = a.db.Exec(ctx, "UPDATE outbox_tasks SET status='expired',last_error='reply deadline exceeded',updated_at=now() WHERE id=$1", j.TaskID)
 		_, _ = a.db.Exec(ctx, "UPDATE messages SET status='expired' WHERE id=$1", j.MessageID)
 		if err == nil && j.EventType == "AI_RESPONSE" {
@@ -412,13 +425,13 @@ func (a *App) processOutbox(ctx context.Context) error {
 		}
 		quote = agent.TruncateReply(agent.PlainLinks(quote), 120)
 	}
-	if j.EventType == "HUMAN_REPLY" && j.ConversationType == "group" {
+	if (j.EventType == "HUMAN_REPLY" || j.EventType == "HANDOFF_UPDATE") && j.ReplyTo != "" && j.ConversationType == "group" {
 		if err = a.db.QueryRow(ctx, "SELECT raw_event,COALESCE(NULLIF(sender_name,''),sender_id) FROM messages WHERE conversation_id=$1 AND platform_message_id=$2", j.ConversationRecordID, j.ReplyTo).Scan(&raw, &mentionName); err != nil {
 			return a.retryOutbox(ctx, j, err)
 		}
 	}
 	reference := qq.ReferenceIndex(raw)
-	if j.EventType == "HUMAN_REPLY" && reference == "" && mentionName != "" {
+	if (j.EventType == "HUMAN_REPLY" || j.EventType == "HANDOFF_UPDATE") && reference == "" && mentionName != "" {
 		j.Text = "@" + mentionName + " " + j.Text
 	}
 	if j.EventType == "HUMAN_REPLY" {
@@ -482,9 +495,7 @@ func (a *App) processOutbox(ctx context.Context) error {
 	if err == nil {
 		_, err = tx.Exec(ctx, "UPDATE messages SET status='sent',platform_message_id=$1,qq_ref_idx=$3,qq_sent_at=$4 WHERE id=$2", nullString(receipt.ID), j.MessageID, receipt.Ext.Index, parseQQTime(receipt.Timestamp))
 	}
-	if err == nil && j.EventType == "HUMAN_REPLY" {
-		_, err = tx.Exec(ctx, "UPDATE handoffs SET status='replied',resolved_at=now(),paused_until=now(),updated_at=now() WHERE reply_id=$1", j.MessageID)
-	}
+
 	if err == nil && j.EventType == "AI_RESPONSE" {
 		_, err = tx.Exec(ctx, scheduleProcessingAckRetractionSQL, j.BotID, j.ConversationRecordID, j.ReplyTo)
 	}
@@ -497,7 +508,7 @@ func (a *App) processOutbox(ctx context.Context) error {
 // Keep the persisted reply association for history and sequence accounting.
 func humanReplyNeedsActive(j outboxJob, now time.Time) bool {
 	limit := qqReplyLimit(j.ConversationType, j.Extended)
-	return j.EventType == "HUMAN_REPLY" && (j.ReplyTo == "" || j.Sequence > limit || (j.Deadline != nil && !now.Before(*j.Deadline)))
+	return (j.EventType == "HUMAN_REPLY" || j.EventType == "HANDOFF_UPDATE") && (j.ReplyTo == "" || j.Sequence > limit || (j.Deadline != nil && !now.Before(*j.Deadline)))
 }
 
 const scheduleProcessingAckRetractionSQL = `INSERT INTO message_retractions(message_id)

@@ -7,6 +7,11 @@ ALTER TABLE handoffs ADD COLUMN IF NOT EXISTS ticket_number bigint GENERATED ALW
 ALTER TABLE handoffs ADD COLUMN IF NOT EXISTS reply_id uuid REFERENCES messages(id) ON DELETE SET NULL;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS handoff_id uuid REFERENCES handoffs(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS messages_handoff_idx ON messages(handoff_id) WHERE handoff_id IS NOT NULL;
+DO $$
+BEGIN
+IF EXISTS (SELECT FROM pg_attribute WHERE attrelid='handoffs'::regclass AND attname='claimed_at' AND NOT attisdropped) THEN
+ RETURN;
+END IF;
 UPDATE messages m SET handoff_id=(SELECT h.id FROM handoffs h WHERE h.message_id=m.id ORDER BY h.created_at DESC LIMIT 1)
 WHERE m.handoff_id IS NULL AND EXISTS(SELECT FROM handoffs h WHERE h.message_id=m.id);
 -- Earlier releases recorded paused follow-ups on the inbox task only.
@@ -26,3 +31,4 @@ FROM (SELECT DISTINCT ON (i.handoff_id) i.handoff_id,o.id,coalesce(t.updated_at,
  WHERE i.handoff_id IS NOT NULL AND i.direction='inbound' AND o.event_type='HUMAN_REPLY' AND o.status='sent'
  ORDER BY i.handoff_id,o.event_at DESC) r
 WHERE h.id=r.handoff_id AND h.reply_id IS NULL;
+END $$;

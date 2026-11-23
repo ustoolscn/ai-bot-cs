@@ -59,3 +59,18 @@
 基础地址包含供应商要求的版本前缀。后端直连该地址下的 `POST /images/generations`，使用 Bearer 鉴权并发送 `model,prompt,n:1`。支持 `data[0].b64_json` 和 `data[0].url`（公网 HTTPS 图片）。密钥加密保存，返回值只显示 `hasApiKey`。省略顶层密钥字段会保留原密钥，传空串会清除。更换基础地址时需要重新填写密钥。
 
 `GET /api/tools` 的 `data.builtin` 包含 `generate_image`。客服编辑沿用 `PUT /api/bots/:id/services/:item`，提交原有 `name`，在 `settings` 内保存 `toolsEnabled` 和所选 `toolNames`。把 `generate_image` 加入所选名称列表即可。显式空数组关闭所有工具，null 沿用默认集合。配置地址和密钥后该工具才可调用。参数为 `{"prompt":"画面描述"}`，成功返回 `{"ready":true}`，QQ 收到原生图片附件。评测模式返回 `{"preview":true}`，不会请求生图供应商。
+
+## 人工工单
+
+| 管理端接口 | 请求与返回 |
+|---|---|
+| `GET /api/handoffs` | `status=active` 为默认值，含待接单和处理中。可选 `open`、`processing`、`resolved` 或 `all`。返回 `data` 数组。 |
+| `POST /api/handoffs/:id/claim` | 使用工单 UUID，无请求体。返回 `data.status="processing"`。同一接单人重复点击不会重复发通知。 |
+| `POST /api/messages/:id/reply` | 使用工单内用户消息的 UUID。请求 `{"text":"回复","learn":false}`，返回 `data.id`（待送达消息 UUID）。可连续调用。 |
+| `POST /api/handoffs/:id/resolve` | 使用工单 UUID，无请求体。返回 `data.status="resolved"` 和 `data.resolved=true`。 |
+
+- 工单 `status` 的三个值为 `open`（待接单）、`processing`（处理中）、`resolved`（已结单）。消息列表及详情的 `handoffStatus` 分别为 `waiting_human`、`human_processing`、`human_closed`，无工单为 null。
+- 工单列表提供 `claimedByName`、`claimedById`、`claimedVia`、`claimedAt`。网页接单的 `claimedVia="web"`，ID 是当前管理员 UUID；QQ 接单的 `claimedVia="qq"`，ID 是接单人的私聊会话 UUID。两类账号独立鉴权。同名账号也不能代替接单人。未接单时这些字段为 null。非接单人操作或工单状态冲突时返回 HTTP 409，界面可直接展示 `error.message`。
+- `resolvedAt` 是实际结单时间，`closeMethod` 为 `qq`（人工指令）、`web`（网页）或 `timeout`（空闲超时）。旧版“回复即结束”的工单迁移为 `resolved`，缺少结单来源的历史记录返回 null。最近一次回复的 `humanRepliedAt` 表示送达时间，与结单时间独立。
+- `pausedUntil` 是本单当前空闲期限。新单沿用该客服的 `settings.handoffPauseMinutes`，默认 30 分钟。接单、用户新消息及人工回复会刷新期限。超时任务每分钟检查一次。网页接单人可以从后台告警 `kind=handoff_timeout` 的 `detail.userId`、`detail.handoffId` 识别自己的超时提醒，也可监听原有实时变更刷新人工台。
+- `recent` 按时间正序返回本工单的用户消息、转人工的机器人回复及人工回复。每项含原有的消息和投递字段及 `parts` 附件数组。处理状态更新与客服通知不计入对话。QQ 接单前向各人工客服转发，QQ 接单后只转给接单人的私聊；网页接单后续消息出现在对应网页工单中。

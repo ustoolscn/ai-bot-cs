@@ -187,6 +187,7 @@ func (a *App) Router() http.Handler {
 	auth.PUT("/memories/:id", a.updateMemory)
 	auth.DELETE("/memories/:id", a.deleteMemory)
 	auth.GET("/handoffs", a.listHandoffs)
+	auth.POST("/handoffs/:id/claim", a.claimHandoff)
 	auth.POST("/handoffs/:id/resolve", a.resolveHandoff)
 	auth.POST("/messages/:id/reply", a.humanReply)
 	auth.POST("/messages/:id/feedback", a.createFeedback)
@@ -997,7 +998,7 @@ func (a *App) retryFailedTasks(c *gin.Context) {
 		return
 	}
 	outbox, err := tx.Exec(c, `UPDATE outbox_tasks t SET status='pending',attempts=0,next_attempt_at=now(),locked_at=NULL,last_error=NULL,updated_at=now()
-		FROM messages m WHERE t.message_id=m.id AND t.status='failed' AND m.event_type<>'PROCESSING_ACK' AND (m.event_type<>'HUMAN_REPLY' OR m.handoff_id IS NULL OR EXISTS(SELECT FROM handoffs h WHERE h.id=m.handoff_id AND h.reply_id=m.id AND h.status='open'))`)
+		FROM messages m WHERE t.message_id=m.id AND t.status='failed' AND m.event_type<>'PROCESSING_ACK' AND (m.event_type<>'HUMAN_REPLY' OR m.handoff_id IS NULL OR EXISTS(SELECT FROM handoffs h WHERE h.id=m.handoff_id AND h.status='processing'))`)
 	if err != nil {
 		fail(c, 500, "database_error", "重新入队失败")
 		return
@@ -1091,9 +1092,9 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 		return tx.Commit(ctx)
 	}
 	conversationName := inboundConversationName(msg)
-	var guardEnabled bool
+	var conversationEnabled, guardEnabled bool
 	var cid, triggerMode string
-	err = tx.QueryRow(ctx, `INSERT INTO conversations(channel,bot_id,platform_id,type,name,context_limit,trigger_mode) VALUES('qq',$1,$2,$3,$4,$5,CASE WHEN $3='group' THEN 'smart' ELSE 'mention_only' END) ON CONFLICT(channel,bot_id,platform_id) DO UPDATE SET updated_at=now(),name=CASE WHEN conversations.name='' OR conversations.name=conversations.platform_id OR conversations.name LIKE 'QQ 群聊 · %' OR conversations.name LIKE 'QQ 用户 · %' THEN EXCLUDED.name ELSE conversations.name END RETURNING id::text,trigger_mode,enabled AND COALESCE((guard_policy->>'enabled')::bool,false)`, msg.BotID, msg.ConversationID, msg.ConversationType, conversationName, settings.DefaultContextLimit).Scan(&cid, &triggerMode, &guardEnabled)
+	err = tx.QueryRow(ctx, `INSERT INTO conversations(channel,bot_id,platform_id,type,name,context_limit,trigger_mode) VALUES('qq',$1,$2,$3,$4,$5,CASE WHEN $3='group' THEN 'smart' ELSE 'mention_only' END) ON CONFLICT(channel,bot_id,platform_id) DO UPDATE SET updated_at=now(),name=CASE WHEN conversations.name='' OR conversations.name=conversations.platform_id OR conversations.name LIKE 'QQ 群聊 · %' OR conversations.name LIKE 'QQ 用户 · %' THEN EXCLUDED.name ELSE conversations.name END RETURNING id::text,trigger_mode,enabled,enabled AND COALESCE((guard_policy->>'enabled')::bool,false)`, msg.BotID, msg.ConversationID, msg.ConversationType, conversationName, settings.DefaultContextLimit).Scan(&cid, &triggerMode, &conversationEnabled, &guardEnabled)
 	if err != nil {
 		return err
 	}
@@ -1154,6 +1155,19 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 	}
 	needsReview := !blocked && guardEnabled && msg.ConversationType == "group"
 	queue := qq.ShouldQueue(msg.EventType, triggerMode, msg.MentionsBot)
+	if conversationEnabled && !blocked && !needsReview {
+		linked, e := linkHandoffTurn(ctx, tx, msg.BotID, cid, msg.SenderID, msg.SenderName, mid, "", 0)
+		if e != nil {
+			return e
+		}
+		if linked {
+			_, e = tx.Exec(ctx, "INSERT INTO inbox_tasks(message_id,status) VALUES($1,'handoff') ON CONFLICT DO NOTHING", mid)
+			if e != nil {
+				return e
+			}
+			return tx.Commit(ctx)
+		}
+	}
 	if needsReview {
 		err = a.queueReview(ctx, tx, mid, queue)
 		if err == nil {

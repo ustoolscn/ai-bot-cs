@@ -352,15 +352,16 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		// The post-reply evaluation reconciles the user's request with existing memories.
 		return `{"queuedForPostReplyReview":true}`, nil
 	case "handoff_to_human":
-		rt.handoff = true
 		if rt.dryRun {
+			rt.handoff = true
 			return `{"ok":true,"message":"已通知人工客服"}`, nil
 		}
-		pause := time.Now().Add(time.Duration(rt.settings.HandoffPauseMinutes) * time.Minute)
-		_, err := a.handoffTurn(ctx, rt.botID, rt.conversationID, rt.senderID, rt.senderName, rt.messageID, str("reason"), pause, true)
+
+		_, err := a.handoffTurn(ctx, rt.botID, rt.conversationID, rt.senderID, rt.senderName, rt.messageID, str("reason"), rt.settings.HandoffPauseMinutes)
 		if err != nil {
 			return "", err
 		}
+		rt.handoff = true
 		_, _ = a.db.Exec(ctx, "INSERT INTO system_alerts(kind,title,detail) VALUES('handoff',$1,$2::jsonb)", "用户请求人工："+firstNonEmpty(rt.senderName, rt.senderID), jsonString(map[string]any{"conversationId": rt.conversationID, "reason": str("reason")}))
 		return `{"ok":true,"message":"已通知人工客服，告诉用户稍等即可"}`, nil
 	}

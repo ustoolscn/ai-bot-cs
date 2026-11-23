@@ -158,7 +158,7 @@ func (a *App) reviewGroupMessage(ctx context.Context, mid string) (reviewErr err
 	// Discard stale decisions if the administrator edited the rules during inference.
 	var revision string
 	var current guardPolicy
-	if err = tx.QueryRow(ctx, "SELECT guard_policy,guard_revision::text FROM conversations WHERE id=$1 FOR SHARE", cid).Scan(&current, &revision); err != nil {
+	if err = tx.QueryRow(ctx, "SELECT guard_policy,guard_revision::text FROM conversations WHERE id=$1 FOR NO KEY UPDATE", cid).Scan(&current, &revision); err != nil {
 		return err
 	}
 	if current != policy {
@@ -178,6 +178,14 @@ func (a *App) reviewGroupMessage(ctx context.Context, mid string) (reviewErr err
 	}
 	if reason == "" {
 		_, err = tx.Exec(ctx, "UPDATE messages SET context_excluded=false,context_exclusion_reason='' WHERE id=$1 AND context_exclusion_reason='pending_review'", mid)
+		if err == nil && !blocked && enabled {
+			var linked bool
+			linked, err = linkHandoffTurn(ctx, tx, bot, cid, member, "", mid, "", 0)
+			if linked && err == nil {
+				_, err = tx.Exec(ctx, "INSERT INTO inbox_tasks(message_id,status) VALUES($1,'handoff') ON CONFLICT DO NOTHING", mid)
+				queue = false
+			}
+		}
 		if err == nil && queue && !blocked && enabled {
 			_, err = tx.Exec(ctx, "INSERT INTO inbox_tasks(message_id) VALUES($1) ON CONFLICT DO NOTHING", mid)
 		}

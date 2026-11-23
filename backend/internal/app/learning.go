@@ -335,7 +335,7 @@ func (a *App) learningStats(c *gin.Context) {
 		(SELECT count(*) FROM message_feedback WHERE created_at>now()-interval '7 days' AND rating IN ('bad','wrong','unhelpful')),
 		(SELECT count(*) FROM message_feedback WHERE NOT is_read AND rating IN ('bad','wrong','unhelpful')),
  (SELECT count(*) FROM user_memories WHERE status='active'),
-		(SELECT count(*) FROM handoffs WHERE status='open')`).Scan(&pending, &entries, &openGaps, &feedback7d, &bad7d, &unread, &memories, &openHandoffs)
+		(SELECT count(*) FROM handoffs WHERE status IN ('open','processing'))`).Scan(&pending, &entries, &openGaps, &feedback7d, &bad7d, &unread, &memories, &openHandoffs)
 	if err != nil {
 		fail(c, 500, "database_error", "读取学习统计失败")
 		return

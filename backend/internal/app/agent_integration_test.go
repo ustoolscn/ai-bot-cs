@@ -471,6 +471,13 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	}
 	var m7 string
 	_ = pool.QueryRow(ctx, `SELECT id::text FROM messages WHERE platform_message_id='m7'`).Scan(&m7)
+	var ticketID string
+	if err := pool.QueryRow(ctx, "SELECT handoff_id::text FROM messages WHERE id=$1", m7).Scan(&ticketID); err != nil {
+		t.Fatal(err)
+	}
+	ticketURL := server.URL + "/api/handoffs/" + ticketID
+	requestJSON(t, client, "POST", server.URL+"/api/messages/"+m7+"/reply", map[string]string{"text": "未接单回复"}, 409)
+	requestJSON(t, client, "POST", ticketURL+"/claim", nil, 200)
 	requestJSON(t, client, http.MethodPost, server.URL+"/api/messages/"+m7+"/reply", map[string]any{"text": "您好，我是人工客服", "learn": false}, http.StatusOK)
 	eventually(t, 8*time.Second, "human reply sent", func() (bool, error) {
 		for _, s := range mock.Sends() {
@@ -480,10 +487,22 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 		}
 		return false, nil
 	})
-	eventually(t, 3*time.Second, "delivered human reply closes ticket", func() (bool, error) {
+	eventually(t, 3*time.Second, "delivered human reply keeps ticket processing", func() (bool, error) {
 		detail := dataMap(t, requestJSON(t, client, http.MethodGet, server.URL+"/api/messages/"+m7, nil, http.StatusOK))
-		return detail["status"] == "human_replied" && detail["humanReplyContent"] == "您好，我是人工客服" && detail["humanRepliedAt"] != nil, nil
+		return detail["status"] == "human_processing" && detail["humanReplyContent"] == "您好，我是人工客服" && detail["humanRepliedAt"] != nil, nil
 	})
+	requestJSON(t, client, "POST", server.URL+"/api/messages/"+m7+"/reply", map[string]string{"text": "这是同一工单的第二句回复"}, 200)
+	requestJSON(t, client, "POST", ticketURL+"/resolve", nil, 200)
+	eventually(t, 8*time.Second, "both web replies and closure delivered", func() (bool, error) {
+		var valid bool
+		err := pool.QueryRow(ctx, `SELECT status='resolved' AND close_method='web' AND resolved_at IS NOT NULL
+		AND (SELECT count(*) FROM messages WHERE handoff_id=h.id AND event_type='HUMAN_REPLY' AND status='sent')=2
+		AND EXISTS(SELECT FROM messages WHERE handoff_id=h.id AND event_type='AI_RESPONSE' AND reply_to_message_id='m6')
+		AND EXISTS(SELECT FROM messages WHERE handoff_id=h.id AND event_type='HANDOFF_UPDATE' AND content LIKE '%已结束%' AND status='sent')
+		FROM handoffs h WHERE id=$1`, ticketID).Scan(&valid)
+		return valid, err
+	})
+	requestJSON(t, client, "POST", server.URL+"/api/messages/"+m7+"/reply", map[string]string{"text": "结单后回复"}, 409)
 	// Admin correction published directly.
 	var m3 string
 	_ = pool.QueryRow(ctx, `SELECT id::text FROM messages WHERE platform_message_id='m3'`).Scan(&m3)
