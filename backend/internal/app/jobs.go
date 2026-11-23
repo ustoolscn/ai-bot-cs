@@ -206,7 +206,7 @@ func (a *App) jobEvaluate(ctx context.Context, runID, messageID, profileID strin
 			if i >= 3 || m.Confidence < 0.6 {
 				continue
 			}
-			if err := a.saveMemory(ctx, s, botID, senderID, senderName, m.Kind, m.Content, m.Confidence, "extracted", messageID); err != nil {
+			if err := a.saveMemory(ctx, s, botID, convID, senderID, senderName, m.Kind, m.Content, m.Confidence, "extracted", messageID); err != nil {
 				a.log.Warn("save memory failed", "error", err)
 			}
 		}

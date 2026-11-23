@@ -133,7 +133,7 @@ func (a *App) excludeBlockedHistory(ctx context.Context, tx pgx.Tx, botID, convI
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE user_memories SET status='archived',updated_at=now() WHERE bot_id=$1 AND platform_user_id=$2 AND ($3='' OR source_message_id IN(SELECT id FROM messages WHERE conversation_id::text=$3))`, botID, userID, convID)
+	_, err = tx.Exec(ctx, `UPDATE user_memories SET status='archived',updated_at=now() WHERE bot_id=$1 AND platform_user_id=$2 AND ($3='' OR conversation_id::text=$3)`, botID, userID, convID)
 	return err
 }
 

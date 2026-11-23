@@ -168,6 +168,7 @@ func (a *App) Router() http.Handler {
 	auth.GET("/conversations/:id/members", a.listMembers)
 	auth.PUT("/conversations/:id/members/:userId", a.updateMember)
 	auth.GET("/conversations/:id/summaries", a.getSummary)
+	auth.GET("/memories/directory", a.memoryDirectory)
 	auth.GET("/memories", a.listMemories)
 	auth.POST("/memories", a.createMemory)
 	auth.PUT("/memories/:id", a.updateMemory)

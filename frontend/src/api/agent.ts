@@ -102,6 +102,7 @@ export interface Candidate { id: string; knowledgeBaseId?: string; knowledgeBase
 export interface Entry { id: string; knowledgeBaseId: string; knowledgeBaseName: string; question: string; aliases: string[]; answer: string; source: string; status: string; indexStatus: string; indexError: string; version: number; hitCount: number; helpfulCount: number; unhelpfulCount: number; updatedAt: string }
 export interface Gap { id: string; question: string; occurrences: number; status: string; firstSeenAt: string; lastSeenAt: string }
 export interface Feedback { id: string; source: string; rating: string; comment: string; correctedAnswer: string; createdAt: string; answer: string; question: string; messageId?: string; conversationName: string }
+export interface MemoryMember { botId: string; botName: string; conversationId: string; conversationName: string; conversationType: string; userId: string; displayName: string; count: number }
 export interface Memory { id: string; botId: string; botName: string; userId: string; displayName: string; kind: string; content: string; hasEmbedding: boolean; confidence: number; pinned: boolean; source: string; updatedAt: string; lastUsedAt?: string }
 export interface LearningStats { pendingCandidates: number; publishedEntries: number; openGaps: number; feedback7d: number; negativeFeedback7d: number; activeMemories: number; openHandoffs: number }
 export interface HandoffMessage { id: string; direction: string; senderName: string; content: string; eventType: string; eventAt: string; status?: string; deliveryError?: string }
@@ -162,7 +163,8 @@ export const agentApi = {
     feedback: (rating = '') => request<Feedback[]>({ url: '/feedback', params: { rating } }, mock.mockFeedback),
   },
   memories: {
-    list: (params: { userId?: string; botId?: string; q?: string }) => request<Memory[]>({ url: '/memories', params }, mock.mockMemories),
+    directory: () => request<MemoryMember[]>({ url: '/memories/directory' }),
+    list: (params: { userId?: string; botId?: string; conversationId?: string; q?: string }) => request<Memory[]>({ url: '/memories', params }),
     update: (id: string, data: { content: string; kind: string; pinned: boolean }) => request<{ updated: boolean }>({ method: 'PUT', url: `/memories/${id}`, data }),
     remove: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/memories/${id}` }),
   },

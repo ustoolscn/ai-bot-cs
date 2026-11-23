@@ -148,8 +148,8 @@ const heroLine = computed(() => {
 const activeAlerts = computed(() => overview.value.alerts.filter(alert => !alert.recovered))
 const todos = computed(() => [
   { label: '位用户在等人工回复', clear: '没有人在等人工', count: stats.value?.openHandoffs, to: '/handoffs', icon: markRaw(Headset), tone: 'is-hot' },
-  { label: '条新知识等你审核', clear: '没有待审核的知识', count: stats.value?.pendingCandidates, to: '/learning', icon: markRaw(Reading), tone: 'is-info' },
-  { label: '个问题机器人没答上', clear: '没有新的知识缺口', count: stats.value?.openGaps, to: '/learning?tab=gaps', icon: markRaw(QuestionFilled), tone: 'is-warn' },
+  { label: '条新知识等你审核', clear: '没有待审核的知识', count: stats.value?.pendingCandidates, to: '/knowledge?tab=candidates', icon: markRaw(Reading), tone: 'is-info' },
+  { label: '个问题机器人没答上', clear: '没有新的知识缺口', count: stats.value?.openGaps, to: '/knowledge?tab=gaps', icon: markRaw(QuestionFilled), tone: 'is-warn' },
   { label: '个任务处理失败', clear: '没有失败的任务', count: overview.value.queues.failed, to: '/system', icon: markRaw(WarningFilled), tone: 'is-hot' },
 ])
 interface Kpi { label: string; value: string; hint: string; icon: unknown; trend?: string; direction?: 'up' | 'down'; good?: boolean; percent?: number; tone?: 'mint' | 'sky' }

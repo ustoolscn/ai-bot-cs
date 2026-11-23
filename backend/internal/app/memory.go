@@ -10,19 +10,19 @@ import (
 
 // loadMemories returns pinned memories first, then the most relevant (by
 // vector similarity when an embedding model is configured) or most recent.
-func (a *App) loadMemories(ctx context.Context, s agent.Settings, botID, userID, query string) []agent.Memory {
+func (a *App) loadMemories(ctx context.Context, s agent.Settings, botID, conversationID, userID, query string) []agent.Memory {
 	limit := s.MaxMemories
 	var rowsSQL string
-	args := []any{botID, userID, limit}
+	args := []any{botID, conversationID, userID, limit}
 	if cl, pid, ok := a.embeddingModel(ctx, s); ok && strings.TrimSpace(query) != "" {
 		if v, err := cl.Embed(ctx, []string{query}); err == nil && len(v) == 1 {
-			rowsSQL = `SELECT kind,content FROM user_memories WHERE bot_id=$1 AND platform_user_id=$2 AND status='active' AND (expires_at IS NULL OR expires_at>now())
-				ORDER BY pinned DESC, CASE WHEN embedding IS NOT NULL AND embedding_profile_id=$4 AND vector_dims(embedding)=$6 THEN embedding <=> $5::vector ELSE 1 END, updated_at DESC LIMIT $3`
+			rowsSQL = `SELECT kind,content FROM user_memories WHERE bot_id=$1 AND conversation_id=$2 AND platform_user_id=$3 AND status='active' AND (expires_at IS NULL OR expires_at>now())
+				ORDER BY pinned DESC, CASE WHEN embedding IS NOT NULL AND embedding_profile_id=$5 AND vector_dims(embedding)=$7 THEN embedding <=> $6::vector ELSE 1 END, updated_at DESC LIMIT $4`
 			args = append(args, pid, vectorLiteral(v[0]), len(v[0]))
 		}
 	}
 	if rowsSQL == "" {
-		rowsSQL = `SELECT kind,content FROM user_memories WHERE bot_id=$1 AND platform_user_id=$2 AND status='active' AND (expires_at IS NULL OR expires_at>now()) ORDER BY pinned DESC, updated_at DESC LIMIT $3`
+		rowsSQL = `SELECT kind,content FROM user_memories WHERE bot_id=$1 AND conversation_id=$2 AND platform_user_id=$3 AND status='active' AND (expires_at IS NULL OR expires_at>now()) ORDER BY pinned DESC, updated_at DESC LIMIT $4`
 	}
 	rows, err := a.db.Query(ctx, rowsSQL, args...)
 	if err != nil {
@@ -38,7 +38,7 @@ func (a *App) loadMemories(ctx context.Context, s agent.Settings, botID, userID,
 		}
 	}
 	if len(out) > 0 {
-		_, _ = a.db.Exec(ctx, "UPDATE user_memories SET last_used_at=now() WHERE bot_id=$1 AND platform_user_id=$2 AND status='active'", botID, userID)
+		_, _ = a.db.Exec(ctx, "UPDATE user_memories SET last_used_at=now() WHERE bot_id=$1 AND conversation_id=$2 AND platform_user_id=$3 AND status='active'", botID, conversationID, userID)
 	}
 	return out
 }
@@ -46,7 +46,7 @@ func (a *App) loadMemories(ctx context.Context, s agent.Settings, botID, userID,
 var sensitiveMemory = []string{"sk-", "密码", "password", "token", "密钥", "api key", "apikey", "身份证", "银行卡"}
 
 // saveMemory stores a memory unless it is sensitive or a near-duplicate.
-func (a *App) saveMemory(ctx context.Context, s agent.Settings, botID, userID, userName, kind, content string, confidence float64, source, messageID string) error {
+func (a *App) saveMemory(ctx context.Context, s agent.Settings, botID, conversationID, userID, userName, kind, content string, confidence float64, source, messageID string) error {
 	if messageID != "" {
 		if excluded, err := a.messageExcluded(ctx, messageID); err != nil {
 			return err
@@ -70,9 +70,9 @@ func (a *App) saveMemory(ctx context.Context, s agent.Settings, botID, userID, u
 		kind = "fact"
 	}
 	var exists bool
-	_ = a.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM user_memories WHERE bot_id=$1 AND platform_user_id=$2 AND status='active' AND content=$3)", botID, userID, content).Scan(&exists)
+	_ = a.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM user_memories WHERE bot_id=$1 AND conversation_id=$2 AND platform_user_id=$3 AND status='active' AND content=$4)", botID, conversationID, userID, content).Scan(&exists)
 	if exists {
-		_, err := a.db.Exec(ctx, "UPDATE user_memories SET updated_at=now(),confidence=GREATEST(confidence,$4) WHERE bot_id=$1 AND platform_user_id=$2 AND status='active' AND content=$3", botID, userID, content, confidence)
+		_, err := a.db.Exec(ctx, "UPDATE user_memories SET updated_at=now(),confidence=GREATEST(confidence,$5) WHERE bot_id=$1 AND conversation_id=$2 AND platform_user_id=$3 AND status='active' AND content=$4", botID, conversationID, userID, content, confidence)
 		return err
 	}
 	var embedding, profile any
@@ -80,27 +80,45 @@ func (a *App) saveMemory(ctx context.Context, s agent.Settings, botID, userID, u
 		if v, err := cl.Embed(ctx, []string{content}); err == nil && len(v) == 1 {
 			// Skip near-duplicates of an existing memory.
 			var dup bool
-			_ = a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM user_memories WHERE bot_id=$1 AND platform_user_id=$2 AND status='active' AND embedding IS NOT NULL AND embedding_profile_id=$3 AND vector_dims(embedding)=$5 AND 1-(embedding <=> $4::vector) > 0.93)`, botID, userID, pid, vectorLiteral(v[0]), len(v[0])).Scan(&dup)
+			_ = a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM user_memories WHERE bot_id=$1 AND conversation_id=$2 AND platform_user_id=$3 AND status='active' AND embedding IS NOT NULL AND embedding_profile_id=$4 AND vector_dims(embedding)=$6 AND 1-(embedding <=> $5::vector) > 0.93)`, botID, conversationID, userID, pid, vectorLiteral(v[0]), len(v[0])).Scan(&dup)
 			if dup {
 				return nil
 			}
 			embedding, profile = vectorLiteral(v[0]), pid
 		}
 	}
-	_, err := a.db.Exec(ctx, `INSERT INTO user_memories(bot_id,platform_user_id,display_name,kind,content,embedding,embedding_profile_id,confidence,source,source_message_id) VALUES($1,$2,$3,$4,$5,$6::vector,$7,$8,$9,$10)`,
-		botID, userID, userName, kind, content, embedding, profile, confidence, source, nullString(messageID))
+	_, err := a.db.Exec(ctx, `INSERT INTO user_memories(bot_id,conversation_id,platform_user_id,display_name,kind,content,embedding,embedding_profile_id,confidence,source,source_message_id) VALUES($1,$2,$3,$4,$5,$6,$7::vector,$8,$9,$10,$11)`,
+		botID, conversationID, userID, userName, kind, content, embedding, profile, confidence, source, nullString(messageID))
 	if err == nil {
 		// Keep at most 50 active memories per user.
-		_, _ = a.db.Exec(ctx, `UPDATE user_memories SET status='archived',updated_at=now() WHERE id IN (SELECT id FROM user_memories WHERE bot_id=$1 AND platform_user_id=$2 AND status='active' AND NOT pinned ORDER BY updated_at DESC OFFSET 50)`, botID, userID)
+		_, _ = a.db.Exec(ctx, `UPDATE user_memories SET status='archived',updated_at=now() WHERE id IN (SELECT id FROM user_memories WHERE bot_id=$1 AND conversation_id=$2 AND platform_user_id=$3 AND status='active' AND NOT pinned ORDER BY updated_at DESC OFFSET 50)`, botID, conversationID, userID)
 	}
 	return err
 }
 
 // --- admin API ---
 
+func (a *App) memoryDirectory(c *gin.Context) {
+	queryList(c, a, `SELECT m.bot_id::text AS "botId", b.name AS "botName",
+        coalesce(m.conversation_id::text,'unassigned') AS "conversationId",
+        coalesce(nullif(c.name,''),c.platform_id,'来源未确定') AS "conversationName",
+        coalesce(c.type,'unassigned') AS "conversationType", m.platform_user_id AS "userId",
+        coalesce((array_agg(m.display_name ORDER BY m.updated_at DESC)
+          FILTER (WHERE m.display_name<>''))[1],'') AS "displayName", count(*) AS count
+        FROM user_memories m JOIN bots b ON b.id=m.bot_id LEFT JOIN conversations c ON c.id=m.conversation_id
+        WHERE m.status='active' GROUP BY m.bot_id,b.name,m.conversation_id,c.id,m.platform_user_id
+        ORDER BY b.name,"conversationName","displayName",m.platform_user_id`)
+}
+
 func (a *App) listMemories(c *gin.Context) {
 	args := []any{}
 	where := []string{"m.status='active'"}
+	if v := c.Query("conversationId"); v == "unassigned" {
+		where = append(where, "m.conversation_id IS NULL")
+	} else if v != "" {
+		args = append(args, v)
+		where = append(where, "m.conversation_id=$"+itoa(len(args)))
+	}
 	if v := c.Query("botId"); v != "" {
 		args = append(args, v)
 		where = append(where, "m.bot_id=$"+itoa(len(args)))
@@ -120,20 +138,25 @@ func (a *App) listMemories(c *gin.Context) {
 
 func (a *App) createMemory(c *gin.Context) {
 	var in struct {
-		BotID, UserID, DisplayName, Kind, Content string
-		Pinned                                    bool
+		BotID, ConversationID, UserID, DisplayName, Kind, Content string
+		Pinned                                                    bool
 	}
-	if c.ShouldBindJSON(&in) != nil || in.BotID == "" || in.UserID == "" || strings.TrimSpace(in.Content) == "" {
-		fail(c, 400, "invalid_request", "机器人、用户和内容必填")
+	if c.ShouldBindJSON(&in) != nil || in.BotID == "" || in.ConversationID == "" || in.UserID == "" || strings.TrimSpace(in.Content) == "" {
+		fail(c, 400, "invalid_request", "机器人、会话、用户和内容必填")
+		return
+	}
+	var valid bool
+	if err := a.db.QueryRow(c, "SELECT EXISTS(SELECT 1 FROM conversations WHERE id=$1 AND bot_id=$2)", in.ConversationID, in.BotID).Scan(&valid); err != nil || !valid {
+		fail(c, 400, "invalid_conversation", "会话与机器人不匹配")
 		return
 	}
 	s := a.agentSettings(c)
-	if err := a.saveMemory(c, s, in.BotID, in.UserID, in.DisplayName, in.Kind, in.Content, 1, "admin", ""); err != nil {
+	if err := a.saveMemory(c, s, in.BotID, in.ConversationID, in.UserID, in.DisplayName, in.Kind, in.Content, 1, "admin", ""); err != nil {
 		fail(c, 500, "database_error", "保存失败")
 		return
 	}
 	if in.Pinned {
-		_, _ = a.db.Exec(c, "UPDATE user_memories SET pinned=true WHERE bot_id=$1 AND platform_user_id=$2 AND content=$3", in.BotID, in.UserID, strings.TrimSpace(in.Content))
+		_, _ = a.db.Exec(c, "UPDATE user_memories SET pinned=true WHERE bot_id=$1 AND platform_user_id=$2 AND content=$3 AND conversation_id=$4", in.BotID, in.UserID, strings.TrimSpace(in.Content), in.ConversationID)
 	}
 	created(c, gin.H{"saved": true})
 }

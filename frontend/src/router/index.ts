@@ -18,7 +18,10 @@ const router = createRouter({
       { path: 'personalities', name: 'personalities', component: () => import('@/views/SupportView.vue'), props: { mode: 'personalities' } },
       { path: 'bots/:id/services', name: 'bot-services', component: () => import('@/views/SupportView.vue'), props: route => ({ mode: 'services', botId: route.params.id }) },
       { path: 'shared-settings', name: 'shared-settings', component: () => import('@/views/AgentView.vue') },
-      { path: 'learning', name: 'learning', component: () => import('@/views/LearningView.vue') },
+      { path: 'memories', name: 'memories', component: () => import('@/views/MemoriesView.vue') },
+      { path: 'learning', redirect: to => to.query.tab === 'memories'
+        ? { name: 'memories' }
+        : { name: 'knowledge', query: { ...to.query, tab: to.query.tab || 'candidates' } } },
       { path: 'evaluation', name: 'evaluation', component: () => import('@/views/EvaluationView.vue') },
       { path: 'handoffs', name: 'handoffs', component: () => import('@/views/HandoffView.vue') },
       { path: 'system', name: 'system', component: () => import('@/views/SystemView.vue') },

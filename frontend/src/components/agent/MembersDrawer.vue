@@ -6,7 +6,7 @@
           <span class="learn-icon">🎙️</span>
           <div>
             <strong>客服语气学习</strong>
-            <small>AI 会模仿本群客服的说话方式，客服的回答会进入知识审核</small>
+            <small>AI 会模仿本群客服的说话方式，客服的回答会进入知识库的待审核列表</small>
           </div>
         </div>
         <span v-if="jobStatus" class="pill" :class="jobStatus.tone">{{ jobStatus.text }}</span>
@@ -167,7 +167,7 @@ async function toggle(row: Member) {
 }
 function openCandidates() {
   emit('update:modelValue', false)
-  router.push({ path: '/learning', query: { conversationId: props.conversationId, conversationName: props.conversationName } })
+  router.push({ path: '/knowledge', query: { tab: 'candidates', conversationId: props.conversationId, conversationName: props.conversationName } })
 }
 const blockDialog = ref(false)
 const blocking = ref(false)
@@ -199,7 +199,7 @@ async function unblock(row: Member) {
   } catch { return }
   try { await Promise.all(ids.map(id => agentApi.blacklist.remove(id))); ElMessage.success('已解除'); await reloadMembers() } catch (e) { ElMessage.error(e instanceof Error ? e.message : '解除失败') }
 }
-async function showMemories(row: Member) { memUser.value = row.displayName || row.userId; mems.value = await agentApi.memories.list({ userId: row.userId }); memDialog.value = true }
+async function showMemories(row: Member) { memUser.value = row.displayName || row.userId; mems.value = await agentApi.memories.list({ conversationId: props.conversationId, userId: row.userId }); memDialog.value = true }
 useAdminEvents(['conversation_members','blocked_users'], async () => { if (props.modelValue && props.conversationId) await reloadMembers() })
 </script>
 

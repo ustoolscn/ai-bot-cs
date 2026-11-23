@@ -11,7 +11,7 @@ export const navGroups: NavGroup[] = [
     { path: '/overview', label: '今日概览', description: '待办事项、核心指标和服务健康', icon: icon(Odometer) },
     { path: '/schedules', label: '定时任务', description: '设置发送时间、内容和目标群，测试发送并查看结果', icon: icon(Clock) },
     { path: '/handoffs', label: '人工台', description: '转人工的用户，在这里直接回复', icon: icon(Headset), badge: 'handoffs' },
-    { path: '/learning', label: '知识审核', description: '候选知识、FAQ、知识缺口、反馈和用户记忆', icon: icon(Reading), badge: 'candidates' },
+    { path: '/memories', label: '记忆', description: '按群聊、私聊和用户管理记忆', icon: icon(Reading) },
   ] },
   { title: '运行记录', items: [
     { path: '/messages', label: '消息记录', description: '每条消息的回复和处理链路', icon: icon(ChatLineSquare) },
@@ -23,7 +23,7 @@ export const navGroups: NavGroup[] = [
     { path: '/agent', label: '智能体', description: '客服职责和选用的性格', icon: icon(MagicStick) },
     { path: '/personalities', label: '性格', description: '可复用的说话风格', icon: icon(ChatDotRound) },
     { path: '/shared-settings', label: '通用设置', description: '默认客服、回复长度、记忆与工具', icon: icon(Setting) },
-    { path: '/knowledge', label: '知识库', description: '上传文档、索引进度和检索测试', icon: icon(Collection) },
+    { path: '/knowledge', label: '知识库', description: '文档、知识问答、待审核、知识缺口和反馈', icon: icon(Collection), badge: 'candidates' },
     { path: '/evaluation', label: '效果评测', description: '用固定问题对比改动前后的回答质量', icon: icon(DataAnalysis) },
   ] },
   { title: '接入设置', items: [

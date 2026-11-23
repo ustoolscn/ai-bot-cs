@@ -100,7 +100,7 @@ func TestBlacklistIsolationAndOfficialKick(t *testing.T) {
 	if status != "skipped" {
 		t.Fatalf("queued inbox not skipped: %s", status)
 	}
-	if e = a.saveMemory(ctx, a.agentSettings(ctx), botID, "member", "", "fact", "should never save", 0.9, "extracted", mid); e != nil {
+	if e = a.saveMemory(ctx, a.agentSettings(ctx), botID, convID, "member", "", "fact", "should never save", 0.9, "extracted", mid); e != nil {
 		t.Fatal(e)
 	}
 	var memories int

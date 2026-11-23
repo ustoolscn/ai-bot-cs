@@ -151,7 +151,7 @@ func (a *App) processInbox(ctx context.Context) error {
 	}
 	var memories []agent.Memory
 	if settings.MemoryEnabled && senderID != "" {
-		memories = a.loadMemories(ctx, settings, j.BotID, senderID, j.Content)
+		memories = a.loadMemories(ctx, settings, j.BotID, j.ConversationID, senderID, j.Content)
 	}
 	contextLatency := time.Since(contextStarted).Milliseconds()
 	finishContext(fmt.Sprintf("历史 %d 条，记忆 %d 条", len(turns), len(memories)), nil)

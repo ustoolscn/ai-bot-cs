@@ -392,6 +392,24 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 		t.Fatalf("memory API: %s", memJSON)
 	}
 
+	// A matching user identifier in a second group must not recall the first group's memory.
+	var otherGroup string
+	if err := pool.QueryRow(ctx, `INSERT INTO conversations(channel,bot_id,platform_id,type) VALUES('qq',$1,'memory-other','group') RETURNING id::text`, botID).Scan(&otherGroup); err != nil {
+		t.Fatal(err)
+	}
+	memorySettings := application.agentSettings(ctx)
+	if got := application.loadMemories(ctx, memorySettings, botID, otherGroup, "alice", ""); len(got) != 0 {
+		t.Fatalf("cross-group recall: %v", got)
+	}
+	requestJSON(t, client, http.MethodPost, server.URL+"/api/memories", map[string]any{"botId": botID, "conversationId": otherGroup, "userId": "alice", "content": "用户使用 vip 分组", "pinned": true}, http.StatusCreated)
+	var scopes int
+	if err := pool.QueryRow(ctx, `SELECT count(DISTINCT conversation_id) FROM user_memories WHERE platform_user_id='alice' AND content='用户使用 vip 分组'`).Scan(&scopes); err != nil || scopes != 2 {
+		t.Fatalf("scoped deduplication: %d %v", scopes, err)
+	}
+	directory := requestJSON(t, client, http.MethodGet, server.URL+"/api/memories/directory", nil, http.StatusOK)
+	if !bytes.Contains(directory, []byte(otherGroup)) || !bytes.Contains(directory, []byte(convID)) {
+		t.Fatalf("missing groups in memory directory: %s", directory)
+	}
 	// Staff answers become FAQ candidates.
 	requestJSON(t, client, http.MethodPut, server.URL+"/api/conversations/"+convID+"/members/bob", map[string]any{"isStaff": true}, http.StatusOK)
 	postQQWebhook(t, client, hook, botSecret, groupEventBody(t, "e4", "GROUP_MESSAGE_CREATE", "m4", "carol", "Carol", "充值了怎么还没到账"))

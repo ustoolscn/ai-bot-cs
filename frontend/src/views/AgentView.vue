@@ -56,7 +56,7 @@
           </div>
           <div class="settings-card">
             <h3>长期记忆</h3>
-            <div class="setting-row"><div><strong>记住用户的关键信息</strong><span>每轮对话后自动记下分组、接入方式、常遇到的问题等。可以在“知识审核 → 用户记忆”里查看和修改</span></div><el-switch v-model="settings.memoryEnabled" /></div>
+            <div class="setting-row"><div><strong>记住用户的关键信息</strong><span>每轮对话后自动记下分组、接入方式、常遇到的问题等。可以在“记忆”里查看和修改</span></div><el-switch v-model="settings.memoryEnabled" /></div>
             <div class="setting-row"><div><strong>每次回复最多带入几条记忆</strong></div><el-input-number v-model="settings.maxMemories" :min="1" :max="30" :disabled="!settings.memoryEnabled" /></div>
             <el-alert type="info" :closable="false" show-icon title="QQ 里同一个人在群聊和私聊的 ID 不同，记忆会按“机器人 + 用户 ID”分开保存。" />
           </div>

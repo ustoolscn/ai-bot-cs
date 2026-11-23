@@ -264,7 +264,7 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		if kind == "" {
 			kind = "fact"
 		}
-		if err := a.saveMemory(ctx, rt.settings, rt.botID, rt.senderID, rt.senderName, kind, content, 0.9, "tool", rt.messageID); err != nil {
+		if err := a.saveMemory(ctx, rt.settings, rt.botID, rt.conversationID, rt.senderID, rt.senderName, kind, content, 0.9, "tool", rt.messageID); err != nil {
 			return "", err
 		}
 		return `{"saved":true}`, nil
