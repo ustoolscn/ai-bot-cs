@@ -34,6 +34,11 @@ func (a *App) processInbox(ctx context.Context) error {
 		}
 		return a.scheduleProcessingAckRetraction(ctx, j.BotID, j.ConversationID, j.PlatformMessageID)
 	}
+	if excluded, e := a.messageExcluded(ctx, j.MessageID); e != nil {
+		return a.retryInbox(ctx, j, e)
+	} else if excluded {
+		return a.finishInbox(ctx, j.TaskID, "skipped", nil)
+	}
 	settings := a.agentSettings(ctx)
 
 	var senderID, senderName string
@@ -134,6 +139,11 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.retryInbox(ctx, j, out.err)
 	}
 
+	if excluded, e := a.messageExcluded(ctx, j.MessageID); e != nil {
+		return a.retryInbox(ctx, j, e)
+	} else if excluded {
+		return a.finishInbox(ctx, j.TaskID, "skipped", nil)
+	}
 	replyParts := a.shapeReply(settings, j.ConversationType, out.content)
 	hitsJSON, _ := json.Marshal(rt.hits)
 	tx, err := a.db.Begin(ctx)

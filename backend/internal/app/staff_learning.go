@@ -29,7 +29,7 @@ func (a *App) getStaffLearning(c *gin.Context) {
 	count := 0
 	var learnedAt any
 	var ids []byte
-	_ = a.db.QueryRow(c, `SELECT style,sample_count,source_message_ids,updated_at FROM conversation_staff_styles WHERE conversation_id=$1 AND staff_ids=ARRAY(SELECT platform_user_id FROM conversation_members WHERE conversation_id=$1 AND is_staff ORDER BY platform_user_id)`, id).Scan(&style, &count, &ids, &learnedAt)
+	_ = a.db.QueryRow(c, `SELECT style,sample_count,source_message_ids,updated_at FROM conversation_staff_styles WHERE conversation_id=$1 AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(source_message_ids) sid JOIN messages sm ON sm.id::text=sid.value WHERE sm.context_excluded) AND staff_ids=ARRAY(SELECT platform_user_id FROM conversation_members WHERE conversation_id=$1 AND is_staff ORDER BY platform_user_id)`, id).Scan(&style, &count, &ids, &learnedAt)
 	var sourceIDs []string
 	_ = json.Unmarshal(ids, &sourceIDs)
 	if sourceIDs == nil {
@@ -71,7 +71,7 @@ func (a *App) startStaffLearning(c *gin.Context) {
 func (a *App) staffStylePrompt(ctx context.Context, id string) string {
 	var style string
 	// An obsolete profile is not injected after the configured staff set changes.
-	_ = a.db.QueryRow(ctx, `SELECT style FROM conversation_staff_styles WHERE conversation_id=$1 AND staff_ids=ARRAY(SELECT platform_user_id FROM conversation_members WHERE conversation_id=$1 AND is_staff ORDER BY platform_user_id)`, id).Scan(&style)
+	_ = a.db.QueryRow(ctx, `SELECT style FROM conversation_staff_styles WHERE conversation_id=$1 AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(source_message_ids) sid JOIN messages sm ON sm.id::text=sid.value WHERE sm.context_excluded) AND staff_ids=ARRAY(SELECT platform_user_id FROM conversation_members WHERE conversation_id=$1 AND is_staff ORDER BY platform_user_id)`, id).Scan(&style)
 	if strings.TrimSpace(style) == "" {
 		return ""
 	}

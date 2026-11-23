@@ -307,6 +307,17 @@ func (a *App) processOutbox(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if j.EventType == "AI_RESPONSE" && j.ReplyTo != "" {
+		var blocked bool
+		err = a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=$1 AND m.platform_message_id=$2 AND m.direction='inbound' AND (m.context_excluded OR EXISTS(SELECT 1 FROM blocked_users bu WHERE bu.bot_id=m.bot_id AND bu.platform_user_id=m.sender_id AND (bu.conversation_id IS NULL OR bu.conversation_id=m.conversation_id))))`, j.ConversationRecordID, j.ReplyTo).Scan(&blocked)
+		if err != nil {
+			return a.retryOutbox(ctx, j, err)
+		}
+		if blocked {
+			_, err = a.db.Exec(ctx, `UPDATE outbox_tasks SET status='expired',last_error='blacklisted or excluded',updated_at=now() WHERE id=$1`, j.TaskID)
+			return err
+		}
+	}
 	if j.EventType == "PROCESSING_ACK" {
 		_, err = a.db.Exec(ctx, "UPDATE outbox_tasks SET status='expired',updated_at=now() WHERE id=$1", j.TaskID)
 		return err

@@ -75,6 +75,8 @@ func (a *App) runJob(ctx context.Context, j agentJob) error {
 	var err error
 	str := func(k string) string { v, _ := j.Payload[k].(string); return v }
 	switch j.Kind {
+	case "blacklist_kick":
+		err = a.jobBlacklistKick(ctx, str("actionId"))
 	case "evaluate":
 		err = a.jobEvaluate(ctx, str("runId"), str("messageId"), str("profileId"))
 	case "summarize":
@@ -157,6 +159,11 @@ type evaluation struct {
 // jobEvaluate analyses a finished turn: quality, knowledge gaps, implicit
 // feedback on the previous answer and long-term user memories.
 func (a *App) jobEvaluate(ctx context.Context, runID, messageID, profileID string) error {
+	if excluded, err := a.messageExcluded(ctx, messageID); err != nil {
+		return err
+	} else if excluded {
+		return nil
+	}
 	s := a.agentSettings(ctx)
 	var botID, convID, convType, senderID, senderName, question, platformID string
 	var eventAt time.Time
@@ -330,6 +337,11 @@ func (a *App) jobStaffAnswer(ctx context.Context, messageID string) error {
 }
 
 func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool) error {
+	if excluded, err := a.messageExcluded(ctx, messageID); err != nil {
+		return err
+	} else if excluded {
+		return nil
+	}
 	s := a.agentSettings(ctx)
 	if !s.StaffMiningEnabled && !forced {
 		return nil
@@ -358,7 +370,7 @@ func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool
 	if len([]rune(strings.TrimSpace(content))) < 6 {
 		return nil
 	}
-	rows, err := a.db.Query(ctx, `SELECT direction,sender_name,content,event_type FROM messages WHERE conversation_id=$1 AND event_at<$2 AND event_at>$2-interval '2 hours' AND content<>'' AND event_type<>'PROCESSING_ACK' ORDER BY event_at DESC LIMIT 15`, convID, eventAt)
+	rows, err := a.db.Query(ctx, `SELECT direction,sender_name,content,event_type FROM messages WHERE conversation_id=$1 AND event_at<$2 AND event_at>$2-interval '2 hours' AND content<>'' AND NOT context_excluded AND event_type<>'PROCESSING_ACK' ORDER BY event_at DESC LIMIT 15`, convID, eventAt)
 	if err != nil {
 		return err
 	}

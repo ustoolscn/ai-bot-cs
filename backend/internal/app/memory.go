@@ -47,6 +47,13 @@ var sensitiveMemory = []string{"sk-", "密码", "password", "token", "密钥", "
 
 // saveMemory stores a memory unless it is sensitive or a near-duplicate.
 func (a *App) saveMemory(ctx context.Context, s agent.Settings, botID, userID, userName, kind, content string, confidence float64, source, messageID string) error {
+	if messageID != "" {
+		if excluded, err := a.messageExcluded(ctx, messageID); err != nil {
+			return err
+		} else if excluded {
+			return nil
+		}
+	}
 	content = strings.TrimSpace(content)
 	if content == "" || len([]rune(content)) > 300 {
 		return nil

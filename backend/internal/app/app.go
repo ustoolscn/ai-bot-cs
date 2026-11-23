@@ -152,6 +152,9 @@ func (a *App) Router() http.Handler {
 	auth.PUT("/tools/:id", a.saveTool)
 	auth.DELETE("/tools/:id", a.deleteTool)
 	auth.POST("/tools/:id/test", a.testTool)
+	auth.GET("/blocked-users", a.listBlockedUsers)
+	auth.POST("/blocked-users", a.addBlockedUser)
+	auth.DELETE("/blocked-users/:id", a.deleteBlockedUser)
 	auth.GET("/conversations/:id/staff-learning", a.getStaffLearning)
 	auth.POST("/conversations/:id/staff-learning", a.startStaffLearning)
 	auth.GET("/conversations/:id/members", a.listMembers)
@@ -1026,6 +1029,16 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM blocked_users WHERE bot_id=$1 AND platform_user_id=$2 AND (conversation_id IS NULL OR conversation_id=$3))`, msg.BotID, msg.SenderID, cid).Scan(&blocked); err != nil {
 		return err
 	}
+	if blocked {
+		if _, err = tx.Exec(ctx, `UPDATE messages SET context_excluded=true,context_exclusion_reason='blacklist' WHERE id=$1`, mid); err != nil {
+			return err
+		}
+		if msg.ConversationType == "group" {
+			if err = a.queueBlockedKick(ctx, tx, msg.BotID, cid, msg.SenderID); err != nil {
+				return err
+			}
+		}
+	}
 	if !blocked && qq.ShouldQueue(msg.EventType, triggerMode, msg.MentionsBot) {
 		_, err = tx.Exec(ctx, "INSERT INTO inbox_tasks(message_id) VALUES($1) ON CONFLICT DO NOTHING", mid)
 	}
@@ -1035,7 +1048,7 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 	if err = tx.Commit(ctx); err != nil {
 		return err
 	}
-	if senderIsStaff && strings.TrimSpace(msg.Text) != "" {
+	if !blocked && senderIsStaff && strings.TrimSpace(msg.Text) != "" {
 		a.enqueueJob(ctx, "staff_answer", map[string]any{"messageId": mid}, "staff_answer:"+mid)
 	}
 	return nil
@@ -1088,6 +1101,9 @@ func (a *App) persistQQGroupEvent(ctx context.Context, tx pgx.Tx, botID string, 
 	if memberID != "" {
 		active := env.T != "GROUP_MEMBER_REMOVE"
 		_, err = tx.Exec(ctx, `INSERT INTO conversation_members(conversation_id,platform_user_id,active,last_seen_at) VALUES($1,$2,$3,now()) ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET active=EXCLUDED.active,last_seen_at=now()`, conversationID, memberID, active)
+	}
+	if err == nil && env.T == "GROUP_MEMBER_ADD" && event.MemberOpenID != "" {
+		err = a.queueBlockedKick(ctx, tx, botID, conversationID, memberID)
 	}
 	return err
 }
