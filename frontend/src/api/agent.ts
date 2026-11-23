@@ -108,7 +108,7 @@ export interface Memory { id: string; botId: string; botName: string; userId: st
 export interface UserProfile { conversationId: string; userId: string; content: string; updatedAt?: string }
 export interface LearningStats { pendingCandidates: number; publishedEntries: number; openGaps: number; feedback7d: number; negativeFeedback7d: number; unreadNegativeFeedback?: number; activeMemories: number; openHandoffs: number }
 export interface HandoffMessage { id: string; direction: string; senderName: string; content: string; eventType: string; eventAt: string; status?: string; deliveryError?: string }
-export interface Handoff { id: string; conversationName: string; conversationType: string; userId: string; displayName: string; messageId?: string; messageContent: string; reason: string; status: string; pausedUntil?: string; createdAt: string; resolvedAt?: string; recent: HandoffMessage[] }
+export interface Handoff { id: string; conversationName: string; conversationType: string; userId: string; displayName: string; messageId?: string; messageContent: string; reason: string; status: string; pausedUntil?: string; createdAt: string; resolvedAt?: string; recent: HandoffMessage[]; ticketNumber?: string; humanRepliedBy?: string; humanReplyContent?: string; humanRepliedAt?: string; notifications?: Array<{ conversationId: string; status: string; error?: string }> }
 export interface Member { userId: string; displayName: string; avatar?: string; joinedAt?: string; unionId?: string; role?: string; isBot?: boolean; active: boolean; isStaff: boolean; isBlocked?: boolean; blockedUserIds?: string[]; lastSeenAt: string; memoryCount: number; messageCount: number }
 export interface BlockedAction { id: string; conversationId: string; status: 'pending' | 'kicked' | 'failed' | 'disabled'; attempts: number; error: string; lastAttemptAt: string | null; updatedAt: string }
 export interface BlockedUser { id: string; botId: string; botName: string; conversationId: string | null; userId: string; displayName: string; reason: string; autoKick: boolean; createdAt: string; actions: BlockedAction[] }
@@ -180,7 +180,7 @@ export const agentApi = {
     },
   },
   handoffs: {
-    list: (status = 'open') => request<Handoff[]>({ url: '/handoffs', params: { status } }, status === 'resolved' ? [] : mock.mockHandoffs),
+    list: (status = 'open') => request<Handoff[]>({ url: '/handoffs', params: { status } }, status === 'open' || status === 'all' ? mock.mockHandoffs : []),
     resolve: (id: string) => request<{ resolved: boolean }>({ method: 'POST', url: `/handoffs/${id}/resolve` }),
   },
   messages: {

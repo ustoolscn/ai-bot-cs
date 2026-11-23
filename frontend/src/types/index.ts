@@ -32,7 +32,30 @@ export interface ModelProfile {
   outputPricePerMillion?: number | null
   cacheReadPricePerMillion?: number | null
   cacheWritePricePerMillion?: number | null
+  /** null 表示直连 */
+  proxyId?: string | null
 }
+
+export interface ModelProxy {
+  id: string
+  name: string
+  address: string
+}
+
+export interface ProxyTestResult {
+  reachable: boolean
+  latencyMs: number
+  error: string
+}
+
+export interface HumanOperator {
+  conversationId: string
+  userOpenId: string
+  name: string
+  enabled: boolean
+}
+
+export type HandoffStatus = 'waiting_human' | 'human_replied' | 'human_closed'
 
 export interface ModelTestInput {
   input: string
@@ -111,6 +134,13 @@ export interface MessageRecord {
   answerAttachments: MessageAttachment[]
   contextMessages?: ContextMessage[]
   retrievedChunks?: Array<{ content?: string; score?: number; documentId?: string; id?: string }>
+  handoffStatus?: HandoffStatus | null
+  ticketNumber?: string
+  humanRepliedAt?: string
+  humanRepliedBy?: string
+  humanReplyContent?: string
+  humanDeliveryStatus?: 'pending' | 'processing' | 'sent' | 'failed' | 'expired' | null
+  humanDeliveryError?: string
 }
 
 export interface ContextMessage {

@@ -6,7 +6,7 @@
     </PageHeader>
     <div class="toolbar">
       <el-input v-model="search" placeholder="搜索问题、回复、发送者或消息 ID" :prefix-icon="Search" clearable />
-      <el-segmented v-model="status" :options="[{ label: '全部', value: 'all' }, { label: '成功', value: 'success' }, { label: '无需回复', value: 'skipped' }, { label: '失败', value: 'failed' }]" />
+      <el-segmented v-model="status" :options="[{ label: '全部', value: 'all' }, { label: '成功', value: 'success' }, { label: '转人工', value: 'handoff' }, { label: '无需回复', value: 'skipped' }, { label: '失败', value: 'failed' }]" />
       <span class="spacer" />
       <span class="muted" style="font-size: 13px">{{ filtered.length }} 条</span>
     </div>
@@ -23,7 +23,7 @@
         <el-table-column label="模型" width="130"><template #default="{ row }"><div class="stacked-cell"><strong class="truncate">{{ row.model || '—' }}</strong><span>{{ row.tokens }} tokens</span></div></template></el-table-column>
         <el-table-column label="知识命中" width="90" align="right"><template #default="{ row }"><span class="num">{{ row.knowledgeHits }}</span></template></el-table-column>
         <el-table-column label="耗时" width="90" align="right"><template #default="{ row }"><span class="num">{{ formatDuration(row.latency) }}</span></template></el-table-column>
-        <el-table-column label="状态" width="100"><template #default="{ row }"><StatusBadge :status="row.status" /></template></el-table-column>
+        <el-table-column label="结论" width="132"><template #default="{ row }"><StatusBadge v-bind="messageVerdict(row)" /></template></el-table-column>
       </el-table>
     </section>
 
@@ -31,7 +31,7 @@
       <div v-if="selected" v-loading="detailLoading" class="md">
         <header class="md-head">
           <div class="md-who">
-            <StatusBadge :status="selected.status" />
+            <StatusBadge v-bind="messageVerdict(selected)" />
             <strong>{{ selected.sender }}</strong>
             <span>{{ selected.conversationName }} · {{ selected.botName }}</span>
           </div>
@@ -51,10 +51,15 @@
               <p>{{ selected.question }}</p>
               <div v-if="selected.attachments?.length" class="message-image-grid"><div v-for="(v,i) in selected.attachments.filter(p=>p.type==='voice')" :key="i"><audio v-if="v.waveUrl" controls preload="none" :src="v.waveUrl"/><p>{{v.transcript}}</p></div><el-image v-for="(image,index) in selected.attachments.filter(p=>p.type==='image')" :key="image.previewUrl || index" :src="image.previewUrl" :preview-src-list="previewUrls(selected.attachments)" fit="cover" loading="lazy" /></div>
             </div>
-            <div class="md-bubble is-bot" :class="{ 'is-empty': !selected.answer && !selected.answerAttachments?.length }">
+            <div v-if="!selected.handoffStatus || botAnswer || selected.answerAttachments?.length" class="md-bubble is-bot" :class="{ 'is-empty': !selected.answer && !selected.answerAttachments?.length }">
               <small>{{ selected.botName }}</small>
-              <p>{{ selected.answer || (selected.answerAttachments?.length ? '图片回复' : selected.status === 'skipped' ? '判断这条消息无需回复。' : '处理尚未完成或失败，未生成回复。') }}</p>
+              <p>{{ botAnswer || (selected.answerAttachments?.length ? '图片回复' : selected.status === 'skipped' ? '判断这条消息无需回复。' : '处理尚未完成或失败，未生成回复。') }}</p>
               <div v-if="selected.answerAttachments?.length" class="message-image-grid"><el-image v-for="(image,index) in selected.answerAttachments" :key="image.previewUrl || index" :src="image.previewUrl" :preview-src-list="previewUrls(selected.answerAttachments)" fit="cover" loading="lazy" /></div>
+            </div>
+            <div v-if="selected.handoffStatus" class="md-bubble is-bot is-human" :class="{ 'is-empty': !selected.humanReplyContent }">
+              <small><span class="md-human-tag">人工客服</span>{{ selected.humanRepliedBy || '' }}<template v-if="selected.ticketNumber"> · 工单 #{{ selected.ticketNumber }}</template><template v-if="selected.humanRepliedAt"> · {{ selected.humanRepliedAt }}</template></small>
+              <p>{{ selected.humanReplyContent || (selected.handoffStatus === 'human_closed' ? '工单已结单，没有人工回复。' : '已转人工，等待人工客服回复。') }}</p>
+              <span v-if="selected.humanReplyContent && selected.handoffStatus === 'waiting_human'" class="md-human-state" :class="{ 'is-failed': selected.humanDeliveryStatus === 'failed' || selected.humanDeliveryStatus === 'expired' }"><i v-if="selected.humanDeliveryStatus === 'pending' || selected.humanDeliveryStatus === 'processing'" class="md-sending" />{{ selected.humanDeliveryStatus === 'failed' || selected.humanDeliveryStatus === 'expired' ? '发送失败' + (selected.humanDeliveryError ? '：' + selected.humanDeliveryError : '，可在人工台重新回复') : '正在发到群里' }}</span>
             </div>
           </div>
         </section>
@@ -116,7 +121,7 @@ import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import MessageAgentPanel from '@/components/agent/MessageAgentPanel.vue'
 import type { MessageAttachment, MessageRecord, Status } from '@/types'
-import { formatDuration } from '@/utils/format'
+import { formatDuration, messageVerdict, statusText } from '@/utils/format'
 
 const messages = ref<MessageRecord[]>([])
 const search = ref('')
@@ -126,7 +131,7 @@ const detailLoading = ref(false)
 const selected = ref<MessageRecord>()
 const loading = ref(false)
 const loadError = ref('')
-const filtered = computed(() => messages.value.filter(m => (!search.value || `${m.question}${m.answer}${m.sender}${m.traceId}`.includes(search.value)) && (status.value === 'all' || m.status === status.value)))
+const filtered = computed(() => messages.value.filter(m => (!search.value || `${m.question}${m.answer}${m.sender}${m.traceId}`.includes(search.value)) && (status.value === 'all' || (status.value === 'handoff' ? Boolean(m.handoffStatus) : !m.handoffStatus && m.status === status.value))))
 const flowStages = computed(() => {
   const m = selected.value
   if (!m) return []
@@ -191,6 +196,12 @@ const contextView = computed(() => {
     return { ...message, speaker: index === lastUser ? m?.sender || '用户' : '用户', text: message.content }
   })
 })
+// 回复字段把机器人和人工的回复拼在一起，人工那段单独显示。
+const botAnswer = computed(() => {
+  const m = selected.value
+  if (!m) return ''
+  return m.humanReplyContent ? m.answer.replace(m.humanReplyContent, '').trim() : m.answer
+})
 const cacheRatio = computed(() => {
   const m = selected.value
   if (m?.cacheHitRate != null) return Math.min(1, Math.max(0, m.cacheHitRate))
@@ -199,7 +210,7 @@ const cacheRatio = computed(() => {
 const cacheRate = computed(() => selected.value?.cacheHitRate != null || selected.value?.inputTokens ? (cacheRatio.value * 100).toFixed(1) + '%' : '—')
 function formatCost(value: number) { return value >= 0.01 ? value.toFixed(4) : value.toPrecision(2) }
 async function copy(text: string) { try { await navigator.clipboard.writeText(text); ElMessage.success('已复制记录 ID') } catch { ElMessage.error('复制失败') } }
-function exportRows() { const csv = ['时间,机器人,会话,问题,状态,Token', ...filtered.value.map(m => `"${m.time}","${m.botName}","${m.conversationName}","${m.question.replaceAll('"','""')}","${m.status}","${m.tokens}"`)].join('\n'); const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv'})); a.download='messages.csv'; a.click(); URL.revokeObjectURL(a.href); ElMessage.success('消息记录已导出') }
+function exportRows() { const csv = ['时间,机器人,会话,问题,结论,Token', ...filtered.value.map(m => `"${m.time}","${m.botName}","${m.conversationName}","${m.question.replaceAll('"','""')}","${messageVerdict(m).text || statusText(m.status)}","${m.tokens}"`)].join('\n'); const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv'})); a.download='messages.csv'; a.click(); URL.revokeObjectURL(a.href); ElMessage.success('消息记录已导出') }
 useAdminEvents(['messages','message_retractions','agent_runs','model_calls','tool_calls','outbox_tasks','inbox_tasks','message_stages','group_reviews'], async () => {
   await load(true)
   const id = selected.value?.id
@@ -234,6 +245,13 @@ useAdminEvents(['messages','message_retractions','agent_runs','model_calls','too
 .md-bubble.is-bot { align-self: flex-end; background: var(--primary-light); border-color: var(--primary-soft); }
 .md-bubble.is-empty { background: var(--surface-2); border-style: dashed; border-color: var(--line-strong); }
 .md-bubble.is-empty p { color: var(--muted); }
+.md-bubble.is-human { background: var(--warning-light); border-color: color-mix(in srgb, var(--warning) 28%, transparent); }
+.md-bubble.is-human.is-empty { border-style: dashed; }
+.md-human-tag { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 6px; background: var(--surface); color: var(--warning); font-size: 12px; font-weight: 600; line-height: 18px; }
+.md-human-state { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--muted); font-size: 12px; }
+.md-human-state.is-failed { color: var(--danger); }
+.md-sending { width: 6px; height: 6px; border-radius: 50%; background: var(--warning); animation: md-breathe 1.4s ease-in-out infinite; }
+@keyframes md-breathe { 50% { opacity: .3; } }
 
 .md-tokens { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .md-tokens > div { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border-left: 1px solid var(--line); border-top: 1px solid var(--line); min-width: 0; }
@@ -253,5 +271,5 @@ useAdminEvents(['messages','message_retractions','agent_runs','model_calls','too
 .context-message-item { grid-template-columns: 88px minmax(0, 1fr); }
 .context-message-item > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 640px) { .md-facts, .md-tokens { grid-template-columns: 1fr 1fr; } .md-facts > div:nth-child(3) { border-left: 0; } }
-@media (prefers-reduced-motion: reduce) { .md-meter b { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .md-meter b { transition: none; } .md-sending { animation: none; } }
 </style>

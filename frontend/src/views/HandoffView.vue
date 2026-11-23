@@ -1,6 +1,6 @@
 <template>
   <div class="content-page wide">
-    <PageHeader title="人工台" description="用户要求人工、或机器人答不上来时会转到这里。转人工期间，机器人对这位用户保持安静，结单后恢复。">
+    <PageHeader title="人工台" description="用户要求人工、或机器人答不上来时会转到这里，同时私信给已绑定的人工客服 QQ。在这里或手机 QQ 回复都可以，发到群里的回复会带“【人工客服】”。">
       <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
     </PageHeader>
 
@@ -13,7 +13,9 @@
           <button v-for="h in items" :key="h.id" class="inbox-item" :class="{ active: h.id === selectedId }" @click="select(h)">
             <div class="inbox-item-top">
               <strong>{{ h.displayName || h.userId }}</strong>
-              <span v-if="h.status !== 'open'" class="pill good">已结单</span>
+              <span v-if="h.ticketNumber" class="ticket-no">#{{ h.ticketNumber }}</span>
+              <span v-if="h.status === 'replied'" class="pill good">已回复</span>
+              <span v-else-if="h.status === 'resolved'" class="pill idle">已结单</span>
               <time>{{ relativeTime(h.createdAt) }}</time>
             </div>
             <p>{{ h.messageContent || lastInbound(h)?.content || '—' }}</p>
@@ -29,15 +31,16 @@
             <span class="avatar">{{ (current.displayName || current.userId).slice(0, 1) }}</span>
             <div>
               <h2>{{ current.displayName || current.userId }}</h2>
-              <p>{{ current.conversationName }} · {{ current.conversationType === 'group' ? '群聊' : '私聊' }} · 转入于 {{ formatTime(current.createdAt) }}</p>
+              <p><template v-if="current.ticketNumber">工单 #{{ current.ticketNumber }} · </template>{{ current.conversationName }} · {{ current.conversationType === 'group' ? '群聊' : '私聊' }} · 转入于 {{ formatTime(current.createdAt) }}</p>
             </div>
             <el-button v-if="current.status === 'open'" :icon="CircleCheck" @click="resolve(current)">结单并恢复机器人</el-button>
-            <span v-else class="pill good">已结单 · {{ formatTime(current.resolvedAt) }}</span>
+            <span v-else-if="current.status === 'replied'" class="pill good">{{ current.humanRepliedBy ? current.humanRepliedBy + ' 已回复' : '人工已回复' }} · {{ formatTime(current.humanRepliedAt || current.resolvedAt) }}</span>
+            <span v-else class="pill idle">已结单 · {{ formatTime(current.resolvedAt) }}</span>
           </header>
-          <div class="inbox-reason">转人工原因：{{ current.reason || '用户要求人工' }}</div>
+          <div class="inbox-reason"><span>转人工原因：{{ current.reason || '用户要求人工' }}</span><span v-if="notice" class="notice-state" :class="`is-${notice.state}`"><i />{{ notice.text }}</span></div>
           <div ref="chatBox" class="chat-scroll">
             <div v-for="m in current.recent" :key="m.id" class="chat-row" :class="[m.direction, { human: m.eventType === 'HUMAN_REPLY', selected: m.id === targetId }]">
-              <small>{{ m.direction === 'inbound' ? (m.senderName || '用户') : m.eventType === 'HUMAN_REPLY' ? '人工回复' : '机器人' }} · {{ formatTime(m.eventAt) }}</small>
+              <small>{{ m.direction === 'inbound' ? (m.senderName || '用户') : m.eventType === 'HUMAN_REPLY' ? '人工客服' + (m.senderName ? ' ' + m.senderName : '') : '机器人' }} · {{ formatTime(m.eventAt) }}</small>
               <div class="chat-bubble">{{ m.content }}</div>
               <span v-if="m.status === 'failed'" class="send-failed" :title="m.deliveryError"><el-icon><WarningFilled /></el-icon>发送失败{{ m.deliveryError ? `：${friendlyError(m.deliveryError)}` : '' }}</span>
               <span v-else-if="m.eventType === 'HUMAN_REPLY' && (m.status === 'pending' || m.status === 'processing')" class="send-pending"><el-icon class="is-loading"><Loading /></el-icon>发送中</span>
@@ -71,7 +74,7 @@ import PageHeader from '@/components/PageHeader.vue'
 import { agentApi, formatTime, type Handoff } from '@/api/agent'
 import { useShellStore } from '@/stores/shell'
 
-const statusOptions = [{ label: '待处理', value: 'open' }, { label: '已结单', value: 'resolved' }, { label: '全部', value: 'all' }]
+const statusOptions = [{ label: '待回复', value: 'open' }, { label: '已回复', value: 'replied' }, { label: '已结单', value: 'resolved' }, { label: '全部', value: 'all' }]
 const status = ref('open')
 const items = ref<Handoff[]>([])
 const loading = ref(false)
@@ -85,6 +88,16 @@ const shell = useShellStore()
 
 const current = computed(() => items.value.find(h => h.id === selectedId.value))
 const target = computed(() => current.value?.recent.find(m => m.id === targetId.value))
+// 私信给人工客服 QQ 的通知进度
+const notice = computed(() => {
+  const list = current.value?.notifications || []
+  if (!list.length) return current.value?.status === 'open' ? { state: 'none', text: '没有绑定人工客服 QQ，只能在这里回复' } : null
+  const sent = list.filter(n => n.status === 'sent').length
+  const failed = list.filter(n => n.status === 'failed' || n.status === 'expired')
+  if (sent) return { state: 'sent', text: `已私信 ${sent} 位人工客服，可在手机 QQ 回复 #${current.value?.ticketNumber ?? ''}` }
+  if (failed.length === list.length) return { state: 'failed', text: 'QQ 私信发送失败' + (failed[0].error ? '：' + friendlyError(failed[0].error) : '') }
+  return { state: 'sending', text: '正在私信人工客服' }
+})
 
 // 后端错误形如 “qq_active_send_failed: 提示文字：QQ 原始错误”，只展示错误码之后的中文部分
 function friendlyError(value: string) { return value.replace(/^[a-z_]+:\s*/, '') }
@@ -139,5 +152,15 @@ useAdminEvents(['handoffs','messages','outbox_tasks'], () => load(true))
 <style scoped>
 .send-failed, .send-pending { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; font-size: 12px; max-width: 100%; }
 .send-failed { color: var(--danger); }
+.ticket-no { color: var(--muted); font: 12px var(--font-mono); }
+.inbox-reason { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; }
+.notice-state { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); }
+.notice-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+.notice-state.is-sent i { background: var(--success); }
+.notice-state.is-failed { color: var(--danger); }
+.notice-state.is-failed i { background: var(--danger); }
+.notice-state.is-sending i { background: var(--warning); animation: notice-breathe 1.4s ease-in-out infinite; }
+@keyframes notice-breathe { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .notice-state.is-sending i { animation: none; } }
 .send-pending { color: var(--muted); }
 </style>
