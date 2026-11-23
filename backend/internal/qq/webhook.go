@@ -39,6 +39,9 @@ type MessageData struct {
 		Nickname     string `json:"nickname"`
 		Bot          bool   `json:"bot"`
 	} `json:"author"`
+	Mentions []struct {
+		IsYou bool `json:"is_you"`
+	} `json:"mentions"`
 	Attachments []struct {
 		URL         string `json:"url"`
 		ContentType string `json:"content_type"`
@@ -143,8 +146,12 @@ func Parse(body []byte, botID string) (Envelope, *domain.InboundMessage, error) 
 			eventTime = t
 		}
 	}
+	mentionsBot := false
+	for _, mention := range d.Mentions {
+		mentionsBot = mentionsBot || mention.IsYou
+	}
 	deadline := eventTime.Add(5 * time.Minute)
-	return e, &domain.InboundMessage{EventID: e.ID, Channel: "qq", BotID: botID, ConversationType: ct, ConversationID: cid,
+	return e, &domain.InboundMessage{MentionsBot: mentionsBot, EventID: e.ID, Channel: "qq", BotID: botID, ConversationType: ct, ConversationID: cid,
 		ConversationName: conversationName, SenderID: sender, SenderName: senderName, PlatformMessageID: d.ID, EventType: e.T, Text: strings.TrimSpace(d.Content),
 		Parts: parts, EventTime: eventTime, ReplyDeadline: &deadline, Raw: body}, nil
 }
@@ -152,7 +159,9 @@ func Parse(body []byte, botID string) (Envelope, *domain.InboundMessage, error) 
 func isMessageEvent(t string) bool {
 	return t == "GROUP_AT_MESSAGE_CREATE" || t == "GROUP_MESSAGE_CREATE" || t == "C2C_MESSAGE_CREATE"
 }
-func ShouldReply(t string) bool { return t == "GROUP_AT_MESSAGE_CREATE" || t == "C2C_MESSAGE_CREATE" }
-func ShouldQueue(t, triggerMode string) bool {
-	return ShouldReply(t) || (t == "GROUP_MESSAGE_CREATE" && triggerMode == "always")
+func ShouldReply(t string, mentionsBot bool) bool {
+	return t == "GROUP_AT_MESSAGE_CREATE" || t == "C2C_MESSAGE_CREATE" || (t == "GROUP_MESSAGE_CREATE" && mentionsBot)
+}
+func ShouldQueue(t, triggerMode string, mentionsBot bool) bool {
+	return ShouldReply(t, mentionsBot) || (t == "GROUP_MESSAGE_CREATE" && triggerMode == "always")
 }

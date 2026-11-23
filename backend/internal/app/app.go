@@ -1008,12 +1008,12 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 	err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,sender_id,sender_name,platform_message_id,event_type,content,parts,raw_event,event_at,reply_deadline)
 		VALUES('qq',$1,$2,'inbound',$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11)
 		ON CONFLICT(channel,bot_id,platform_message_id) WHERE platform_message_id IS NOT NULL DO UPDATE SET
-			event_type=CASE WHEN EXCLUDED.event_type='GROUP_AT_MESSAGE_CREATE' THEN EXCLUDED.event_type ELSE messages.event_type END,
-			content=CASE WHEN EXCLUDED.event_type='GROUP_AT_MESSAGE_CREATE' THEN EXCLUDED.content ELSE messages.content END,
-			parts=CASE WHEN EXCLUDED.event_type='GROUP_AT_MESSAGE_CREATE' THEN EXCLUDED.parts ELSE messages.parts END,
-			raw_event=CASE WHEN EXCLUDED.event_type='GROUP_AT_MESSAGE_CREATE' THEN EXCLUDED.raw_event ELSE messages.raw_event END,
-			reply_deadline=CASE WHEN EXCLUDED.event_type='GROUP_AT_MESSAGE_CREATE' THEN EXCLUDED.reply_deadline ELSE messages.reply_deadline END
-		RETURNING id::text`, msg.BotID, cid, msg.SenderID, msg.SenderName, msg.PlatformMessageID, msg.EventType, msg.Text, string(parts), string(msg.Raw), msg.EventTime, msg.ReplyDeadline).Scan(&mid)
+			event_type=CASE WHEN EXCLUDED.event_type='GROUP_AT_MESSAGE_CREATE' OR ($12 AND messages.event_type<>'GROUP_AT_MESSAGE_CREATE') THEN EXCLUDED.event_type ELSE messages.event_type END,
+			content=CASE WHEN EXCLUDED.event_type='GROUP_AT_MESSAGE_CREATE' OR ($12 AND messages.event_type<>'GROUP_AT_MESSAGE_CREATE') THEN EXCLUDED.content ELSE messages.content END,
+			parts=CASE WHEN EXCLUDED.event_type='GROUP_AT_MESSAGE_CREATE' OR ($12 AND messages.event_type<>'GROUP_AT_MESSAGE_CREATE') THEN EXCLUDED.parts ELSE messages.parts END,
+			raw_event=CASE WHEN EXCLUDED.event_type='GROUP_AT_MESSAGE_CREATE' OR ($12 AND messages.event_type<>'GROUP_AT_MESSAGE_CREATE') THEN EXCLUDED.raw_event ELSE messages.raw_event END,
+			reply_deadline=CASE WHEN EXCLUDED.event_type='GROUP_AT_MESSAGE_CREATE' OR ($12 AND messages.event_type<>'GROUP_AT_MESSAGE_CREATE') THEN EXCLUDED.reply_deadline ELSE messages.reply_deadline END
+		RETURNING id::text`, msg.BotID, cid, msg.SenderID, msg.SenderName, msg.PlatformMessageID, msg.EventType, msg.Text, string(parts), string(msg.Raw), msg.EventTime, msg.ReplyDeadline, msg.MentionsBot).Scan(&mid)
 	if err != nil {
 		return err
 	}
@@ -1025,7 +1025,7 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM blocked_users WHERE bot_id=$1 AND platform_user_id=$2 AND (conversation_id IS NULL OR conversation_id=$3))`, msg.BotID, msg.SenderID, cid).Scan(&blocked); err != nil {
 		return err
 	}
-	if !blocked && qq.ShouldQueue(msg.EventType, triggerMode) {
+	if !blocked && qq.ShouldQueue(msg.EventType, triggerMode, msg.MentionsBot) {
 		var taskTag pgconn.CommandTag
 		taskTag, err = tx.Exec(ctx, "INSERT INTO inbox_tasks(message_id) VALUES($1) ON CONFLICT DO NOTHING", mid)
 		if err == nil && taskTag.RowsAffected() > 0 {

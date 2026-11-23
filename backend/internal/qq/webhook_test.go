@@ -17,7 +17,7 @@ func TestSignatureAndParse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.ConversationID != "g1" || m.ConversationName != "测试群" || m.SenderName != "小明" || m.Text != "hi" || !ShouldReply(m.EventType) {
+	if m.ConversationID != "g1" || m.ConversationName != "测试群" || m.SenderName != "小明" || m.Text != "hi" || !ShouldReply(m.EventType, m.MentionsBot) {
 		t.Fatalf("unexpected: %#v", m)
 	}
 }
@@ -30,13 +30,13 @@ func TestValidationResponse(t *testing.T) {
 }
 
 func TestShouldQueue(t *testing.T) {
-	if !ShouldQueue("GROUP_AT_MESSAGE_CREATE", "mention_only") {
+	if !ShouldQueue("GROUP_AT_MESSAGE_CREATE", "mention_only", false) {
 		t.Fatal("mention should queue")
 	}
-	if ShouldQueue("GROUP_MESSAGE_CREATE", "mention_only") {
+	if ShouldQueue("GROUP_MESSAGE_CREATE", "mention_only", false) {
 		t.Fatal("ordinary message should not queue")
 	}
-	if !ShouldQueue("GROUP_MESSAGE_CREATE", "always") {
+	if !ShouldQueue("GROUP_MESSAGE_CREATE", "always", false) {
 		t.Fatal("always mode should queue")
 	}
 }
@@ -56,5 +56,28 @@ func TestParseImageAttachment(t *testing.T) {
 	}
 	if image.SizeBytes != 2048 || image.Width != 1280 || image.Height != 720 {
 		t.Fatalf("unexpected image metadata: %#v", image)
+	}
+}
+
+func TestGroupMessageMentions(t *testing.T) {
+	for _, tc := range []struct {
+		name, mentions string
+		want           bool
+	}{
+		{"self", `[{"id":"bot","is_you":true}]`, true},
+		{"other", `[{"id":"other","bot":true,"is_you":false}]`, false},
+		{"mixed", `[{"is_you":false},{"is_you":true}]`, true},
+		{"absent", `[]`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"id":"event","t":"GROUP_MESSAGE_CREATE","d":{"id":"message","group_openid":"group","content":"<@other> hi","mentions":` + tc.mentions + `}}`)
+			_, m, err := Parse(body, "bot")
+			if err != nil || m == nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if m.MentionsBot != tc.want || ShouldQueue(m.EventType, "mention_only", m.MentionsBot) != tc.want {
+				t.Fatalf("unexpected mention decision: %#v", m)
+			}
+		})
 	}
 }

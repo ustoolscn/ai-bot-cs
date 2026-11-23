@@ -19,6 +19,7 @@ type ContentPart struct {
 }
 
 type InboundMessage struct {
+	MentionsBot                                               bool
 	EventID, Channel, BotID, ConversationType, ConversationID string
 	ConversationName                                          string
 	SenderID, SenderName, PlatformMessageID, EventType, Text  string

@@ -24,8 +24,6 @@ mkdir -p "$BACKUP_DIR"
 HOST_DB_URL="$(echo "$DATABASE_URL" | sed 's/host\.docker\.internal/127.0.0.1/')"
 if command -v pg_dump >/dev/null 2>&1 && pg_dump "$HOST_DB_URL" -Fc -f "$BACKUP_DIR/ai_bot-$STAMP.dump"; then
   :
-elif command -v sudo >/dev/null 2>&1 && sudo -u postgres pg_dump -Fc ai_bot > "$BACKUP_DIR/ai_bot-$STAMP.dump"; then
-  :
 else
   echo "数据库备份失败，已停止升级（不会在没有备份的情况下迁移数据库）"
   exit 1
@@ -33,7 +31,9 @@ fi
 ls -lh "$BACKUP_DIR/ai_bot-$STAMP.dump"
 
 echo "==> 2/5 构建新镜像"
-docker build -t "ai-bot:$STAMP" "$SRC_DIR"
+VCS_REF="$(git -C "$SRC_DIR" rev-parse HEAD)"
+if [ -n "$(git -C "$SRC_DIR" status --porcelain)" ]; then VCS_REF="$VCS_REF-dirty"; fi
+docker build --build-arg VCS_REF="$VCS_REF" -t "ai-bot:$STAMP" "$SRC_DIR"
 
 echo "==> 3/5 保留旧镜像用于回滚"
 if docker image inspect "$IMAGE" >/dev/null 2>&1; then

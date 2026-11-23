@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-
 ARG NODE_IMAGE=docker.m.daocloud.io/library/node:24-alpine
 ARG GO_IMAGE=docker.m.daocloud.io/library/golang:1.26-alpine
 ARG RUNTIME_IMAGE=docker.m.daocloud.io/library/alpine:3.23
@@ -34,8 +32,11 @@ RUN sed -i "s#https\?://dl-cdn.alpinelinux.org/alpine#${ALPINE_MIRROR}#g" /etc/a
     && chown -R aibot:aibot /app
 WORKDIR /app
 COPY --from=backend-build --chown=aibot:aibot /out/ai-bot /app/ai-bot
-COPY --chmod=755 deploy/docker-entrypoint.sh /app/docker-entrypoint.sh
-ENV APP_ADDR=:8080 DATA_DIR=/app/data TZ=Asia/Shanghai
+COPY deploy/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod 755 /app/docker-entrypoint.sh
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.revision=$VCS_REF
+ENV APP_ADDR=:8080 DATA_DIR=/app/data TZ=Asia/Shanghai GIN_MODE=release
 EXPOSE 8080
 VOLUME ["/app/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

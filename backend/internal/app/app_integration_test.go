@@ -385,6 +385,59 @@ func TestGroupMentionQueuesWhenFullEventArrivesFirst(t *testing.T) {
 	if ackTasks != 1 || ackSequence != 1 {
 		t.Fatalf("processing ARK was not queued exactly once: tasks=%d seq=%d", ackTasks, ackSequence)
 	}
+	for _, tc := range []struct {
+		name   string
+		events []string
+	}{
+		{"mention-only", []string{"mention"}},
+		{"mention-first", []string{"mention", "at", "ordinary"}},
+		{"at-first", []string{"at", "mention", "ordinary"}},
+		{"ordinary-first", []string{"ordinary", "mention", "at"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			messageID := "message-" + tc.name
+			for i, kind := range tc.events {
+				eventType := "GROUP_MESSAGE_CREATE"
+				if kind == "at" {
+					eventType = "GROUP_AT_MESSAGE_CREATE"
+				}
+				body := qqEventBody(t, fmt.Sprintf("%s-%d", tc.name, i), eventType, messageID, kind)
+				if kind == "mention" {
+					var event map[string]any
+					if err := json.Unmarshal(body, &event); err != nil {
+						t.Fatal(err)
+					}
+					event["d"].(map[string]any)["mentions"] = []any{map[string]any{"is_you": true}}
+					body, _ = json.Marshal(event)
+				}
+				postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, body)
+				// A later event must not recreate an already completed task.
+				_, err := pool.Exec(ctx, `UPDATE inbox_tasks SET status='completed' WHERE message_id IN (SELECT id FROM messages WHERE platform_message_id=$1)`, messageID)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			var count, ackCount int
+			var content string
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM inbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.platform_message_id=$1`, messageID).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM messages WHERE event_type='PROCESSING_ACK' AND reply_to_message_id=$1`, messageID).Scan(&ackCount); err != nil {
+				t.Fatal(err)
+			}
+			if err := pool.QueryRow(ctx, `SELECT content FROM messages WHERE platform_message_id=$1`, messageID).Scan(&content); err != nil {
+				t.Fatal(err)
+			}
+			wantContent := "at"
+			if tc.name == "mention-only" {
+				wantContent = "mention"
+			}
+			if count != 1 || ackCount != 1 || content != wantContent {
+				t.Fatalf("tasks=%d acks=%d content=%q", count, ackCount, content)
+			}
+		})
+	}
+
 }
 
 func TestModel403ExcludesMessageFromFutureContext(t *testing.T) {
