@@ -208,6 +208,6 @@ func (a *App) jobBlacklistKick(ctx context.Context, actionID string) error {
 // Message checks fail closed on database errors at every asynchronous boundary.
 func (a *App) messageExcluded(ctx context.Context, id string) (bool, error) {
 	var excluded bool
-	err := a.db.QueryRow(ctx, `SELECT context_excluded OR EXISTS(SELECT 1 FROM blocked_users bu WHERE bu.bot_id=m.bot_id AND bu.platform_user_id=m.sender_id AND (bu.conversation_id IS NULL OR bu.conversation_id=m.conversation_id)) FROM messages m WHERE m.id=$1`, id).Scan(&excluded)
+	err := a.db.QueryRow(ctx, `SELECT context_excluded OR status='retracted' OR EXISTS(SELECT 1 FROM blocked_users bu WHERE bu.bot_id=m.bot_id AND bu.platform_user_id=m.sender_id AND (bu.conversation_id IS NULL OR bu.conversation_id=m.conversation_id)) FROM messages m WHERE m.id=$1`, id).Scan(&excluded)
 	return excluded, err
 }

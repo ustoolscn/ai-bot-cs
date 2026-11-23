@@ -27,7 +27,7 @@ func (a *App) qqContext(ctx context.Context, j inboxJob) (string, error) {
 	if details.Reference != "" {
 		var who, body string
 		var hidden bool
-		err := a.db.QueryRow(ctx, `SELECT CASE WHEN direction='outbound' THEN '机器人' ELSE COALESCE(NULLIF(sender_name,''),sender_id) END,content,context_excluded OR status='retracted' OR EXISTS(SELECT FROM blocked_users b WHERE b.bot_id=m.bot_id AND b.platform_user_id=m.sender_id AND (b.conversation_id IS NULL OR b.conversation_id=m.conversation_id)) FROM messages m WHERE conversation_id=$1 AND qq_ref_idx=$2 AND id<>$3 ORDER BY created_at DESC LIMIT 1`, j.ConversationID, details.Reference, j.MessageID).Scan(&who, &body, &hidden)
+		err := a.db.QueryRow(ctx, `SELECT CASE WHEN direction='outbound' THEN '机器人' ELSE COALESCE(NULLIF(sender_name,''),sender_id) END,content,NOT (`+visibleContextSQL+`) FROM messages m WHERE conversation_id=$1 AND qq_ref_idx=$2 AND id<>$3 ORDER BY created_at DESC LIMIT 1`, j.ConversationID, details.Reference, j.MessageID).Scan(&who, &body, &hidden)
 		switch {
 		case err == nil && hidden:
 			details.Elements = "引用内容不可用"

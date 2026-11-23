@@ -114,7 +114,19 @@ func (m *agentMock) handleChat(w http.ResponseWriter, body []byte) {
 	switch {
 	case bytes.Contains(body, []byte("判断这条群消息")):
 		aux("reply_decision")
-		if bytes.Contains(body, []byte("那价格多少")) || bytes.Contains(body, []byte("发成网页截图")) || bytes.Contains(body, []byte("我要人工")) {
+		var input struct {
+			Current string         `json:"当前消息"`
+			History []decisionTurn `json:"近期群聊"`
+		}
+		raw, _ := req.Messages[len(req.Messages)-1].Content.(string)
+		_ = json.Unmarshal([]byte(raw), &input)
+		var aliceAskedAboutVIP bool
+		for _, prior := range input.History {
+			if prior.SameSender && prior.Content == "我平时用的是 vip 分组" {
+				aliceAskedAboutVIP = true
+			}
+		}
+		if (strings.Contains(input.Current, "那价格多少") && aliceAskedAboutVIP) || strings.Contains(input.Current, "发成网页截图") || strings.Contains(input.Current, "我要人工") {
 			reply(`{"reply":true}`, nil)
 		} else {
 			reply(`{"reply":false}`, nil)
