@@ -2,9 +2,11 @@ package app
 
 import (
 	"ai-bot/backend/internal/storage"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"image/png"
 	"io"
 	"log/slog"
 	"net"
@@ -233,6 +235,9 @@ func TestAuxiliaryModerationRecovery(t *testing.T) {
 }
 
 func TestStatusPageScreenshot(t *testing.T) {
+	if !explicitStatusQuestion("请发网页状态的整页截图") || !explicitStatusQuestion("发一张状态页截图") {
+		t.Fatal("status screenshot request not recognized")
+	}
 	if browserPath() == "" {
 		t.Skip("Chromium not configured")
 	}
@@ -243,7 +248,7 @@ func TestStatusPageScreenshot(t *testing.T) {
 	}
 	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		io.WriteString(w, "<body><h1>Group status</h1>All services available</body>")
+		io.WriteString(w, "<body><h1>Group status</h1>All services available<script>setTimeout(()=>document.body.style.height='3200px',100)</script></body>")
 	}))
 	defer fixture.Close()
 	images, err := storage.NewLocal(t.TempDir())
@@ -263,9 +268,16 @@ func TestStatusPageScreenshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if part.Height < 3200 {
+		t.Fatalf("status page clipped to %d px", part.Height)
+	}
 	data, err := images.Read(ctx, part.StorageKey)
 	if err != nil || len(data) < 100 || string(data[1:4]) != "PNG" {
 		t.Fatal("missing status PNG", err)
+	}
+	cfg, err := png.DecodeConfig(bytes.NewReader(data))
+	if err != nil || cfg.Height != part.Height || cfg.Width != part.Width {
+		t.Fatal("PNG dimensions differ from full document", cfg, err)
 	}
 }
 

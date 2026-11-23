@@ -96,7 +96,7 @@ func TestScheduleDistributionAndReviewDeletion(t *testing.T) {
 	var page, link string
 	check(pool.QueryRow(ctx, "SELECT id::text FROM scheduled_web_pages WHERE expires_at BETWEEN now()+interval '167 hours' AND now()+interval '168 hours'").Scan(&page))
 	link = a.cfg.PublicBaseURL + "/p/" + page
-	count(2, "SELECT count(*) FROM messages WHERE content=$1 AND status='sent'", link)
+	count(2, "SELECT count(*) FROM messages WHERE content LIKE '%' || chr(10) || $1 AND length(content)>length($1)+1 AND status='sent'", link)
 	readPage := func(status int) {
 		t.Helper()
 		response, err := http.Get(server.URL + "/p/" + page)

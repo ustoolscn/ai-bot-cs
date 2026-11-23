@@ -382,8 +382,15 @@ func (a *App) processOutbox(ctx context.Context) error {
 		}
 	}
 	client := qq.NewClient(j.AppID, secret, a.cfg.QQAPIBaseURL, a.cfg.QQTokenURL)
+	if j.EventType == "AI_RESPONSE" || j.EventType == "SCHEDULED_POST" {
+		// Pending rows may have been created before reply normalization.
+		if hasContentPart(j.Parts, "image") {
+			j.Text, _ = extractOutboundImage(j.Text)
+		}
+		j.Text = agent.PlainLinks(j.Text)
+	}
 	format := ""
-	if j.EventType == "AI_RESPONSE" && !hasStoredImage(j.Parts) {
+	if j.EventType == "AI_RESPONSE" && !hasContentPart(j.Parts, "image") {
 		format = "markdown"
 	}
 	sendCtx := ctx
@@ -403,7 +410,7 @@ func (a *App) processOutbox(ctx context.Context) error {
 		if err := a.db.QueryRow(ctx, `SELECT sender_id,sender_name,content,raw_event FROM messages WHERE conversation_id=$1 AND platform_message_id=$2 AND direction='inbound'`, j.ConversationRecordID, j.ReplyTo).Scan(&mention, &mentionName, &quote, &raw); err != nil {
 			return a.retryOutbox(ctx, j, err)
 		}
-		quote = agent.TruncateRunes(quote, 120)
+		quote = agent.TruncateReply(agent.PlainLinks(quote), 120)
 	}
 	if j.EventType == "HUMAN_REPLY" && j.ConversationType == "group" {
 		if err = a.db.QueryRow(ctx, "SELECT raw_event,COALESCE(NULLIF(sender_name,''),sender_id) FROM messages WHERE conversation_id=$1 AND platform_message_id=$2", j.ConversationRecordID, j.ReplyTo).Scan(&raw, &mentionName); err != nil {

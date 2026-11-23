@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -48,8 +49,18 @@ type Settings struct {
 	LearningKnowledgeBaseID  string  `json:"learningKnowledgeBaseId"`
 	GapSimilarity            float64 `json:"gapSimilarity"`
 	// Live data (new-api)
-	LiveData LiveDataSettings `json:"liveData"`
+	ImageGeneration ImageGenerationSettings `json:"imageGeneration"`
+	LiveData        LiveDataSettings        `json:"liveData"`
 }
+
+type ImageGenerationSettings struct {
+	BaseURL   string `json:"baseUrl"`
+	Model     string `json:"model"`
+	APIKeyEnc string `json:"apiKeyEnc,omitempty"`
+	HasAPIKey bool   `json:"hasApiKey"`
+}
+
+const DefaultImageModel = "gpt-image-2.6-flare"
 
 // LiveDataSettings configures the new-api site integration.
 type LiveDataSettings struct {
@@ -100,6 +111,7 @@ func DefaultSettings() Settings {
 		AutoPublishStaff:         false,
 		AutoPublishMinConfidence: 0.85,
 		GapSimilarity:            0.86,
+		ImageGeneration:          ImageGenerationSettings{Model: DefaultImageModel},
 		LiveData: LiveDataSettings{
 			RefreshSeconds:    120,
 			SyncAnnouncements: true,
@@ -146,11 +158,22 @@ func (s *Settings) Normalize() {
 	if len(s.Examples) > 20 {
 		s.Examples = s.Examples[:20]
 	}
+	s.ImageGeneration.BaseURL = strings.TrimRight(strings.TrimSpace(s.ImageGeneration.BaseURL), "/")
+	s.ImageGeneration.Model = strings.TrimSpace(s.ImageGeneration.Model)
+	if s.ImageGeneration.Model == "" {
+		s.ImageGeneration.Model = DefaultImageModel
+	}
 	s.LiveData.BaseURL = strings.TrimRight(strings.TrimSpace(s.LiveData.BaseURL), "/")
 }
 
 // Validate checks user-supplied settings.
 func (s Settings) Validate() error {
+	if s.ImageGeneration.BaseURL != "" {
+		u, err := url.Parse(s.ImageGeneration.BaseURL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("生图基础地址需要有效的 HTTP(S) 地址")
+		}
+	}
 	if s.LiveData.Enabled && !strings.HasPrefix(s.LiveData.BaseURL, "http://") && !strings.HasPrefix(s.LiveData.BaseURL, "https://") {
 		return fmt.Errorf("网站地址必须以 http:// 或 https:// 开头")
 	}

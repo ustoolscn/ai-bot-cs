@@ -1,19 +1,24 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image/png"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
-	"runtime"
+	goruntime "runtime"
 	"time"
 
 	"ai-bot/backend/internal/domain"
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
@@ -36,7 +41,17 @@ func publicDial(ctx context.Context, network, addr string) (net.Conn, error) {
 		return nil, errors.New("状态页地址无解析结果")
 	}
 	d := net.Dialer{Timeout: 5 * time.Second}
-	return d.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+	for _, ip := range ips {
+		var conn net.Conn
+		conn, err = d.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, err
 }
 
 func (a *App) statusPageImage(ctx context.Context, target string) (domain.ContentPart, error) {
@@ -45,7 +60,7 @@ func (a *App) statusPageImage(ctx context.Context, target string) (domain.Conten
 
 func (a *App) renderStatusPage(ctx context.Context, target string, dial func(context.Context, string, string) (net.Conn, error)) (domain.ContentPart, error) {
 	var empty domain.ContentPart
-	if runtime.GOOS == "linux" && os.Getuid() == 0 {
+	if goruntime.GOOS == "linux" && os.Getuid() == 0 {
 		return empty, errors.New("请使用普通用户运行截图服务")
 	}
 	if err := validateStatusURL(target); err != nil {
@@ -118,25 +133,61 @@ func (a *App) renderStatusPage(ctx context.Context, target string, dial func(con
 	defer stop()
 	tab, closeTab := chromedp.NewContext(alloc)
 	defer closeTab()
-	var png []byte
+	var screenshot []byte
 	response, err := chromedp.RunResponse(tab, chromedp.EmulateViewport(1200, 1400), chromedp.Navigate(target))
 	if err != nil {
 		return empty, err
 	}
-	if response == nil || response.Status >= 400 {
+	if response == nil {
 		return empty, fmt.Errorf("状态页未正常响应")
 	}
-	if err = chromedp.Run(tab, chromedp.WaitVisible("body"), chromedp.CaptureScreenshot(&png)); err != nil {
-		return empty, err
+	if response.Status >= 400 {
+		return empty, fmt.Errorf("状态页返回 HTTP %d", response.Status)
 	}
-	key, err := a.images.Save(ctx, "status.png", png)
+	var size struct{ Width, Height int }
+	// Give client-rendered status tables a bounded window to settle. Measure
+	// the document without resizing the viewport (which changes vh layouts).
+	err = chromedp.Run(tab, chromedp.WaitReady("body"), chromedp.Evaluate(`new Promise(resolve => {
+		let timer;
+		const finish = () => { observer.disconnect(); clearTimeout(timer); clearTimeout(limit);
+			const root = document.documentElement;
+			resolve({Width: root.scrollWidth, Height: root.scrollHeight}); };
+		const quiet = () => { clearTimeout(timer); timer = setTimeout(finish, 750); };
+		const observer = new MutationObserver(quiet);
+		observer.observe(document.body, {childList:true, subtree:true, attributes:true, characterData:true});
+		const limit = setTimeout(finish, 4000); quiet();
+	})`, &size, func(p *runtime.EvaluateParams) *runtime.EvaluateParams { return p.WithAwaitPromise(true) }))
 	if err != nil {
 		return empty, err
 	}
-	return domain.ContentPart{Type: "image", Filename: "status.png", ContentType: "image/png", StorageKey: key, Width: 1200, Height: 1400, SizeBytes: int64(len(png))}, nil
+	if size.Width <= 0 || size.Height <= 0 {
+		return empty, fmt.Errorf("状态页尺寸 %d × %d 超出截图范围", size.Width, size.Height)
+	}
+	// Bound output pixels while retaining the bottom of unusually long pages.
+	scale := math.Min(1, math.Min(1600/float64(size.Width), 10000/float64(size.Height)))
+	err = chromedp.Run(tab, chromedp.ActionFunc(func(ctx context.Context) error {
+		var err error
+		screenshot, err = page.CaptureScreenshot().WithCaptureBeyondViewport(true).WithClip(&page.Viewport{Width: float64(size.Width), Height: float64(size.Height), Scale: scale}).Do(ctx)
+		return err
+	}))
+	if err != nil {
+		return empty, err
+	}
+	if len(screenshot) > 8<<20 {
+		return empty, errors.New("状态页截图超过 8 MB")
+	}
+	cfg, err := png.DecodeConfig(bytes.NewReader(screenshot))
+	if err != nil {
+		return empty, err
+	}
+	key, err := a.images.Save(ctx, "status.png", screenshot)
+	if err != nil {
+		return empty, err
+	}
+	return domain.ContentPart{Type: "image", Filename: "status.png", ContentType: "image/png", StorageKey: key, Width: cfg.Width, Height: cfg.Height, SizeBytes: int64(len(screenshot))}, nil
 }
 
-var directStatusRequest = regexp.MustCompile(`(?i)(分组|服务|全站|网站).{0,10}(状态|可用吗|正常吗|挂了|成功率)|(?:group|service|site|system) status|status (?:of|for) (?:the )?(?:group|service|site|system)`)
+var directStatusRequest = regexp.MustCompile(`(?i)状态页.{0,8}(截图|截屏)|(?:截图|截屏).{0,8}状态页|(分组|服务|全站|网站|网页).{0,10}(状态|可用吗|正常吗|挂了|成功率)|(?:group|service|site|system) status|status (?:of|for) (?:the )?(?:group|service|site|system)`)
 
 func explicitStatusQuestion(question string) bool { return directStatusRequest.MatchString(question) }
 func (a *App) attachStatusPage(ctx context.Context, rt *turnRuntime) error {

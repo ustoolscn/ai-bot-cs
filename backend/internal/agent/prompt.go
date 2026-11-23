@@ -54,7 +54,7 @@ func BuildSystemPrompt(in PromptInput) []string {
 	if !in.Now.IsZero() {
 		fmt.Fprintf(&b, "\n当前时间：%s。", in.Now.Format("2006-01-02 15:04"))
 	}
-	b.WriteString("\n如需发送图片，使用 Markdown 图片语法 ![说明](https://公开图片地址)，每次最多一张。")
+	b.WriteString("\n链接直接写完整地址，地址中不要插入空格或换行。需要发送已有图片时使用 [IMAGE]https://公开图片地址[/IMAGE]，每次最多一张。")
 	if bp := strings.TrimSpace(in.BusinessPrompt); bp != "" {
 		b.WriteString("\n\n业务说明：\n" + bp)
 	}

@@ -61,7 +61,7 @@ func TruncateRunes(s string, n int) string {
 
 var (
 	reHeading    = regexp.MustCompile(`(?m)^\s{0,3}#{1,6}\s+`)
-	reBold       = regexp.MustCompile(`\*\*([^*\n]+)\*\*|__([^_\n]+)__`)
+	reBoldOrURL  = regexp.MustCompile(`(?i)(?:https?://|www\.)[^\s<>]+|\*\*([^*\n]+)\*\*|__([^_\n]+)__`)
 	reHRule      = regexp.MustCompile(`(?m)^\s*(-{3,}|\*{3,}|_{3,})\s*$`)
 	reBlankLines = regexp.MustCompile(`\n{3,}`)
 	reBlockquote = regexp.MustCompile(`(?m)^\s{0,3}>\s?`)
@@ -80,8 +80,11 @@ func SanitizeReply(s string) string {
 		t = reHeading.ReplaceAllString(t, "")
 		t = reHRule.ReplaceAllString(t, "")
 		t = reBlockquote.ReplaceAllString(t, "")
-		t = reBold.ReplaceAllStringFunc(t, func(m string) string {
-			return strings.Trim(m, "*_")
+		t = reBoldOrURL.ReplaceAllStringFunc(t, func(m string) string {
+			if strings.HasPrefix(m, "**") || strings.HasPrefix(m, "__") {
+				return m[2 : len(m)-2]
+			}
+			return m
 		})
 		t = reFiller.ReplaceAllString(t, "")
 		segments[i].text = reBlankLines.ReplaceAllString(t, "\n\n")
@@ -271,7 +274,10 @@ func splitSentences(p string) []string {
 		}
 		r, n := utf8.DecodeRuneInString(p[i:])
 		i += n
-		if strings.ContainsRune("。！？!?；;.\n", r) {
+		// ASCII punctuation inside a token can belong to a bare domain,
+		// path or query string. Split only after the complete token.
+		asciiEnd := strings.ContainsRune("!?;.", r) && (i == len(p) || unicode.IsSpace(firstRune(p[i:])))
+		if asciiEnd || strings.ContainsRune("。！？；\n", r) {
 			units = append(units, p[start:i])
 			start = i
 		}
@@ -280,6 +286,106 @@ func splitSentences(p string) []string {
 		units = append(units, p[start:])
 	}
 	return units
+}
+
+// TruncateReply omits a whole token when a preview would end in the middle
+// of an address. The full message remains available in the conversation.
+func TruncateReply(s string, n int) string {
+	r := []rune(s)
+	if n <= 0 || len(r) <= n {
+		return s
+	}
+	start, end := n, n
+	for start > 0 && !unicode.IsSpace(r[start-1]) {
+		start--
+	}
+	for end < len(r) && !unicode.IsSpace(r[end]) {
+		end++
+	}
+	if end > n && strings.ContainsAny(string(r[start:end]), "./:") {
+		n = start
+	}
+	return string(r[:n]) + "…"
+}
+
+func firstRune(s string) rune {
+	r, _ := utf8.DecodeRuneInString(s)
+	return r
+}
+
+// PlainLinks converts inline Markdown links, including balanced parentheses in
+// destinations. A soft line break inside an explicit destination is removed.
+func PlainLinks(s string) string {
+	var out strings.Builder
+	for len(s) > 0 {
+		i := strings.IndexByte(s, '[')
+		if i < 0 {
+			out.WriteString(s)
+			break
+		}
+		label, addr, end := parseInlineLink(s[i:])
+		if end == 0 {
+			out.WriteString(s[:i+1])
+			s = s[i+1:]
+			continue
+		}
+		end += i
+		out.WriteString(strings.TrimSuffix(s[:i], "!"))
+		if label != "" && label != addr {
+			out.WriteString(label)
+			if addr != "" {
+				out.WriteByte(' ')
+			}
+		}
+		out.WriteString(addr)
+		s = s[end:]
+	}
+	return out.String()
+}
+
+// MarkdownImage finds a legacy model image attachment without truncating URLs
+// that contain parentheses.
+func MarkdownImage(s string) (markup, addr string) {
+	for {
+		i := strings.Index(s, "![")
+		if i < 0 {
+			return "", ""
+		}
+		_, addr, end := parseInlineLink(s[i+1:])
+		if end > 0 {
+			return s[i : i+1+end], addr
+		}
+		s = s[i+2:]
+	}
+}
+
+func parseInlineLink(s string) (label, addr string, end int) {
+	labelEnd := balancedEnd(s, 0, '[', ']')
+	if labelEnd == 0 {
+		return "", "", 0
+	}
+	dest := labelEnd
+	for dest < len(s) && strings.ContainsRune(" \n\r\t", rune(s[dest])) {
+		dest++
+	}
+	if dest == len(s) || s[dest] != '(' {
+		return "", "", 0
+	}
+	end = balancedEnd(s, dest, '(', ')')
+	if end == dest {
+		return "", "", 0
+	}
+	label = strings.Join(strings.Fields(s[1:labelEnd-1]), " ")
+	addr = strings.TrimSpace(s[dest+1 : end-1])
+	if strings.HasPrefix(addr, "<") && strings.Contains(addr, ">") {
+		addr, _, _ = strings.Cut(addr[1:], ">")
+	} else {
+		for _, sep := range []string{` "`, " '", " ("} {
+			addr, _, _ = strings.Cut(addr, sep)
+		}
+	}
+	addr = strings.NewReplacer(`\(`, "(", `\)`, ")").Replace(strings.Join(strings.Fields(addr), ""))
+	return label, addr, end
 }
 
 func balancedEnd(s string, start int, open, close byte) int {

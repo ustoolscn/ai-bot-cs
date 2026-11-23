@@ -15,14 +15,12 @@ import (
 	"strings"
 	"time"
 
+	"ai-bot/backend/internal/agent"
 	"ai-bot/backend/internal/domain"
 	"github.com/gin-gonic/gin"
 )
 
-var (
-	markdownImagePattern = regexp.MustCompile(`!\[[^\]]*\]\((https://[^\s)]+)\)`)
-	imageMarkerPattern   = regexp.MustCompile(`(?i)\[IMAGE\](https://[^\s\[]+)\[/IMAGE\]`)
-)
+var imageMarkerPattern = regexp.MustCompile(`(?i)\[IMAGE\](https://[^\s\[]+)\[/IMAGE\]`)
 
 const (
 	maxInboundImages    = 4
@@ -193,19 +191,19 @@ func (a *App) prepareMessageImages(ctx context.Context, messageID string) ([]dom
 }
 
 func extractOutboundImage(content string) (string, []domain.ContentPart) {
-	match := markdownImagePattern.FindStringSubmatch(content)
-	if len(match) < 2 {
-		match = imageMarkerPattern.FindStringSubmatch(content)
+	markup, imageURL := agent.MarkdownImage(content)
+	if markup == "" {
+		match := imageMarkerPattern.FindStringSubmatch(content)
+		if len(match) < 2 {
+			return strings.TrimSpace(content), nil
+		}
+		markup, imageURL = match[0], match[1]
 	}
-	if len(match) < 2 {
-		return strings.TrimSpace(content), nil
-	}
-	imageURL := strings.TrimSpace(match[1])
 	parsed, err := url.Parse(imageURL)
 	if err != nil || validateImageURL(parsed) != nil {
 		return strings.TrimSpace(content), nil
 	}
-	cleaned := strings.TrimSpace(strings.Replace(content, match[0], "", 1))
+	cleaned := strings.TrimSpace(strings.Replace(content, markup, "", 1))
 	return cleaned, []domain.ContentPart{{Type: "image", URL: imageURL, ContentType: "image/*"}}
 }
 

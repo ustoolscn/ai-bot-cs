@@ -266,12 +266,11 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 		t.Fatalf("image was not sent to the multimodal model: %s", imageChatPayload)
 	}
 	imageSend := mock.QQSends()[2]
-	if imageSend.Body["msg_type"] != float64(2) || imageSend.Body["msg_id"] != "message-image" || imageSend.Body["msg_seq"] != float64(1) {
+	if imageSend.Body["msg_type"] != float64(7) || imageSend.Body["msg_id"] != "message-image" || imageSend.Body["msg_seq"] != float64(1) {
 		t.Fatalf("unexpected QQ image message: %#v", imageSend.Body)
 	}
-	markdown, _ := imageSend.Body["markdown"].(map[string]any)
-	if !strings.Contains(fmt.Sprint(markdown["content"]), "![结果](https://example.com/result.png)") || mock.QQUploadCount() != 0 {
-		t.Fatalf("image response should use QQ markdown without media upload: body=%#v uploads=%d", imageSend.Body, mock.QQUploadCount())
+	if strings.Contains(fmt.Sprint(imageSend.Body["content"]), "](") || mock.QQUploadCount() != 1 {
+		t.Fatalf("expected native image with plain caption: %#v", imageSend.Body)
 	}
 	var imageMessageID string
 	if err := pool.QueryRow(ctx, `SELECT id::text FROM messages WHERE platform_message_id='message-image'`).Scan(&imageMessageID); err != nil {

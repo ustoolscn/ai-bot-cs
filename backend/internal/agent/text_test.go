@@ -95,3 +95,24 @@ func TestSplitKeepsStructuredReplyUnits(t *testing.T) {
 		}
 	}
 }
+
+func TestPlainLinksAndDeliveryBoundaries(t *testing.T) {
+	const address = "https://docs.example.com/api_(v2)?x=a!b&y=1#section"
+	input := "说明。\n[查看[文档]](https://docs.example.com/\napi_(v2)?x=a!b&y=1#section \"指南\")\n结束。"
+	got := PlainLinks(input)
+	if got != "说明。\n查看[文档] "+address+"\n结束。" {
+		t.Fatalf("converted %q", got)
+	}
+	for _, target := range []string{address, "docs.example.com/api?q=a!b"} {
+		parts := SplitReply("说明。"+target+"\n完毕。", 5, 8)
+		found := false
+		for _, part := range parts {
+			if strings.Contains(part, target) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("split address: %v", parts)
+		}
+	}
+}

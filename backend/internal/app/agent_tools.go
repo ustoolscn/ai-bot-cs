@@ -53,6 +53,7 @@ type builtinTool struct {
 }
 
 var builtinTools = []builtinTool{
+	{spec: domain.ToolSpec{Name: "generate_image", Description: "根据用户的画面描述生成一张新图片，直接作为 QQ 图片回复发送。", Parameters: objSchema(map[string]any{"prompt": strProp("要生成的画面、风格及文字要求")}, "prompt")}},
 	{spec: domain.ToolSpec{Name: "quote_previous_reply", Description: "当用户要求引用机器人此前的答复时，用上一条答复中的原文片段定位本会话内的回复，为即将发送的答复附上 QQ 原生引用。请核对返回的原文。", Parameters: objSchema(map[string]any{"excerpt": strProp("目标回复中连续出现的原文片段")}, "excerpt")}},
 	{spec: domain.ToolSpec{Name: "publish_html_page", Description: "内容较多或一两句难以解释时主动发布静态 HTML 网页，向用户发送返回的临时链接。只写可公开的信息。", Parameters: objSchema(map[string]any{"html": strProp("静态 HTML 正文及内联样式")}, "html")}},
 	{spec: domain.ToolSpec{Name: "render_html_image", Description: "把你编写的静态 HTML/CSS 排版成 PNG，直接作为本次 QQ 回复发送。可主动用图片强调信息、展示对比或表格。长内容优先发布网页。可用静态 SVG 和本地渐变绘制插画。使用内联样式或 style，按 1000px 宽排版，不使用脚本和外部资源。", Parameters: objSchema(map[string]any{"html": strProp("完整 HTML 网页或片段")}, "html")}},
@@ -221,6 +222,16 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		}
 		rt.publishedURL = base + "/p/" + id
 		return jsonString(map[string]any{"url": rt.publishedURL, "expiresInHours": 168}), nil
+	case "generate_image":
+		if rt.dryRun {
+			return `{"preview":true}`, nil
+		}
+		part, err := a.generateImage(ctx, rt.settings.ImageGeneration, str("prompt"))
+		if err != nil {
+			return "", err
+		}
+		rt.screenshot = &part
+		return `{"ready":true}`, nil
 	case "render_html_image":
 		if rt.dryRun {
 			return jsonString(map[string]any{"preview": true}), nil
@@ -438,6 +449,9 @@ func firstNonEmpty(vals ...string) string {
 }
 
 func toolSelected(rt *turnRuntime, name string) bool {
+	if name == "generate_image" && (rt.settings.ImageGeneration.APIKeyEnc == "" || rt.settings.ImageGeneration.BaseURL == "") {
+		return false
+	}
 	return (rt.settings.ToolNames == nil || slices.Contains(rt.settings.ToolNames, name)) && (name != "remember_user_fact" || rt.settings.MemoryEnabled)
 }
 func statusPageTool(rt *turnRuntime, name string) bool {

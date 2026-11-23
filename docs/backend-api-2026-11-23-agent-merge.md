@@ -41,3 +41,21 @@
 - `stageAverages[]` 包含 `label,averageMs,samples`，聚合最近 24 小时已完成计时的样本。包括排队、模型、工具及投递。
 
 用户档案和事件沿用「机器人内的会话＋平台用户」边界。档案上限采用现有 token 估算器。提取由回复事务创建的后台任务执行；模型可新增、更新、删除事件或保持原样，管理员置顶的事件不会被自动改删。旧事件以创建时间作为缺少事件时间时的回退值。
+
+## 客服生图
+
+用管理员接口 `GET /api/agent/settings` 读取全局生图配置。`data.imageGeneration` 包含 `baseUrl`、`model` 和只读布尔值 `hasApiKey`。初始地址为空，默认模型为 `gpt-image-2.6-flare`。保存时调用 `PUT /api/agent/settings`，可只提交修改的字段。
+
+```json
+{
+  "imageGeneration": {
+    "baseUrl": "https://provider.example/v1",
+    "model": "gpt-image-2.6-flare"
+  },
+  "imageGenerationApiKey": "<新密钥>"
+}
+```
+
+基础地址包含供应商要求的版本前缀。后端直连该地址下的 `POST /images/generations`，使用 Bearer 鉴权并发送 `model,prompt,n:1`。支持 `data[0].b64_json` 和 `data[0].url`（公网 HTTPS 图片）。密钥加密保存，返回值只显示 `hasApiKey`。省略顶层密钥字段会保留原密钥，传空串会清除。更换基础地址时需要重新填写密钥。
+
+`GET /api/tools` 的 `data.builtin` 包含 `generate_image`。客服编辑沿用 `PUT /api/bots/:id/services/:item`，提交原有 `name`，在 `settings` 内保存 `toolsEnabled` 和所选 `toolNames`。把 `generate_image` 加入所选名称列表即可。显式空数组关闭所有工具，null 沿用默认集合。配置地址和密钥后该工具才可调用。参数为 `{"prompt":"画面描述"}`，成功返回 `{"ready":true}`，QQ 收到原生图片附件。评测模式返回 `{"preview":true}`，不会请求生图供应商。

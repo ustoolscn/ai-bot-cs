@@ -269,7 +269,8 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.finishInbox(ctx, j.TaskID, "skipped", nil)
 	}
 	finishShape := a.startStage(ctx, j.MessageID, "回复整理与分段")
-	replyParts := a.shapeReply(settings, j.ConversationType, out.content)
+	caption, attached := extractOutboundImage(out.content)
+	replyParts := a.shapeReply(settings, j.ConversationType, caption)
 	finishShape(fmt.Sprintf("生成 %d 段回复", len(replyParts)), nil)
 	hitsJSON, _ := json.Marshal(rt.hits)
 	tx, err := a.db.Begin(ctx)
@@ -288,11 +289,14 @@ func (a *App) processInbox(ctx context.Context) error {
 		if err != nil {
 			break
 		}
-		_, mediaParts := extractOutboundImage(part)
-		if i == 0 && rt.statusImage != nil {
-			mediaParts = []domain.ContentPart{*rt.statusImage}
-		} else if i == 0 && rt.screenshot != nil {
+		var mediaParts []domain.ContentPart
+		if i == 0 {
+			mediaParts = attached
+		}
+		if i == 0 && rt.screenshot != nil {
 			mediaParts = []domain.ContentPart{*rt.screenshot}
+		} else if i == 0 && rt.statusImage != nil {
+			mediaParts = []domain.ContentPart{*rt.statusImage}
 		}
 		partsJSON, _ := json.Marshal(mediaParts)
 		var outID string
@@ -356,7 +360,8 @@ func (a *App) shapeReply(s agent.Settings, conversationType, content string) []s
 	if text == "" {
 		text = strings.TrimSpace(content)
 	}
-	if !s.SplitLongReplies || markdownImagePattern.MatchString(text) || imageMarkerPattern.MatchString(text) {
+	text = agent.PlainLinks(text)
+	if !s.SplitLongReplies {
 		return []string{text}
 	}
 	parts := agent.SplitReply(text, s.ReplyChars(conversationType), s.MaxReplyParts)
@@ -633,6 +638,9 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 			out.content = res.Content
 			if rt.publishedURL != "" && !strings.Contains(out.content, rt.publishedURL) {
 				out.content = strings.TrimSpace(out.content + "\n" + rt.publishedURL)
+			}
+			if strings.TrimSpace(out.content) == "" && rt.statusImage != nil {
+				out.content = "当前服务状态见图。"
 			}
 			if strings.TrimSpace(out.content) == "" && rt.handoff {
 				out.content = "已经帮你转给人工客服了，请稍等一下～"

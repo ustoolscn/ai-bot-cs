@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"ai-bot/backend/internal/agent"
 	"ai-bot/backend/internal/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -79,10 +80,11 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	var cid, profile, persona, style, role, source, format, instruction string
+	var name string
 	var day, deadline time.Time
 	err := a.db.QueryRow(ctx, `SELECT c.id::text,COALESCE(svc.chat_profile_id::text,
         CASE WHEN dest.service_id IS NULL THEN cfg.chat_profile_id::text END,''),COALESCE(svc.name,''),COALESCE(svc.settings->>'stylePrompt',p.prompt,''),COALESCE(svc.instructions,ag.instructions,''),
-        s.source,s.format,s.instruction,r.run_date,r.deadline
+        s.name,s.source,s.format,s.instruction,r.run_date,r.deadline
  FROM schedule_deliveries d JOIN schedule_runs r ON r.id=d.run_id JOIN scheduled_posts s ON s.id=r.schedule_id AND s.revision=r.revision
  JOIN schedule_recipients dest ON dest.schedule_id=s.id AND dest.conversation_id=d.conversation_id JOIN conversations c ON c.id=d.conversation_id
  JOIN conversation_support_config cfg ON cfg.id=c.id
@@ -90,7 +92,7 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
       LEFT JOIN support_agents ag ON ag.id=svc.agent_id LEFT JOIN personality_presets p ON p.id=ag.personality_id
       LEFT JOIN model_profiles mp ON mp.id=coalesce(svc.chat_profile_id,cfg.chat_profile_id)
  WHERE d.job_id=$1 AND d.message_id IS NULL AND (s.enabled OR r.is_test) ORDER BY (s.source='web' AND mp.web_search_mode<>'disabled') DESC NULLS LAST,c.id LIMIT 1`, jobID).
-		Scan(&cid, &profile, &persona, &style, &role, &source, &format, &instruction, &day, &deadline)
+		Scan(&cid, &profile, &persona, &style, &role, &name, &source, &format, &instruction, &day, &deadline)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -119,6 +121,9 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 		persona, style = s.PersonaName, s.StylePrompt
 	}
 	system := fmt.Sprintf("你是%s。%s\n职责：%s\n当前任务日期（北京时间）：%s。按管理员指令生成可直接发布到 QQ 群的成稿。", persona, style, role, day.Format("2006-01-02"))
+	if format == "link" {
+		system += "\n第一行写一句能独立说明本期内容的中文标题，标题不放链接，再写详细正文。"
+	}
 	if source == "group" {
 		start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, chinaLocation)
 		var incoming, members, answers int
@@ -162,7 +167,7 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 				return e
 			}
 			pageID = uuid.NewString()
-			text = pageBase + "/p/" + pageID
+			text = scheduledLinkCaption(text, name) + "\n" + pageBase + "/p/" + pageID
 		} else {
 			pic, e := a.htmlImage(ctx, layout.Content)
 			if e != nil {
@@ -172,6 +177,7 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 			text = "定时推送"
 		}
 	}
+	text = agent.PlainLinks(text)
 	raw, _ := json.Marshal(parts)
 	// Recheck that this exact occurrence is still active after model/render latency.
 	_, err = a.db.Exec(ctx, `WITH target AS (
@@ -188,4 +194,18 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
        INSERT INTO scheduled_web_pages(id,document) SELECT $5::uuid,$6::text WHERE $5::uuid IS NOT NULL AND EXISTS(SELECT FROM marked)
     ) INSERT INTO outbox_tasks(message_id,msg_seq) SELECT id,1 FROM marked`, jobID, text, string(raw), deadline, nullString(pageID), document)
 	return err
+}
+
+func scheduledLinkCaption(draft, name string) string {
+	for _, line := range strings.Split(agent.SanitizeReply(agent.PlainLinks(draft)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.Contains(strings.ToLower(line), "http") || strings.Contains(line, "www.") {
+			continue
+		}
+		if i := strings.IndexAny(line, "。！？"); i >= 0 {
+			line = line[:i+len("。")]
+		}
+		return agent.TruncateReply(line, 100)
+	}
+	return "本期推送：" + firstNonEmpty(name, "定时简报")
 }

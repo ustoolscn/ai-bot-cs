@@ -156,12 +156,3 @@ func (a *App) htmlImage(ctx context.Context, src string) (domain.ContentPart, er
 	}
 	return domain.ContentPart{Type: "image", ContentType: "image/png", Filename: "page.png", StorageKey: key, SizeBytes: int64(len(png)), Width: int(width), Height: int(height)}, nil
 }
-
-func hasStoredImage(parts []domain.ContentPart) bool {
-	for _, part := range parts {
-		if part.Type == "image" && part.StorageKey != "" {
-			return true
-		}
-	}
-	return false
-}

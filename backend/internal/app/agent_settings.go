@@ -29,6 +29,8 @@ func (a *App) agentSettings(ctx context.Context) agent.Settings {
 }
 
 func publicAgentSettings(s agent.Settings) agent.Settings {
+	s.ImageGeneration.HasAPIKey = s.ImageGeneration.APIKeyEnc != ""
+	s.ImageGeneration.APIKeyEnc = ""
 	s.LiveData.AccessTokenEnc = ""
 	return s
 }
@@ -40,7 +42,8 @@ func (a *App) getAgentSettings(c *gin.Context) {
 func (a *App) putAgentSettings(c *gin.Context) {
 	var in struct {
 		agent.Settings
-		LiveDataAccessToken *string `json:"liveDataAccessToken"`
+		ImageGenerationAPIKey *string `json:"imageGenerationApiKey"`
+		LiveDataAccessToken   *string `json:"liveDataAccessToken"`
 	}
 	current := a.agentSettings(c)
 	in.Settings = current
@@ -67,6 +70,19 @@ func (a *App) putAgentSettings(c *gin.Context) {
 		}
 	}
 	s.Normalize()
+	s.ImageGeneration.APIKeyEnc = current.ImageGeneration.APIKeyEnc
+	if s.ImageGeneration.BaseURL != current.ImageGeneration.BaseURL || in.ImageGenerationAPIKey != nil {
+		s.ImageGeneration.APIKeyEnc = ""
+	}
+	if in.ImageGenerationAPIKey != nil && strings.TrimSpace(*in.ImageGenerationAPIKey) != "" {
+		enc, err := a.cipher.Encrypt(strings.TrimSpace(*in.ImageGenerationAPIKey))
+		if err != nil {
+			fail(c, 500, "secret_error", "生图密钥加密失败")
+			return
+		}
+		s.ImageGeneration.APIKeyEnc = enc
+	}
+	s.ImageGeneration.HasAPIKey = s.ImageGeneration.APIKeyEnc != ""
 	if err := s.Validate(); err != nil {
 		fail(c, 400, "invalid_settings", err.Error())
 		return
