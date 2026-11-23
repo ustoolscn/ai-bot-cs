@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>状态热力格</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --line: #e4e4e0; --text: #1f2421; --text-2: #454b47; --muted: #6d736f;
+    --s5: #17694a; --s4: #2f8f63; --s3: #8cc4a3; --s2: #e0a43a; --s1: #d46a3c; --s0: #b8312f; --none: #e9e9e5;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); font-family: "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif; color: var(--text); -webkit-font-smoothing: antialiased; }
+  #card { width: 760px; padding: 32px 36px 26px; background: var(--bg); }
+  .top { display: grid; grid-template-columns: 1fr auto; gap: 8px 32px; align-items: end; }
+  .top h1 { font-size: 20px; font-weight: 650; }
+  .top time { color: var(--muted); font-size: 13px; text-align: right; }
+  .top p { grid-column: 1 / -1; color: var(--text-2); font-size: 15px; line-height: 1.6; text-wrap: pretty; }
+  .big { display: flex; align-items: baseline; gap: 20px; margin-top: 20px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+  .big b { font-size: 40px; font-weight: 650; line-height: 1; font-variant-numeric: tabular-nums; }
+  .big span { color: var(--muted); font-size: 14px; line-height: 1.6; }
+  .big span em { color: var(--text-2); font-style: normal; font-variant-numeric: tabular-nums; }
+  .grid { margin-top: 18px; }
+  .line { display: grid; grid-template-columns: 104px 1fr 64px; align-items: center; gap: 12px; height: 30px; }
+  .line.focus .label { color: var(--s5); }
+  .line.focus .label::after { content: "  ←"; color: var(--muted); font-weight: 400; }
+  .label { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cells { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; }
+  .cells i { height: 22px; border-radius: 3px; background: var(--c); }
+  .val { text-align: right; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .line.overall { margin-top: 6px; padding-top: 10px; height: auto; border-top: 1px dashed var(--line); }
+  .line.overall .label { color: var(--muted); font-weight: 500; }
+  .ticks { display: grid; grid-template-columns: 104px 1fr 64px; gap: 12px; margin-top: 6px; color: var(--muted); font-size: 12px; }
+  .ticks div { position: relative; height: 16px; }
+  .ticks div span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  .ticks div span:first-child { transform: none; }
+  .ticks div span:last-child { transform: translateX(-100%); }
+  .legend { display: flex; align-items: center; gap: 6px; margin-top: 18px; color: var(--muted); font-size: 12px; }
+  .legend i { width: 18px; height: 10px; border-radius: 2px; background: var(--c); }
+  .legend .gap { width: 12px; }
+</style>
+</head>
+<body>
+<div id="card"></div>
+<script>
+(function () {
+  const d = window.STATUS_DATA;
+  const card = document.getElementById('card');
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // 六档色阶：越绿越稳，越红越差
+  const shade = r => r == null ? 'none' : r >= 99.5 ? 's5' : r >= 99 ? 's4' : r >= 97 ? 's3' : r >= 95 ? 's2' : r >= 90 ? 's1' : 's0';
+  const pct = r => r == null ? '—' : (r >= 99.995 ? '100' : r.toFixed(1)) + '%';
+  const count = n => n == null ? '—' : n >= 10000 ? (n / 10000).toFixed(1) + ' 万' : n.toLocaleString('zh-CN');
+  const ms = v => v == null ? '—' : v >= 1000 ? (v / 1000).toFixed(2) + ' 秒' : Math.round(v) + ' 毫秒';
+  const time = iso => { const t = new Date(iso); if (isNaN(t)) return ''; const p = Object.fromEntries(new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(t).map(x => [x.type, x.value])); return `${p.month}月${p.day}日 ${p.hour}:${p.minute}`; };
+  const cells = series => (series || []).map(v => `<i style="--c:var(--${shade(v)})"></i>`).join('');
+  const periods = d.window?.periods || [];
+  const tickAt = periods.length > 1 ? [0, 6, 12, 18, periods.length - 1].filter((i, k, a) => i < periods.length && a.indexOf(i) === k) : [];
+  const o = d.overall || {};
+
+  card.innerHTML = `
+    <div class="top">
+      <h1>${esc(d.site)} · ${esc(d.title || '服务状态')}</h1>
+      <time>${time(d.generatedAt)}</time>
+      ${d.summary ? `<p>${esc(d.summary)}</p>` : ''}
+    </div>
+    <div class="big">
+      <b style="color:var(--${shade(o.successRate)})">${pct(o.successRate)}</b>
+      <span>${esc(d.window?.label || '')}整体成功率<br>共 <em>${count(o.requests)}</em> 次请求，首字延迟中位数 <em>${ms(o.medianTtftMs)}</em></span>
+    </div>
+    <div class="grid">
+      ${(d.groups || []).map(g => `<div class="line${d.focus && g.name === d.focus ? ' focus' : ''}"><div class="label">${esc(g.name)}</div><div class="cells">${cells(g.series)}</div><div class="val">${pct(g.successRate)}</div></div>`).join('')}
+      ${o.series?.length ? `<div class="line overall"><div class="label">全站</div><div class="cells">${cells(o.series)}</div><div class="val">${pct(o.successRate)}</div></div>` : ''}
+      ${tickAt.length ? `<div class="ticks"><span></span><div>${tickAt.map(i => `<span style="left:${(i / (periods.length - 1)) * 100}%">${esc(periods[i])}</span>`).join('')}</div><span></span></div>` : ''}
+    </div>
+    <div class="legend"><span>成功率</span><span class="gap"></span>
+      <i style="--c:var(--s0)"></i>&lt;90
+      <i style="--c:var(--s1)"></i>90
+      <i style="--c:var(--s2)"></i>95
+      <i style="--c:var(--s3)"></i>97
+      <i style="--c:var(--s4)"></i>99
+      <i style="--c:var(--s5)"></i>99.5
+      <span class="gap"></span><i style="--c:var(--none)"></i>无数据
+    </div>`;
+  document.body.dataset.ready = '1';
+})();
+</script>
+</body>
+</html>

@@ -22,6 +22,8 @@ import (
 
 // turnRuntime is the per-turn state tools operate on.
 type turnRuntime struct {
+	chatProfileID    string
+	statusFocus      string
 	settings         agent.Settings
 	botID            string
 	conversationID   string
@@ -59,13 +61,13 @@ var builtinTools = []builtinTool{
 	{spec: domain.ToolSpec{Name: "render_html_image", Description: "把你编写的静态 HTML/CSS 排版成 PNG，直接作为本次 QQ 回复发送。可主动用图片强调信息、展示对比或表格。长内容优先发布网页。可用静态 SVG 和本地渐变绘制插画。使用内联样式或 style，按 1000px 宽排版，不使用脚本和外部资源。", Parameters: objSchema(map[string]any{"html": strProp("完整 HTML 网页或片段")}, "html")}},
 	{spec: domain.ToolSpec{Name: "search_knowledge", Description: "在知识库中检索资料。当预先提供的知识库结果不足以回答、或用户换了话题时使用。", Parameters: objSchema(map[string]any{"query": strProp("要检索的完整问题")}, "query")}, needsKB: true},
 	{spec: domain.ToolSpec{Name: "get_model_price", Description: "查询分组实际价格，按提问语言给出人民币或美元报价。支持模糊模型名，如 4o、claude sonnet、deepseek。", Parameters: objSchema(map[string]any{"model": strProp("模型名称或关键词"), "group": strProp("指定用户分组；省略时按模型展示可用分组的最低倍率报价，并说明适用条件")}, "model")}, needsLive: true},
-	{spec: domain.ToolSpec{Name: "get_service_status", Description: "按全站、模型或计费分组查询成功率（%）、请求数、首个 Token 延迟中位数（毫秒）和趋势。问状态时调用此工具，已配置状态页则自动发送截图。无数据时不要推断故障。", Parameters: objSchema(map[string]any{
+	{spec: domain.ToolSpec{Name: "get_service_status", Description: "按全站、模型或计费分组查询成功率（%）、请求数、首个 Token 延迟中位数（毫秒）和趋势。问状态时调用此工具，按客服设置自动附上状态图。无数据时不要推断故障。", Parameters: objSchema(map[string]any{
 		"scope":       map[string]any{"type": "string", "enum": []string{"overall", "model", "group"}},
 		"name":        strProp("模型或分组名称，可模糊匹配"),
 		"granularity": map[string]any{"type": "string", "enum": []string{"hour", "day"}, "description": "hour 为最近24小时（默认），day 为最近90天"},
 		"recent":      map[string]any{"type": "integer", "minimum": 1, "maximum": 24, "description": "附带最近几个小时或天的逐段统计，可选"},
 	}, "scope")}, needsLive: true},
-	{spec: domain.ToolSpec{Name: "get_group_status", Description: "查询网站分组列表（倍率）和各分组/服务的实时可用状态，自动附上已配置的状态页截图。", Parameters: objSchema(map[string]any{"group": strProp("分组或服务名称，可选；为空返回全部")})}, needsLive: true},
+	{spec: domain.ToolSpec{Name: "get_group_status", Description: "查询网站分组列表（倍率）和各分组/服务的实时可用状态，按客服设置自动附上状态图。", Parameters: objSchema(map[string]any{"group": strProp("分组或服务名称，可选；为空返回全部")})}, needsLive: true},
 	{spec: domain.ToolSpec{Name: "get_announcements", Description: "获取网站最新公告和通知全文。", Parameters: objSchema(map[string]any{"limit": map[string]any{"type": "integer", "description": "返回条数，默认 3"}})}, needsLive: true},
 	{spec: domain.ToolSpec{Name: "remember_user_fact", Description: "记住关于当前用户的一条长期有用的信息（如常用分组、接入方式、偏好）。不要记录密钥、密码等敏感信息。", Parameters: objSchema(map[string]any{"content": strProp("一句话描述的事实"), "kind": map[string]any{"type": "string", "enum": []string{"fact", "preference", "issue"}}}, "content")}},
 	{spec: domain.ToolSpec{Name: "handoff_to_human", Description: "把当前用户转给人工客服处理。用户要求人工、涉及退款/到账/封号等需人工核实、或你无法解决时使用。", Parameters: objSchema(map[string]any{"reason": strProp("转人工原因，一句话")}, "reason")}},
@@ -183,10 +185,14 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 	str := func(k string) string { v, _ := args[k].(string); return strings.TrimSpace(v) }
 	rt.toolsUsed = append(rt.toolsUsed, call.Name)
 	if statusPageTool(rt, call.Name) && !rt.dryRun {
-		if err := a.attachStatusPage(ctx, rt); err != nil {
+		group := str("group")
+		if str("scope") == "group" {
+			group = str("name")
+		}
+		if err := a.attachStatusPage(ctx, rt, group); err != nil && !rt.snapshotOK {
 			return "", err
 		}
-		if !rt.snapshotOK || call.Name == "get_service_status" && len(rt.snapshot.ServiceStatus) == 0 {
+		if rt.statusImage != nil && (!rt.snapshotOK || call.Name == "get_service_status" && len(rt.snapshot.ServiceStatus) == 0) {
 			return `{"statusPageScreenshot":true}`, nil
 		}
 	}
@@ -226,7 +232,7 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		if rt.dryRun {
 			return `{"preview":true}`, nil
 		}
-		part, err := a.generateImage(ctx, rt.settings.ImageGeneration, str("prompt"))
+		part, err := a.generateImage(ctx, rt.settings.ImageProfileID, str("prompt"))
 		if err != nil {
 			return "", err
 		}
@@ -450,11 +456,21 @@ func firstNonEmpty(vals ...string) string {
 }
 
 func toolSelected(rt *turnRuntime, name string) bool {
-	if name == "generate_image" && (rt.settings.ImageGeneration.APIKeyEnc == "" || rt.settings.ImageGeneration.BaseURL == "") {
+	if name == "generate_image" && rt.settings.ImageProfileID == "" {
 		return false
 	}
 	return (rt.settings.ToolNames == nil || slices.Contains(rt.settings.ToolNames, name)) && (name != "remember_user_fact" || rt.settings.MemoryEnabled)
 }
 func statusPageTool(rt *turnRuntime, name string) bool {
-	return rt.settings.LiveData.StatusPageURL != "" && (name == "get_group_status" || name == "get_service_status")
+	if name != "get_group_status" && name != "get_service_status" {
+		return false
+	}
+	switch rt.settings.LiveData.StatusImageStyle {
+	case "off":
+		return false
+	case "page":
+		return rt.settings.LiveData.StatusPageURL != ""
+	default:
+		return rt.snapshotOK && (rt.snapshot.ServiceStatus["hour"] != nil || len(rt.snapshot.Monitors) > 0)
+	}
 }

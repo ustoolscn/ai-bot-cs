@@ -26,8 +26,6 @@ func (a *App) RunWorkers(ctx context.Context) {
 	}
 	wg.Add(1)
 	go func() { defer wg.Done(); a.maintenanceLoop(ctx) }()
-	wg.Add(1)
-	go func() { defer wg.Done(); a.liveDataLoop(ctx) }()
 	<-ctx.Done()
 	wg.Wait()
 }

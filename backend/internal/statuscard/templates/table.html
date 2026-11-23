@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>状态明细表</title>
+<style>
+  :root {
+    --bg: #ffffff; --head: #f4f5f7; --line: #e6e8ec; --focus: #eaf2fc;
+    --text: #1b2130; --text-2: #434b5b; --muted: #6a7282;
+    --good: #1d8052; --warn: #a35f00; --bad: #c93636; --none: #9aa1ad;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); font-family: "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif; color: var(--text); -webkit-font-smoothing: antialiased; }
+  #card { width: 760px; background: var(--bg); }
+  header { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; padding: 28px 32px 18px; }
+  header h1 { font-size: 22px; font-weight: 650; line-height: 1.3; }
+  header p { margin-top: 6px; color: var(--text-2); font-size: 15px; line-height: 1.6; text-wrap: pretty; }
+  header .meta { flex-shrink: 0; color: var(--muted); font-size: 13px; text-align: right; line-height: 1.6; }
+  .overall { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--head); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .overall div { padding: 14px 32px; }
+  .overall div + div { border-left: 1px solid var(--line); }
+  .overall span { color: var(--muted); font-size: 13px; }
+  .overall b { display: block; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  caption { padding: 18px 32px 8px; text-align: left; color: var(--muted); font-size: 13px; font-weight: 500; }
+  th { padding: 8px 12px; color: var(--muted); font-size: 13px; font-weight: 500; text-align: right; border-bottom: 1px solid var(--line); }
+  td { padding: 10px 12px; text-align: right; font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { padding-left: 32px; text-align: left; }
+  th:last-child, td:last-child { padding-right: 32px; }
+  td.name { font-weight: 600; max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td.rate { font-weight: 600; color: var(--c); }
+  td.rate i { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--c); vertical-align: 2px; }
+  td.muted { color: var(--text-2); }
+  tr.focus td { background: var(--focus); }
+  svg { display: block; margin-left: auto; }
+  footer { display: flex; justify-content: space-between; padding: 14px 32px 22px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="card"></div>
+<script>
+(function () {
+  const d = window.STATUS_DATA;
+  const card = document.getElementById('card');
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const level = r => r == null ? 'none' : r >= 99 ? 'good' : r >= 95 ? 'warn' : 'bad';
+  const pct = r => r == null ? '—' : (r >= 99.995 ? '100' : r.toFixed(2)) + '%';
+  const count = n => n == null ? '—' : n.toLocaleString('zh-CN');
+  const ms = v => v == null ? '—' : v >= 1000 ? (v / 1000).toFixed(2) + ' s' : Math.round(v) + ' ms';
+  const time = iso => { const t = new Date(iso); if (isNaN(t)) return ''; const p = Object.fromEntries(new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(t).map(x => [x.type, x.value])); return `${p.month}月${p.day}日 ${p.hour}:${p.minute}`; };
+  // 趋势线：纵轴固定 90–100%，低于 90% 贴底；断档处断开
+  const spark = series => {
+    const vals = series || [];
+    if (vals.filter(v => v != null).length < 2) return '<span style="color:var(--muted)">—</span>';
+    const w = 132, h = 26, step = w / (vals.length - 1);
+    const y = v => h - 2 - Math.max(0, Math.min(1, (v - 90) / 10)) * (h - 4);
+    let path = '', pen = false;
+    vals.forEach((v, i) => { if (v == null) { pen = false; return; } path += `${pen ? 'L' : 'M'}${(i * step).toFixed(1)},${y(v).toFixed(1)}`; pen = true; });
+    const lastIdx = vals.map(v => v != null).lastIndexOf(true), last = vals[lastIdx];
+    return `<svg width="${w}" height="${h}" viewBox="-3 0 ${w + 6} ${h}"><line x1="0" x2="${w}" y1="${y(99)}" y2="${y(99)}" stroke="var(--line)" stroke-dasharray="3 3"/><path d="${path}" fill="none" stroke="var(--text-2)" stroke-width="1.5" stroke-linejoin="round"/><circle cx="${lastIdx * step}" cy="${y(last)}" r="3" fill="var(--${level(last)})"/></svg>`;
+  };
+  const rows = (list, trend) => list.map(r => `
+    <tr class="${d.focus && r.name === d.focus ? 'focus' : ''}" style="--c:var(--${level(r.successRate)})">
+      <td class="name">${esc(r.name)}</td>
+      <td class="rate"><i></i>${pct(r.successRate)}</td>
+      <td class="muted">${count(r.requests)}</td>
+      <td class="muted">${ms(r.medianTtftMs)}</td>
+      ${trend ? `<td>${spark(r.series)}</td>` : ''}
+    </tr>`).join('');
+  const groups = d.groups || [], models = d.models || [];
+
+  card.innerHTML = `
+    <header>
+      <div><h1>${esc(d.site)} ${esc(d.title || '服务状态')}</h1>${d.summary ? `<p>${esc(d.summary)}</p>` : ''}</div>
+      <div class="meta">${time(d.generatedAt)}<br>${esc(d.window?.label || '')}</div>
+    </header>
+    <div class="overall">
+      <div><span>整体成功率</span><b style="color:var(--${level(d.overall?.successRate)})">${pct(d.overall?.successRate)}</b></div>
+      <div><span>请求数</span><b>${count(d.overall?.requests)}</b></div>
+      <div><span>首字延迟中位数</span><b>${ms(d.overall?.medianTtftMs)}</b></div>
+    </div>
+    ${groups.length ? `<table><caption>分组</caption><thead><tr><th>名称</th><th>成功率</th><th>请求数</th><th>首字延迟</th><th>趋势</th></tr></thead><tbody>${rows(groups, true)}</tbody></table>` : ''}
+    ${models.length ? `<table><caption>请求最多的模型</caption><thead><tr><th>名称</th><th>成功率</th><th>请求数</th><th>首字延迟</th></tr></thead><tbody>${rows(models, false)}</tbody></table>` : ''}
+    <footer><span>成功率 ≥ 99% 为正常，95–99% 为波动，低于 95% 为异常</span><span>虚线为 99%</span></footer>`;
+  document.body.dataset.ready = '1';
+})();
+</script>
+</body>
+</html>

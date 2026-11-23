@@ -18,7 +18,7 @@ import (
 const liveSourceNewAPI = "newapi"
 
 func liveSource(s agent.Settings) string {
-	return liveSourceNewAPI + ":" + hashText(s.LiveData.BaseURL+"|"+s.LiveData.UserID+"|"+s.LiveData.AccessTokenEnc+"|"+s.LiveData.AnnouncementKBID)
+	return liveSourceNewAPI + ":" + hashText(s.LiveData.BaseURL+"|"+s.LiveData.UserID+"|"+s.LiveData.AccessTokenEnc+"|")
 }
 
 // Read the snapshot for this site and credential only.
@@ -32,60 +32,10 @@ func (a *App) liveSnapshot(ctx context.Context, s agent.Settings) (newapi.Snapsh
 	if err := a.db.QueryRow(ctx, "SELECT data,last_error FROM live_data_snapshots WHERE source=$1", liveSource(s)).Scan(&raw, &lastErr); err == nil {
 		_ = json.Unmarshal(raw, &snap)
 	}
-	return snap, lastErr != "", !snap.FetchedAt.IsZero()
+	return snap, snapshotStale(snap, lastErr), !snap.FetchedAt.IsZero()
 }
 
-func (a *App) liveDataLoop(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		defaults := a.agentSettings(ctx)
-		configs := []agent.Settings{defaults}
-		rows, err := a.db.Query(ctx, "SELECT DISTINCT settings->'liveData' FROM bot_services WHERE settings ? 'liveData'")
-		if err == nil {
-			for rows.Next() {
-				var raw []byte
-				s := defaults
-				if rows.Scan(&raw) == nil && json.Unmarshal(raw, &s.LiveData) == nil {
-					s.Normalize()
-					configs = append(configs, s)
-				}
-			}
-			rows.Close()
-		}
-		sources := map[string]agent.Settings{}
-		for _, s := range configs {
-			if !s.LiveData.Enabled || s.LiveData.BaseURL == "" {
-				continue
-			}
-			key := liveSource(s)
-			if prev, ok := sources[key]; ok {
-				s.LiveData.RefreshSeconds = min(s.LiveData.RefreshSeconds, prev.LiveData.RefreshSeconds)
-				s.LiveData.SyncAnnouncements = s.LiveData.SyncAnnouncements || prev.LiveData.SyncAnnouncements
-			}
-			sources[key] = s
-		}
-		for _, s := range sources {
-			if s.LiveData.Enabled && s.LiveData.BaseURL != "" {
-				var last *time.Time
-				_ = a.db.QueryRow(ctx, "SELECT last_attempt_at FROM live_data_snapshots WHERE source=$1", liveSource(s)).Scan(&last)
-				if last == nil || time.Since(*last) >= time.Duration(s.LiveData.RefreshSeconds)*time.Second {
-					if err := a.refreshLiveData(ctx, s); err != nil && ctx.Err() == nil {
-						a.log.Warn("live data refresh failed", "error", err)
-					}
-				}
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
-// refreshLiveData fetches the site, stores the snapshot, syncs announcements
-// into the knowledge base and raises alerts for newly abnormal monitors.
+// Only the administrator's manual sync endpoint fetches new data.
 func (a *App) refreshLiveData(ctx context.Context, s agent.Settings) error {
 	token := ""
 	if s.LiveData.AccessTokenEnc != "" {
@@ -121,11 +71,6 @@ func (a *App) refreshLiveData(ctx context.Context, s agent.Settings) error {
 	if hadPrev {
 		a.raiseMonitorAlerts(ctx, prev, snap)
 	}
-	if s.LiveData.SyncAnnouncements && s.LiveData.AnnouncementKBID != "" {
-		if err := a.syncAnnouncements(ctx, s.LiveData.AnnouncementKBID, s.LiveData.BaseURL, snap); err != nil {
-			a.log.Warn("announcement sync failed", "error", err)
-		}
-	}
 	return nil
 }
 
@@ -148,75 +93,9 @@ func (a *App) raiseMonitorAlerts(ctx context.Context, prev, cur newapi.Snapshot)
 	}
 }
 
-// syncAnnouncements mirrors site announcements into FAQ entries. Entries for
-// announcements no longer on the site are archived.
-func (a *App) syncAnnouncements(ctx context.Context, kbID, site string, snap newapi.Snapshot) error {
-	prefix := "site:" + hashText(site+"|"+kbID) + ":"
-	type ann struct{ key, question, answer string }
-	var items []ann
-	for _, an := range snap.Announcements {
-		content := strings.TrimSpace(an.Content)
-		if content == "" {
-			continue
-		}
-		date := an.PublishDate
-		if len(date) > 10 {
-			date = date[:10]
-		}
-		items = append(items, ann{key: prefix + "announcement:" + hashText(an.PublishDate + content)[:16], question: "网站公告（" + date + "）：" + agent.TruncateRunes(firstLine(content), 40), answer: content})
-	}
-	if n := strings.TrimSpace(snap.Notice); n != "" {
-		items = append(items, ann{key: prefix + "notice", question: "网站当前通知：" + agent.TruncateRunes(firstLine(n), 40), answer: n})
-	}
-	keys := make([]string, 0, len(items))
-	for _, it := range items {
-		keys = append(keys, it.key)
-		var id, oldAnswer, status string
-		err := a.db.QueryRow(ctx, "SELECT id::text,answer,status FROM knowledge_entries WHERE external_key=$1", it.key).Scan(&id, &oldAnswer, &status)
-		if err != nil {
-			if err := a.db.QueryRow(ctx, `INSERT INTO knowledge_entries(knowledge_base_id,question,answer,source,external_key,status) VALUES($1,$2,$3,'announcement',$4,'published') RETURNING id::text`, kbID, it.question, it.answer, it.key).Scan(&id); err != nil {
-				return err
-			}
-			a.enqueueJob(ctx, "index_entry", map[string]any{"entryId": id}, "index_entry:"+id)
-			continue
-		}
-		if oldAnswer != it.answer || status != "published" {
-			if _, err := a.db.Exec(ctx, "UPDATE knowledge_entries SET question=$1,answer=$2,status='published',version=version+1,index_status='pending',updated_at=now() WHERE id=$3", it.question, it.answer, id); err != nil {
-				return err
-			}
-			a.enqueueJob(ctx, "index_entry", map[string]any{"entryId": id}, "index_entry:"+id)
-		}
-	}
-	// A partial fetch cannot establish that the missing endpoint deleted its entries.
-	rows, err := a.db.Query(ctx, `UPDATE knowledge_entries SET status='archived',updated_at=now()
-		WHERE source='announcement' AND status='published' AND knowledge_base_id=$2 AND external_key LIKE $3
-		AND NOT (external_key = ANY($1))
-		AND CASE WHEN external_key=$4 THEN $5::boolean ELSE $6::boolean END RETURNING id::text`,
-		keys, kbID, prefix+"%", prefix+"notice", snap.Errors["notice"] == "", snap.Errors["status"] == "")
-	if err != nil {
-		return err
-	}
-	var archived []string
-	for rows.Next() {
-		var id string
-		_ = rows.Scan(&id)
-		archived = append(archived, id)
-	}
-	rows.Close()
-	for _, id := range archived {
-		_, _ = a.db.Exec(ctx, "DELETE FROM knowledge_chunks WHERE entry_id=$1", id)
-	}
-	return nil
+func snapshotStale(snap newapi.Snapshot, lastError string) bool {
+	return lastError != "" || (!snap.FetchedAt.IsZero() && time.Since(snap.FetchedAt) >= 24*time.Hour)
 }
-
-func firstLine(s string) string {
-	s = strings.TrimSpace(strings.NewReplacer("#", "", "*", "").Replace(s))
-	if i := strings.IndexAny(s, "\n"); i >= 0 {
-		return strings.TrimSpace(s[:i])
-	}
-	return s
-}
-
 func hashText(s string) string {
 	h := sha1.Sum([]byte(s))
 	return hex.EncodeToString(h[:])
@@ -233,7 +112,7 @@ func (a *App) getLiveData(c *gin.Context) {
 	_ = a.db.QueryRow(c, "SELECT data,fetched_at,last_attempt_at,last_error FROM live_data_snapshots WHERE source=$1", liveSource(s)).Scan(&raw, &fetchedAt, &attemptAt, &lastErr)
 	var snap newapi.Snapshot
 	_ = json.Unmarshal(raw, &snap)
-	stale := lastErr != "" && !strings.HasPrefix(lastErr, "部分")
+	stale := snapshotStale(snap, lastErr)
 	serviceStatus := map[string]any{}
 	for g, w := range snap.ServiceStatus {
 		if w != nil && w.Overall != nil {
@@ -241,7 +120,7 @@ func (a *App) getLiveData(c *gin.Context) {
 		}
 	}
 	ok(c, gin.H{
-		"serviceStatus": serviceStatus,
+		"serviceStatus": serviceStatus, "possiblyStale": stale,
 		"enabled":       s.LiveData.Enabled,
 		"fetchedAt":     fetchedAt,
 		"lastAttemptAt": attemptAt,

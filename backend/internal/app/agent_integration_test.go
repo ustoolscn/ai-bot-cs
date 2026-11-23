@@ -262,7 +262,9 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	live := settings["liveData"].(map[string]any)
 	live["enabled"] = true
 	live["baseUrl"] = mock.URL
+	// Obsolete client fields cannot re-enable announcement indexing.
 	live["announcementKnowledgeBaseId"] = kbID
+	live["syncAnnouncements"] = true
 	settings["liveDataAccessToken"] = "site-token-secret"
 	saved := requestJSON(t, client, http.MethodPut, server.URL+"/api/agent/settings", settings, http.StatusOK)
 	assertSecretNotReturned(t, saved, "site-token-secret")
@@ -274,11 +276,10 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	if !bytes.Contains(liveJSON, []byte(`"modelCount":1`)) || !bytes.Contains(liveJSON, []byte("vip：异常")) {
 		t.Fatalf("live data: %s", liveJSON)
 	}
-	eventually(t, 8*time.Second, "announcements synced and indexed", func() (bool, error) {
-		var n int
-		err := pool.QueryRow(ctx, `SELECT count(*) FROM knowledge_entries WHERE source='announcement' AND index_status='ready'`).Scan(&n)
-		return n == 2, err
-	})
+	var entries int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM knowledge_entries WHERE source='announcement'").Scan(&entries); err != nil || entries != 0 {
+		t.Fatal("manual sync created announcement entries", entries, err)
+	}
 
 	hook := server.URL + "/callbacks/qq/" + botID
 	postQQWebhook(t, client, hook, botSecret, groupEventBody(t, "e1", "GROUP_MESSAGE_CREATE", "m1", "alice", "Alice", "我平时用的是 vip 分组"))
@@ -517,7 +518,7 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 		t.Fatalf("message detail missing agent info: %s", detail)
 	}
 	stats := dataMap(t, requestJSON(t, client, http.MethodGet, server.URL+"/api/learning/stats", nil, http.StatusOK))
-	if stats["publishedEntries"].(float64) < 4 {
+	if stats["publishedEntries"].(float64) != 2 {
 		t.Fatalf("stats: %v", stats)
 	}
 

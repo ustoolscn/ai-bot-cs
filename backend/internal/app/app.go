@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -428,9 +429,12 @@ func (a *App) listModels(c *gin.Context) {
 }
 func (a *App) saveModel(c *gin.Context) {
 	var in modelInput
-	if c.ShouldBindJSON(&in) != nil || in.Name == "" || in.BaseURL == "" || in.Model == "" || (in.Kind != "chat" && in.Kind != "embedding") {
+	if c.ShouldBindJSON(&in) != nil || in.Name == "" || in.BaseURL == "" || in.Model == "" || (in.Kind != "chat" && in.Kind != "embedding" && in.Kind != "image") {
 		fail(c, 400, "invalid_request", "模型配置不完整")
 		return
+	}
+	if in.Kind == "image" {
+		in.Dimension = nil
 	}
 	rates := []json.RawMessage{in.InputPricePerMillion, in.OutputPricePerMillion, in.CacheReadPricePerMillion, in.CacheWritePricePerMillion}
 	for _, raw := range rates {
@@ -594,6 +598,15 @@ func (a *App) testModel(c *gin.Context) {
 		return
 	}
 	started := time.Now()
+	if kind == "image" {
+		data, typ, err := a.requestImage(c, cl, firstNonEmpty(strings.TrimSpace(in.Input), "画一个蓝色圆形，白色背景。"))
+		if err != nil {
+			fail(c, 502, "model_error", err.Error())
+			return
+		}
+		ok(c, gin.H{"kind": kind, "model": model, "content": "已生成一张测试图片。", "contentType": typ, "imageUrl": "data:" + typ + ";base64," + base64.StdEncoding.EncodeToString(data), "sizeBytes": len(data), "latencyMs": time.Since(started).Milliseconds()})
+		return
+	}
 	if kind == "embedding" {
 		if strings.TrimSpace(in.Input) == "" {
 			in.Input = "连接测试"

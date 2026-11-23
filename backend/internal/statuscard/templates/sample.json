@@ -1,0 +1,42 @@
+{
+  "site": "示例 API",
+  "title": "服务状态",
+  "generatedAt": "2026-11-23T15:20:00+08:00",
+  "window": {
+    "label": "近 24 小时",
+    "granularity": "hour",
+    "periods": ["16:00","17:00","18:00","19:00","20:00","21:00","22:00","23:00","00:00","01:00","02:00","03:00","04:00","05:00","06:00","07:00","08:00","09:00","10:00","11:00","12:00","13:00","14:00","15:00"]
+  },
+  "summary": "整体运行正常。claude 分组 13 点前后成功率短暂下降，现已恢复。",
+  "focus": null,
+  "overall": {
+    "successRate": 99.21, "requests": 182340, "medianTtftMs": 820,
+    "series": [99.6,99.5,99.7,99.4,99.6,99.8,99.7,99.9,99.8,99.9,99.9,99.8,99.9,99.7,99.6,99.4,99.1,98.9,99.0,98.7,98.2,97.9,98.8,99.3]
+  },
+  "groups": [
+    { "name": "default", "successRate": 99.62, "requests": 96120, "medianTtftMs": 640,
+      "series": [99.7,99.6,99.8,99.6,99.7,99.8,99.8,99.9,99.9,100,100,99.9,99.9,99.8,99.7,99.6,99.5,99.4,99.5,99.3,99.2,99.4,99.6,99.7] },
+    { "name": "claude", "successRate": 97.84, "requests": 41280, "medianTtftMs": 1240,
+      "series": [99.2,99.0,99.4,98.9,99.1,99.5,99.3,99.6,99.4,99.7,99.8,99.5,99.6,99.2,98.9,98.1,96.4,95.2,96.8,94.1,92.6,95.9,98.7,99.1] },
+    { "name": "gpt", "successRate": 99.48, "requests": 33650, "medianTtftMs": 710,
+      "series": [99.5,99.4,99.6,99.3,99.5,99.7,99.6,99.8,99.7,99.8,99.9,99.7,99.8,99.6,99.5,99.3,99.2,99.0,99.3,99.4,99.5,99.2,99.5,99.6] },
+    { "name": "gemini", "successRate": 99.12, "requests": 8930, "medianTtftMs": 930,
+      "series": [99.0,99.3,99.1,98.8,99.2,99.4,99.0,null,null,99.5,99.6,99.1,99.3,99.0,98.7,98.9,99.2,99.0,99.1,98.8,99.0,99.3,99.4,99.2] },
+    { "name": "vip", "successRate": 100, "requests": 2360, "medianTtftMs": 520,
+      "series": [100,100,100,100,100,100,null,null,null,null,null,null,100,100,100,100,100,100,100,100,100,100,100,100] }
+  ],
+  "models": [
+    { "name": "claude-sonnet-5-5", "successRate": 97.31, "requests": 28410, "medianTtftMs": 1310, "series": [] },
+    { "name": "gpt-5.2", "successRate": 99.52, "requests": 21980, "medianTtftMs": 690, "series": [] },
+    { "name": "gemini-3-pro", "successRate": 99.10, "requests": 8120, "medianTtftMs": 940, "series": [] },
+    { "name": "claude-haiku-5-5", "successRate": 99.70, "requests": 7350, "medianTtftMs": 480, "series": [] },
+    { "name": "deepseek-v4", "successRate": 98.62, "requests": 5240, "medianTtftMs": 1580, "series": [] }
+  ],
+  "monitors": [
+    { "category": "接口", "name": "主站 API", "status": "up", "uptime": 99.98 },
+    { "category": "接口", "name": "备用线路", "status": "up", "uptime": 99.91 },
+    { "category": "网站", "name": "控制台", "status": "up", "uptime": 100 },
+    { "category": "上游", "name": "Claude 上游", "status": "pending", "uptime": 98.7 },
+    { "category": "上游", "name": "图片生成", "status": "maintenance", "uptime": 96.2 }
+  ]
+}

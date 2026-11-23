@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"ai-bot/backend/internal/domain"
+	"ai-bot/backend/internal/statuscard"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
@@ -190,11 +191,31 @@ func (a *App) renderStatusPage(ctx context.Context, target string, dial func(con
 var directStatusRequest = regexp.MustCompile(`(?i)状态页.{0,8}(截图|截屏)|(?:截图|截屏).{0,8}状态页|(分组|服务|全站|网站|网页).{0,10}(状态|可用吗|正常吗|挂了|成功率)|(?:group|service|site|system) status|status (?:of|for) (?:the )?(?:group|service|site|system)`)
 
 func explicitStatusQuestion(question string) bool { return directStatusRequest.MatchString(question) }
-func (a *App) attachStatusPage(ctx context.Context, rt *turnRuntime) error {
-	if rt.statusImage != nil {
-		return nil
+func (a *App) attachStatusPage(ctx context.Context, rt *turnRuntime, group string) error {
+	var part domain.ContentPart
+	var err error
+	if rt.settings.LiveData.StatusImageStyle == "page" {
+		if rt.statusImage != nil {
+			return nil
+		}
+		part, err = a.statusPageImage(ctx, rt.settings.LiveData.StatusPageURL)
+	} else {
+		card := statuscard.FromSnapshot(rt.snapshot, rt.question, group)
+		if rt.snapshotStale {
+			card.Title = "服务状态（缓存快照）"
+		}
+		focus := ""
+		if card.Focus != nil {
+			focus = *card.Focus
+		}
+		if rt.statusImage != nil && (focus == "" || focus == rt.statusFocus) {
+			return nil
+		}
+		part, err = a.statusCardImage(ctx, rt, card)
+		if err == nil {
+			rt.statusFocus = focus
+		}
 	}
-	part, err := a.statusPageImage(ctx, rt.settings.LiveData.StatusPageURL)
 	if err != nil {
 		return err
 	}

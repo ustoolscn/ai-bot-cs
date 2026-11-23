@@ -1,7 +1,7 @@
 package app
 
 import (
-	"ai-bot/backend/internal/agent"
+	"ai-bot/backend/internal/db"
 	"ai-bot/backend/internal/domain"
 	"bytes"
 	"context"
@@ -154,19 +154,57 @@ func TestImageGenerationConfigurationAndTool(t *testing.T) {
 			Model, Prompt string
 			N             int
 		}
-		if r.Method != "POST" || r.URL.Path != "/v1/images/generations" || r.Header.Get("Authorization") != "Bearer image-secret" || json.NewDecoder(r.Body).Decode(&body) != nil || body.Model != agent.DefaultImageModel || body.Prompt != "蓝色的山" || body.N != 1 {
+		if r.Method != "POST" || r.URL.Path != "/v1/images/generations" || r.Header.Get("Authorization") != "Bearer image-secret" || json.NewDecoder(r.Body).Decode(&body) != nil || body.Model != "gpt-image-2.6-flare" || body.Prompt != "蓝色的山" || body.N != 1 {
 			t.Error("unexpected generation request")
 		}
 		json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]any{"b64_json": generated.Bytes()}}})
 	}))
 	defer provider.Close()
-	path := server.URL + "/api/agent/settings"
-	raw := requestJSON(t, client, "PUT", path, map[string]any{"imageGeneration": map[string]any{"baseUrl": provider.URL + "/v1/"}, "imageGenerationApiKey": "image-secret"}, 200)
-	if bytes.Contains(raw, []byte("image-secret")) || bytes.Contains(raw, []byte("apiKeyEnc")) || !bytes.Contains(raw, []byte(`"hasApiKey":true`)) {
-		t.Fatal("unexpected public credential fields")
+	api := server.URL + "/api"
+	var bot, cid string
+	if err := pool.QueryRow(ctx, "INSERT INTO bots(name,app_id,app_secret_enc) VALUES('bot','image-test','enc') RETURNING id::text").Scan(&bot); err != nil {
+		t.Fatal(err)
 	}
-	requestJSON(t, client, "PUT", path, map[string]any{"imageGeneration": map[string]string{"model": agent.DefaultImageModel}}, 200)
-	rt := turnRuntime{settings: a.agentSettings(ctx), dryRun: true}
+	// A legacy encrypted key must survive startup migration, without selecting
+	// the migrated model for any individual service.
+	enc, _ := a.cipher.Encrypt("image-secret")
+	_, err = pool.Exec(ctx, `INSERT INTO system_settings(key,value) VALUES('agent_settings',jsonb_build_object('imageGeneration',jsonb_build_object('model','gpt-image-2.6-flare','baseUrl',$1::text,'apiKeyEnc',$2::text))) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, provider.URL+"/v1", enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err = db.Migrate(ctx, pool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var profile string
+	if err = pool.QueryRow(ctx, "SELECT id::text FROM model_profiles WHERE kind='image' AND api_key_enc=$1", enc).Scan(&profile); err != nil {
+		t.Fatal(err)
+	}
+	raw := requestJSON(t, client, "GET", api+"/agent/settings", nil, 200)
+	if bytes.Contains(raw, []byte("imageGeneration")) {
+		t.Fatal("obsolete settings exposed")
+	}
+	bots := api + "/bots/" + bot + "/services"
+	svc := createdID(t, requestJSON(t, client, "POST", bots, map[string]string{"name": "image-service"}, 200))
+	if err := pool.QueryRow(ctx, "INSERT INTO conversations(channel,bot_id,type,platform_id,service_id) VALUES('qq',$1,'private','user',$2) RETURNING id::text", bot, svc).Scan(&cid); err != nil {
+		t.Fatal(err)
+	}
+	settings, _, _, err := a.conversationAgent(ctx, cid, a.agentSettings(ctx))
+	if err != nil || settings.ImageProfileID != "" {
+		t.Fatal("implicit image model", err)
+	}
+	proxy := createdID(t, requestJSON(t, client, "POST", api+"/system/proxies", map[string]string{"name": "image-test", "address": provider.URL}, 200))
+	profileBody := map[string]any{"name": "image-test", "kind": "image", "model": "gpt-image-2.6-flare", "baseUrl": "http://images.invalid/v1", "apiKey": "image-secret", "proxyId": proxy}
+	viaProxy := createdID(t, requestJSON(t, client, "POST", api+"/model-profiles", profileBody, 200))
+	delete(profileBody, "apiKey")
+	requestJSON(t, client, "PUT", api+"/model-profiles/"+viaProxy, profileBody, 200)
+	requestJSON(t, client, "PUT", bots+"/"+svc, map[string]string{"name": "image-service", "imageProfileId": profile}, 200)
+	settings, _, _, err = a.conversationAgent(ctx, cid, a.agentSettings(ctx))
+	if err != nil || settings.ImageProfileID != profile {
+		t.Fatal("selected profile missing", err)
+	}
+	rt := turnRuntime{settings: settings, dryRun: true}
 	call := domain.ToolCall{Name: "generate_image", Arguments: `{"prompt":"蓝色的山"}`}
 	if result, err := a.executeTool(ctx, &rt, call, nil); err != nil || result != `{"preview":true}` {
 		t.Fatal(result, err)
@@ -183,9 +221,14 @@ func TestImageGenerationConfigurationAndTool(t *testing.T) {
 	if _, err := a.executeTool(ctx, &rt, call, nil); err == nil {
 		t.Fatal("disabled tool executed")
 	}
-	requestJSON(t, client, "PUT", path, map[string]any{"imageGeneration": map[string]string{"baseUrl": "https://different.example/v1"}}, 200)
-	raw = requestJSON(t, client, "GET", path, nil, 200)
-	if !bytes.Contains(raw, []byte(`"hasApiKey":false`)) || a.agentSettings(ctx).ImageGeneration.APIKeyEnc != "" {
-		t.Fatal("key retained after provider changed")
+	raw = requestJSON(t, client, "POST", api+"/model-profiles/"+viaProxy+"/test", map[string]string{"input": "蓝色的山"}, 200)
+	if !bytes.Contains(raw, []byte(`"contentType":"image/png"`)) || !bytes.Contains(raw, []byte("data:image/png;base64,")) || calls != 2 {
+		t.Fatal("image profile test failed", string(raw))
+	}
+	requestJSON(t, client, "DELETE", api+"/model-profiles/"+viaProxy, nil, 200)
+	requestJSON(t, client, "PUT", bots+"/"+svc, map[string]string{"name": "image-service", "imageProfileId": ""}, 200)
+	settings, _, _, err = a.conversationAgent(ctx, cid, a.agentSettings(ctx))
+	if err != nil || toolSelected(&turnRuntime{settings: settings}, "generate_image") {
+		t.Fatal("cleared profile still available", err)
 	}
 }

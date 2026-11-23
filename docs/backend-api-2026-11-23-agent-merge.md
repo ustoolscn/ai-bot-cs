@@ -16,7 +16,7 @@
 - 人设与示例使用 `stylePrompt`、`examples: [{question,answer}]`。客服名称兼作人设名称，职责在顶层 `instructions`。
 - 技能和工具使用 `toolsEnabled,maxToolSteps,skillIds,toolNames`。技能按 ID、工具按名称选择，供给范围仍受系统技能和工具启用状态限制。`null` 沿用可用集合，`[]` 表示不选。知识库使用 `knowledgeBaseIds`，`null` 沿用群绑定，`[]` 关闭检索。
 - 学习及人工使用 `evaluationEnabled,staffMiningEnabled,autoPublishStaff,autoPublishMinConfidence,learningKnowledgeBaseId,handoffPauseMinutes`。
-- `liveData` 支持 `enabled,baseUrl,userId,refreshSeconds,syncAnnouncements,announcementKnowledgeBaseId,injectSnapshot,priceNote,statusPageUrl`。`hasAccessToken` 只读。设置令牌使用**请求顶层**的 `liveDataAccessToken`；省略保留同站令牌，空串清除，更换网站请重新输入令牌。
+- `liveData` 支持 `enabled,baseUrl,userId,injectSnapshot,priceNote,statusPageUrl,statusImageStyle`。`hasAccessToken` 只读。设置令牌使用**请求顶层**的 `liveDataAccessToken`；省略保留同站令牌，空串清除，更换网站请重新输入令牌。
 - 原 `/personalities` 与 `/support-agents` 仍可读写旧模板，原客服与会话 ID 保留。新页面直接编辑客服。
 
 ## 公网地址与网页
@@ -44,21 +44,17 @@
 
 ## 客服生图
 
-用管理员接口 `GET /api/agent/settings` 读取全局生图配置。`data.imageGeneration` 包含 `baseUrl`、`model` 和只读布尔值 `hasApiKey`。初始地址为空，默认模型为 `gpt-image-2.6-flare`。保存时调用 `PUT /api/agent/settings`，可只提交修改的字段。
+生图供应商配置在 `/api/model-profiles`，使用通用模型的 GET、POST、PUT、DELETE 接口。类型填 `kind="image"`，请求包含 `name,baseUrl,model,apiKey`，可选 `proxyId,enabled` 等原有字段。基础地址包含版本前缀，例如 `https://provider.example/v1`。后端追加 `/images/generations`，每次请求一张，兼容图片的 `b64_json` 和公网 HTTPS URL。
 
-```json
-{
-  "imageGeneration": {
-    "baseUrl": "https://provider.example/v1",
-    "model": "gpt-image-2.6-flare"
-  },
-  "imageGenerationApiKey": "<新密钥>"
-}
-```
+客服创建、修改及列表接口中，`imageProfileId` 与 `chatProfileId` 同级。选择启用的 image 模型后，按现有 `toolsEnabled`、`toolNames` 开启 `generate_image`。更新客服时省略 ID 保留选择，传空串清除。未选择或所选模型已停用时工具不可用。迁移将旧全局供应商及加密密钥保存为“原全局生图模型”，由管理员选择需要使用它的客服。
 
-基础地址包含供应商要求的版本前缀。后端直连该地址下的 `POST /images/generations`，使用 Bearer 鉴权并发送 `model,prompt,n:1`。支持 `data[0].b64_json` 和 `data[0].url`（公网 HTTPS 图片）。密钥加密保存，返回值只显示 `hasApiKey`。省略顶层密钥字段会保留原密钥，传空串会清除。更换基础地址时需要重新填写密钥。
+`POST /api/model-profiles/:id/test` 接收 `{"input":"画面描述"}`，使用所选代理真实请求一张图，可能产生费用。成功返回 `data.{kind,model,content,imageUrl,contentType,sizeBytes,latencyMs}`，其中 `kind="image"`，`content` 是测试成功说明。`imageUrl` 为可直接预览的图片 Data URL；测试图片不入消息记录。供应商错误返回 HTTP 502。
 
-`GET /api/tools` 的 `data.builtin` 包含 `generate_image`。客服编辑沿用 `PUT /api/bots/:id/services/:item`，提交原有 `name`，在 `settings` 内保存 `toolsEnabled` 和所选 `toolNames`。把 `generate_image` 加入所选名称列表即可。显式空数组关闭所有工具，null 沿用默认集合。配置地址和密钥后该工具才可调用。参数为 `{"prompt":"画面描述"}`，成功返回 `{"ready":true}`，QQ 收到原生图片附件。评测模式返回 `{"preview":true}`，不会请求生图供应商。
+## 状态图与网站手动同步
+
+- 每个客服的 `settings.liveData.statusImageStyle` 默认 `brief`。可选 `brief`（简报）、`table`（明细表）、`heatmap`（热力格）、`night`（夜间卡片）、`page`（截取 `statusPageUrl`）及 `off`（仅文字）。四种卡片读取已保存的小时统计与监测数据，固定模板离线渲染。
+- `GET /api/bots/:id/services/:item/live-data` 读取快照，`POST /api/bots/:id/services/:item/live-data/refresh` 发起手动同步。全局 `/api/agent/live-data` 与 `/refresh` 同理。保存设置不联网。首次同步前没有快照，快照超过 24 小时或最近同步报错时，`possiblyStale=true`。
+- 移除 `refreshSeconds`、`syncAnnouncements` 和 `announcementKnowledgeBaseId`。升级时清理来源为 `announcement` 的知识条目及其索引，普通人工条目保留。模型仍可通过快照和 `get_announcements` 阅读公告。
 
 ## 人工工单
 

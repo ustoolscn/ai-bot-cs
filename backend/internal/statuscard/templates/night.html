@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>状态夜间卡片</title>
+<style>
+  :root {
+    --bg: #16191f; --raise: #1e2229; --line: #2b3039;
+    --text: #e8eaee; --text-2: #b5bbc6; --muted: #8a919d;
+    --good: #4fb886; --warn: #e3a64a; --bad: #e46a64; --none: #3a404a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); font-family: "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif; color: var(--text); -webkit-font-smoothing: antialiased; }
+  #card { width: 560px; padding: 30px 30px 24px; background: var(--bg); }
+  .head { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; }
+  .hero { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 18px; }
+  .hero b { display: block; font-size: 52px; font-weight: 650; line-height: 1; letter-spacing: -1px; font-variant-numeric: tabular-nums; color: var(--c); }
+  .hero small { display: block; margin-top: 8px; color: var(--muted); font-size: 13px; }
+  .ring { position: relative; width: 96px; height: 96px; flex-shrink: 0; }
+  .ring svg { transform: rotate(-90deg); }
+  .ring span { position: absolute; inset: 0; display: grid; place-items: center; font-size: 15px; font-weight: 600; color: var(--c); }
+  .summary { margin-top: 16px; color: var(--text-2); font-size: 15px; line-height: 1.65; text-wrap: pretty; }
+  .stats { display: flex; gap: 10px; margin-top: 18px; }
+  .stats div { flex: 1; padding: 10px 14px; background: var(--raise); border-radius: 8px; }
+  .stats span { color: var(--muted); font-size: 12px; }
+  .stats b { display: block; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  h2 { margin: 22px 0 6px; color: var(--muted); font-size: 13px; font-weight: 500; }
+  .row { display: grid; grid-template-columns: 10px 1fr 120px 70px; align-items: center; gap: 12px; padding: 9px 0; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row > i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+  .row .n { font-size: 15px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .n em { margin-left: 8px; color: var(--muted); font-size: 12px; font-style: normal; }
+  .row.focus .n { color: var(--c); font-weight: 600; }
+  .track { height: 4px; border-radius: 2px; background: var(--none); overflow: hidden; }
+  .track i { display: block; height: 100%; border-radius: 2px; background: var(--c); }
+  .row .v { text-align: right; font-size: 14px; font-variant-numeric: tabular-nums; color: var(--text-2); }
+  .row .tag { text-align: right; font-size: 13px; color: var(--c); }
+  .foot { margin-top: 18px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="card"></div>
+<script>
+(function () {
+  const d = window.STATUS_DATA;
+  const card = document.getElementById('card');
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const level = r => r == null ? 'none' : r >= 99 ? 'good' : r >= 95 ? 'warn' : 'bad';
+  const pct = (r, digits = 2) => r == null ? '—' : (r >= 99.995 ? '100' : r.toFixed(digits)) + '%';
+  const count = n => n == null ? '—' : n >= 10000 ? (n / 10000).toFixed(1) + ' 万' : n.toLocaleString('zh-CN');
+  const ms = v => v == null ? '—' : v >= 1000 ? (v / 1000).toFixed(2) + ' s' : Math.round(v) + ' ms';
+  const time = iso => { const t = new Date(iso); if (isNaN(t)) return ''; const p = Object.fromEntries(new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(t).map(x => [x.type, x.value])); return `${p.month}/${p.day} ${p.hour}:${p.minute}`; };
+  // 进度条从 90% 起算，差距才看得出来
+  const fill = r => r == null ? 0 : Math.max(2, Math.min(100, (r - 90) * 10));
+  const monitorState = { up: ['good', '正常'], down: ['bad', '异常'], pending: ['warn', '检测中'], maintenance: ['none', '维护中'] };
+  const o = d.overall || {};
+  const groups = d.groups || [], monitors = d.monitors || [];
+  const down = groups.filter(g => level(g.successRate) !== 'good' && g.successRate != null).length;
+  const C = 2 * Math.PI * 40, share = groups.length ? (groups.length - down) / groups.length : 0;
+
+  card.innerHTML = `
+    <div class="head"><span>${esc(d.site)} · ${esc(d.title || '服务状态')}</span><span>${time(d.generatedAt)}</span></div>
+    <div class="hero" style="--c:var(--${level(o.successRate)})">
+      <div><b>${pct(o.successRate)}</b><small>${esc(d.window?.label || '')}整体成功率</small></div>
+      ${groups.length ? `<div class="ring" style="--c:var(--${down ? 'warn' : 'good'})">
+        <svg width="96" height="96"><circle cx="48" cy="48" r="40" fill="none" stroke="var(--none)" stroke-width="7"/><circle cx="48" cy="48" r="40" fill="none" stroke="var(--c)" stroke-width="7" stroke-linecap="round" stroke-dasharray="${(C * share).toFixed(1)} ${C.toFixed(1)}"/></svg>
+        <span>${groups.length - down}/${groups.length}</span></div>` : ''}
+    </div>
+    ${d.summary ? `<p class="summary">${esc(d.summary)}</p>` : ''}
+    <div class="stats"><div><span>请求数</span><b>${count(o.requests)}</b></div><div><span>首字延迟</span><b>${ms(o.medianTtftMs)}</b></div></div>
+    ${groups.length ? `<h2>分组成功率</h2>${groups.map(g => `<div class="row${d.focus && g.name === d.focus ? ' focus' : ''}" style="--c:var(--${level(g.successRate)})"><i></i><div class="n">${esc(g.name)}</div><div class="track"><i style="width:${fill(g.successRate)}%"></i></div><div class="v">${pct(g.successRate)}</div></div>`).join('')}` : ''}
+    ${monitors.length ? `<h2>线路监测</h2>${monitors.map(m => { const [lv, txt] = monitorState[m.status] || ['none', '未知']; return `<div class="row" style="--c:var(--${lv})"><i></i><div class="n">${esc(m.name)}${m.category ? `<em>${esc(m.category)}</em>` : ''}</div><div class="v">在线 ${pct(m.uptime, 1)}</div><div class="tag">${txt}</div></div>`; }).join('')}` : ''}
+    <p class="foot">成功率 ≥ 99% 为正常 · 圆环为正常分组占比</p>`;
+  document.body.dataset.ready = '1';
+})();
+</script>
+</body>
+</html>

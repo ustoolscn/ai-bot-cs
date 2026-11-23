@@ -322,7 +322,7 @@ func (s Snapshot) PromptSummary(stale bool) string {
 	if !s.FetchedAt.IsZero() {
 		fmt.Fprintf(&b, "数据时间：%s", s.FetchedAt.In(chinaTZ).Format("01-02 15:04"))
 		if stale {
-			b.WriteString("（最近一次同步失败，可能不是最新）")
+			b.WriteString("（缓存快照可能不是最新，请以标注的数据时间为准）")
 		}
 		b.WriteString("\n")
 	}

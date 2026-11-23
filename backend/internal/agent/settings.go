@@ -2,7 +2,7 @@ package agent
 
 import (
 	"fmt"
-	"net/url"
+
 	"strings"
 )
 
@@ -49,32 +49,21 @@ type Settings struct {
 	LearningKnowledgeBaseID  string  `json:"learningKnowledgeBaseId"`
 	GapSimilarity            float64 `json:"gapSimilarity"`
 	// Live data (new-api)
-	ImageGeneration ImageGenerationSettings `json:"imageGeneration"`
-	LiveData        LiveDataSettings        `json:"liveData"`
+	ImageProfileID string           `json:"-"`
+	LiveData       LiveDataSettings `json:"liveData"`
 }
-
-type ImageGenerationSettings struct {
-	BaseURL   string `json:"baseUrl"`
-	Model     string `json:"model"`
-	APIKeyEnc string `json:"apiKeyEnc,omitempty"`
-	HasAPIKey bool   `json:"hasApiKey"`
-}
-
-const DefaultImageModel = "gpt-image-2.6-flare"
 
 // LiveDataSettings configures the new-api site integration.
 type LiveDataSettings struct {
-	StatusPageURL     string `json:"statusPageUrl"`
-	Enabled           bool   `json:"enabled"`
-	BaseURL           string `json:"baseUrl"`
-	AccessTokenEnc    string `json:"accessTokenEnc,omitempty"`
-	HasAccessToken    bool   `json:"hasAccessToken"`
-	UserID            string `json:"userId"`
-	RefreshSeconds    int    `json:"refreshSeconds"`
-	SyncAnnouncements bool   `json:"syncAnnouncements"`
-	AnnouncementKBID  string `json:"announcementKnowledgeBaseId"`
-	InjectSnapshot    bool   `json:"injectSnapshot"`
-	PriceNote         string `json:"priceNote"`
+	StatusImageStyle string `json:"statusImageStyle"`
+	StatusPageURL    string `json:"statusPageUrl"`
+	Enabled          bool   `json:"enabled"`
+	BaseURL          string `json:"baseUrl"`
+	AccessTokenEnc   string `json:"accessTokenEnc,omitempty"`
+	HasAccessToken   bool   `json:"hasAccessToken"`
+	UserID           string `json:"userId"`
+	InjectSnapshot   bool   `json:"injectSnapshot"`
+	PriceNote        string `json:"priceNote"`
 }
 
 const DefaultStylePrompt = `你是平台的在线客服，像一位熟练、友好的真人客服那样在 QQ 里聊天。
@@ -111,12 +100,11 @@ func DefaultSettings() Settings {
 		AutoPublishStaff:         false,
 		AutoPublishMinConfidence: 0.85,
 		GapSimilarity:            0.86,
-		ImageGeneration:          ImageGenerationSettings{Model: DefaultImageModel},
+
 		LiveData: LiveDataSettings{
-			RefreshSeconds:    120,
-			SyncAnnouncements: true,
-			InjectSnapshot:    true,
-			PriceNote:         "以官网实时价格为准",
+			StatusImageStyle: "brief",
+			InjectSnapshot:   true,
+			PriceNote:        "以官网实时价格为准",
 		},
 	}
 }
@@ -145,7 +133,6 @@ func (s *Settings) Normalize() {
 	clamp(&s.MaxMemories, d.MaxMemories, 1, 30)
 	clamp(&s.MaxToolSteps, d.MaxToolSteps, 1, 8)
 	clamp(&s.HandoffPauseMinutes, d.HandoffPauseMinutes, 1, 1440)
-	clamp(&s.LiveData.RefreshSeconds, d.LiveData.RefreshSeconds, 30, 3600)
 	if s.MaxOutputTokens < 0 {
 		s.MaxOutputTokens = 0
 	}
@@ -158,21 +145,18 @@ func (s *Settings) Normalize() {
 	if len(s.Examples) > 20 {
 		s.Examples = s.Examples[:20]
 	}
-	s.ImageGeneration.BaseURL = strings.TrimRight(strings.TrimSpace(s.ImageGeneration.BaseURL), "/")
-	s.ImageGeneration.Model = strings.TrimSpace(s.ImageGeneration.Model)
-	if s.ImageGeneration.Model == "" {
-		s.ImageGeneration.Model = DefaultImageModel
+	if s.LiveData.StatusImageStyle == "" {
+		s.LiveData.StatusImageStyle = "brief"
 	}
 	s.LiveData.BaseURL = strings.TrimRight(strings.TrimSpace(s.LiveData.BaseURL), "/")
 }
 
 // Validate checks user-supplied settings.
 func (s Settings) Validate() error {
-	if s.ImageGeneration.BaseURL != "" {
-		u, err := url.Parse(s.ImageGeneration.BaseURL)
-		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return fmt.Errorf("生图基础地址需要有效的 HTTP(S) 地址")
-		}
+	switch s.LiveData.StatusImageStyle {
+	case "", "brief", "table", "heatmap", "night", "page", "off":
+	default:
+		return fmt.Errorf("无效的状态图样式")
 	}
 	if s.LiveData.Enabled && !strings.HasPrefix(s.LiveData.BaseURL, "http://") && !strings.HasPrefix(s.LiveData.BaseURL, "https://") {
 		return fmt.Errorf("网站地址必须以 http:// 或 https:// 开头")

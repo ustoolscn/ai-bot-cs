@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"ai-bot/backend/internal/config"
-	"ai-bot/backend/internal/newapi"
 )
 
 func TestEmbeddingRequestCounts(t *testing.T) {
@@ -111,32 +110,4 @@ func TestEmbeddingRequestCounts(t *testing.T) {
 	}
 	count("fresh turn with two profiles", 2)
 
-	snap := newapi.Snapshot{Notice: "通知", Announcements: []newapi.Announcement{{Content: "公告", PublishDate: "2026-11-23"}}}
-	syncAndIndex := func(snapshot newapi.Snapshot) {
-		t.Helper()
-		check(a.syncAnnouncements(ctx, libraries[0], "site", snapshot))
-		rows, err := db.Query(ctx, `UPDATE agent_jobs SET status='completed' WHERE kind='index_entry' AND status='pending' RETURNING payload->>'entryId'`)
-		check(err)
-		var entries []string
-		for rows.Next() {
-			var entry string
-			check(rows.Scan(&entry))
-			entries = append(entries, entry)
-		}
-		rows.Close()
-		check(rows.Err())
-		for _, entry := range entries {
-			check(a.jobIndexEntry(ctx, entry))
-		}
-	}
-	syncAndIndex(snap)
-	count("first notice and announcement", 2)
-	syncAndIndex(snap)
-	count("unchanged refresh", 0)
-	syncAndIndex(newapi.Snapshot{Errors: map[string]string{"notice": "offline", "status": "offline"}})
-	syncAndIndex(snap)
-	count("partial outage followed by recovery", 0)
-	snap.Notice = "更新的通知"
-	syncAndIndex(snap)
-	count("one updated notice", 1)
 }

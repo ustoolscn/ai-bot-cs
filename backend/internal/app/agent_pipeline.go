@@ -167,7 +167,7 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.retryInbox(ctx, j, err)
 	}
 
-	rt := &turnRuntime{question: originalQuestion, settings: settings, botID: j.BotID, conversationID: j.ConversationID, conversationType: j.ConversationType,
+	rt := &turnRuntime{chatProfileID: profileID, question: originalQuestion, settings: settings, botID: j.BotID, conversationID: j.ConversationID, conversationType: j.ConversationType,
 		senderID: senderID, senderName: senderName, messageID: j.MessageID, runID: runID}
 	rt.knowledgeBases = a.conversationKnowledgeBases(ctx, j.ConversationID)
 	if settings.KnowledgeBaseIDs != nil {
@@ -585,14 +585,14 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 	if rt.snapshotOK && s.LiveData.InjectSnapshot {
 		live = rt.snapshot.PromptSummary(rt.snapshotStale)
 	}
-	if !rt.dryRun && s.ToolsEnabled && s.LiveData.StatusPageURL != "" && (toolSelected(rt, "get_service_status") || toolSelected(rt, "get_group_status")) && explicitStatusQuestion(rt.question) {
-		finish := a.startStage(ctx, rt.messageID, "状态页截图")
-		err := a.attachStatusPage(ctx, rt)
+	if !rt.dryRun && s.ToolsEnabled && statusPageTool(rt, "get_service_status") && (toolSelected(rt, "get_service_status") || toolSelected(rt, "get_group_status")) && explicitStatusQuestion(rt.question) {
+		finish := a.startStage(ctx, rt.messageID, "状态图")
+		err := a.attachStatusPage(ctx, rt, "")
 		finish("", err)
 		if err == nil {
-			live += "\n本轮已准备好管理员配置的状态页截图，将随回复发送。"
+			live += "\n本轮已准备好管理员配置的状态图，将随回复发送。"
 		} else {
-			live += "\n本轮状态页截图读取失败，不要声称已发送截图。"
+			live += "\n本轮状态图读取失败，不要声称已发送截图。"
 		}
 	}
 	systems := agent.BuildSystemPrompt(agent.PromptInput{Settings: s, ConversationType: rt.conversationType, BusinessPrompt: in.businessPrompt,

@@ -76,31 +76,35 @@ func (a *App) saveSupportAgent(c *gin.Context) {
 
 func (a *App) saveBotService(c *gin.Context) {
 	var in struct {
-		Name, AgentID                                     string
-		Instructions                                      *string
-		Settings                                          map[string]json.RawMessage
-		LiveDataAccessToken                               *string
-		ChatProfileID, SimpleProfileID, DecisionProfileID *string
+		Name, AgentID                                                     string
+		Instructions                                                      *string
+		Settings                                                          map[string]json.RawMessage
+		LiveDataAccessToken                                               *string
+		ChatProfileID, SimpleProfileID, DecisionProfileID, ImageProfileID *string
 	}
 	if c.ShouldBindJSON(&in) != nil || strings.TrimSpace(in.Name) == "" || (in.AgentID != "" && uuid.Validate(in.AgentID) != nil) {
 		fail(c, 400, "invalid_request", "请填写客服名称或检查旧智能体 ID")
 		return
 	}
-	for _, pid := range []*string{in.ChatProfileID, in.SimpleProfileID, in.DecisionProfileID} {
+	for _, pid := range []*string{in.ChatProfileID, in.SimpleProfileID, in.DecisionProfileID, in.ImageProfileID} {
 		if pid == nil || *pid == "" {
 			continue
 		}
+		kind := "chat"
+		if pid == in.ImageProfileID {
+			kind = "image"
+		}
 		var valid bool
 		if uuid.Validate(*pid) != nil {
-			fail(c, 400, "invalid_model", "请选择有效的对话模型")
+			fail(c, 400, "invalid_model", "请选择有效的模型")
 			return
 		}
-		if err := a.db.QueryRow(c, "SELECT EXISTS(SELECT 1 FROM model_profiles WHERE id=$1 AND enabled AND kind='chat')", *pid).Scan(&valid); err != nil {
+		if err := a.db.QueryRow(c, "SELECT EXISTS(SELECT 1 FROM model_profiles WHERE id=$1 AND enabled AND kind=$2)", *pid, kind).Scan(&valid); err != nil {
 			fail(c, 500, "database_error", "读取模型失败")
 			return
 		}
 		if !valid {
-			fail(c, 400, "invalid_model", "请选择已启用的对话模型")
+			fail(c, 400, "invalid_model", "请选择类型匹配且已启用的模型")
 			return
 		}
 	}
@@ -110,15 +114,15 @@ func (a *App) saveBotService(c *gin.Context) {
 		return
 	}
 	saveSupportRecord(c, a,
-		"INSERT INTO bot_services(bot_id,name,agent_id,chat_profile_id,simple_profile_id,decision_profile_id,instructions,settings) VALUES($1,$2,$3,NULLIF($4::text,'')::uuid,NULLIF($5::text,'')::uuid,NULLIF($6::text,'')::uuid,$7,$8::jsonb) RETURNING id::text",
-		`UPDATE bot_services SET name=$2,agent_id=COALESCE($3,agent_id),chat_profile_id=CASE WHEN $4::text IS NULL THEN chat_profile_id ELSE NULLIF($4,'')::uuid END,simple_profile_id=CASE WHEN $5::text IS NULL THEN simple_profile_id ELSE NULLIF($5,'')::uuid END,decision_profile_id=CASE WHEN $6::text IS NULL THEN decision_profile_id ELSE NULLIF($6,'')::uuid END,instructions=COALESCE($7,instructions),settings=settings || $8::jsonb || CASE WHEN $8::jsonb ? 'liveData' THEN jsonb_build_object('liveData',COALESCE(settings->'liveData','{}') || ($8::jsonb->'liveData')) ELSE '{}'::jsonb END WHERE bot_id=$1 AND id=$9 RETURNING id::text`,
-		c.Param("id"), strings.TrimSpace(in.Name), nullString(in.AgentID), in.ChatProfileID, in.SimpleProfileID, in.DecisionProfileID, in.Instructions, string(patch))
+		"INSERT INTO bot_services(bot_id,name,agent_id,chat_profile_id,simple_profile_id,decision_profile_id,instructions,settings,image_profile_id) VALUES($1,$2,$3,NULLIF($4::text,'')::uuid,NULLIF($5::text,'')::uuid,NULLIF($6::text,'')::uuid,$7,$8::jsonb,NULLIF($9::text,'')::uuid) RETURNING id::text",
+		`UPDATE bot_services SET name=$2,agent_id=COALESCE($3,agent_id),chat_profile_id=CASE WHEN $4::text IS NULL THEN chat_profile_id ELSE NULLIF($4,'')::uuid END,simple_profile_id=CASE WHEN $5::text IS NULL THEN simple_profile_id ELSE NULLIF($5,'')::uuid END,decision_profile_id=CASE WHEN $6::text IS NULL THEN decision_profile_id ELSE NULLIF($6,'')::uuid END,image_profile_id=CASE WHEN $9::text IS NULL THEN image_profile_id ELSE NULLIF($9,'')::uuid END,instructions=COALESCE($7,instructions),settings=settings || $8::jsonb || CASE WHEN $8::jsonb ? 'liveData' THEN jsonb_build_object('liveData',COALESCE(settings->'liveData','{}') || ($8::jsonb->'liveData')) ELSE '{}'::jsonb END WHERE bot_id=$1 AND id=$10 RETURNING id::text`,
+		c.Param("id"), strings.TrimSpace(in.Name), nullString(in.AgentID), in.ChatProfileID, in.SimpleProfileID, in.DecisionProfileID, in.Instructions, string(patch), in.ImageProfileID)
 }
 
 func (a *App) conversationAgent(ctx context.Context, id string, s agent.Settings) (agent.Settings, string, string, error) {
 	var name, style, instructions, profile, simple, decision string
 	var raw []byte
-	err := a.db.QueryRow(ctx, "SELECT COALESCE(service_name,''),COALESCE(prompt,''),COALESCE(svc.instructions,cfg.instructions,''),COALESCE(cfg.chat_profile_id::text,''),COALESCE(cfg.simple_profile_id::text,''),COALESCE(cfg.decision_profile_id::text,'') ,coalesce(svc.settings,'{}') FROM conversation_support_config cfg JOIN conversations c ON c.id=cfg.id LEFT JOIN bot_services svc ON svc.id=c.service_id WHERE c.id=$1", id).Scan(&name, &style, &instructions, &profile, &simple, &decision, &raw)
+	err := a.db.QueryRow(ctx, "SELECT COALESCE(service_name,''),COALESCE(prompt,''),COALESCE(svc.instructions,cfg.instructions,''),COALESCE(cfg.chat_profile_id::text,''),COALESCE(cfg.simple_profile_id::text,''),COALESCE(cfg.decision_profile_id::text,'') ,coalesce((SELECT id::text FROM model_profiles WHERE id=svc.image_profile_id AND enabled AND kind='image'),''),coalesce(svc.settings,'{}') FROM conversation_support_config cfg JOIN conversations c ON c.id=cfg.id LEFT JOIN bot_services svc ON svc.id=c.service_id WHERE c.id=$1", id).Scan(&name, &style, &instructions, &profile, &simple, &decision, &s.ImageProfileID, &raw)
 	if err != nil {
 		return s, "", "", err
 	}
@@ -190,6 +194,9 @@ func (a *App) servicePatch(c *gin.Context, patch map[string]json.RawMessage, tok
 		} else {
 			delete(live, "accessTokenEnc")
 		}
+		for _, obsolete := range []string{"refreshSeconds", "syncAnnouncements", "announcementKnowledgeBaseId"} {
+			delete(live, obsolete)
+		}
 		delete(live, "hasAccessToken")
 		if token != nil {
 			enc := ""
@@ -228,7 +235,7 @@ func (a *App) servicePatch(c *gin.Context, patch map[string]json.RawMessage, tok
 
 func (a *App) listServices(c *gin.Context) {
 	defaults := a.agentSettings(c)
-	rows, err := a.db.Query(c, `SELECT s.id::text,s.name,coalesce(s.agent_id::text,''),coalesce(s.chat_profile_id::text,''),coalesce(s.simple_profile_id::text,''),coalesce(s.decision_profile_id::text,''),coalesce(s.instructions,a.instructions,''),coalesce(p.prompt,''),s.settings FROM bot_services s LEFT JOIN support_agents a ON a.id=s.agent_id LEFT JOIN personality_presets p ON p.id=a.personality_id WHERE s.bot_id=$1 ORDER BY s.name,s.id`, c.Param("id"))
+	rows, err := a.db.Query(c, `SELECT s.id::text,s.name,coalesce(s.agent_id::text,''),coalesce(s.chat_profile_id::text,''),coalesce(s.simple_profile_id::text,''),coalesce(s.decision_profile_id::text,''),coalesce(s.instructions,a.instructions,''),coalesce(p.prompt,''),coalesce(s.image_profile_id::text,''),s.settings FROM bot_services s LEFT JOIN support_agents a ON a.id=s.agent_id LEFT JOIN personality_presets p ON p.id=a.personality_id WHERE s.bot_id=$1 ORDER BY s.name,s.id`, c.Param("id"))
 	if err != nil {
 		fail(c, 500, "database_error", "读取客服失败")
 		return
@@ -236,9 +243,9 @@ func (a *App) listServices(c *gin.Context) {
 	defer rows.Close()
 	out := []gin.H{}
 	for rows.Next() {
-		var id, name, aid, chat, simple, decision, role, style string
+		var id, name, aid, chat, simple, decision, role, style, imageID string
 		var raw []byte
-		if err = rows.Scan(&id, &name, &aid, &chat, &simple, &decision, &role, &style, &raw); err != nil {
+		if err = rows.Scan(&id, &name, &aid, &chat, &simple, &decision, &role, &style, &imageID, &raw); err != nil {
 			break
 		}
 		s := defaults
@@ -254,7 +261,7 @@ func (a *App) listServices(c *gin.Context) {
 		}
 		s.Normalize()
 		s.LiveData.HasAccessToken = s.LiveData.AccessTokenEnc != ""
-		out = append(out, gin.H{"id": id, "name": name, "agentId": aid, "instructions": role, "chatProfileId": chat, "simpleProfileId": simple, "decisionProfileId": decision, "settings": serviceFields(s)})
+		out = append(out, gin.H{"id": id, "name": name, "agentId": aid, "instructions": role, "chatProfileId": chat, "imageProfileId": imageID, "simpleProfileId": simple, "decisionProfileId": decision, "settings": serviceFields(s)})
 	}
 	if err != nil || rows.Err() != nil {
 		fail(c, 500, "database_error", "读取客服失败")
