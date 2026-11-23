@@ -79,6 +79,10 @@ func (a *App) runJob(ctx context.Context, j agentJob) error {
 		err = a.jobEvaluate(ctx, str("runId"), str("messageId"), str("profileId"))
 	case "summarize":
 		err = a.jobSummarize(ctx, str("conversationId"), str("scope"), str("until"), str("profileId"))
+	case "staff_history":
+		err = a.jobStaffHistory(ctx, str("conversationId"))
+	case "staff_history_answer":
+		err = a.mineStaffAnswer(ctx, str("messageId"), true)
 	case "staff_answer":
 		err = a.jobStaffAnswer(ctx, str("messageId"))
 	case "index_entry":
@@ -322,14 +326,34 @@ type staffMining struct {
 
 // jobStaffAnswer turns an official staff reply into an FAQ candidate.
 func (a *App) jobStaffAnswer(ctx context.Context, messageID string) error {
+	return a.mineStaffAnswer(ctx, messageID, false)
+}
+
+func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool) error {
 	s := a.agentSettings(ctx)
-	if !s.StaffMiningEnabled {
+	if !s.StaffMiningEnabled && !forced {
 		return nil
 	}
 	var convID, botID, content, source string
 	var eventAt time.Time
 	if err := a.db.QueryRow(ctx, "SELECT conversation_id::text,bot_id::text,content,event_type,event_at FROM messages WHERE id=$1", messageID).Scan(&convID, &botID, &content, &source, &eventAt); err != nil {
 		return nil
+	}
+	var mined bool
+	if err := a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM knowledge_candidates WHERE source='staff' AND evidence @> jsonb_build_array(jsonb_build_object('messageId',$1::text)))`, messageID).Scan(&mined); err != nil {
+		return err
+	}
+	if mined {
+		return nil
+	}
+	if source != "HUMAN_REPLY" {
+		var staff bool
+		if err := a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM messages m JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id WHERE m.id=$1 AND cm.is_staff AND NOT m.context_excluded)`, messageID).Scan(&staff); err != nil {
+			return err
+		}
+		if !staff {
+			return nil
+		}
 	}
 	if len([]rune(strings.TrimSpace(content))) < 6 {
 		return nil
@@ -367,9 +391,12 @@ func (a *App) jobStaffAnswer(ctx context.Context, messageID string) error {
 		return nil
 	}
 	evidence := []map[string]any{{"messageId": messageID, "conversationId": convID, "content": agent.TruncateRunes(content, 500), "context": agent.TruncateRunes(strings.Join(lines, "\n"), 1500)}}
-	candID, err := a.createCandidate(ctx, s.LearningKnowledgeBaseID, res.Question, res.Aliases, res.Answer, "staff", evidence, res.Confidence)
+	candID, fresh, err := a.createStaffCandidate(ctx, messageID, s.LearningKnowledgeBaseID, res, evidence)
 	if err != nil {
 		return err
+	}
+	if !fresh {
+		return nil
 	}
 	if s.AutoPublishStaff && res.Confidence >= s.AutoPublishMinConfidence && s.LearningKnowledgeBaseID != "" {
 		_, err = a.approveCandidate(ctx, candID, s.LearningKnowledgeBaseID, res.Question, res.Aliases, res.Answer, "", "自动发布：官方客服高置信度回答")

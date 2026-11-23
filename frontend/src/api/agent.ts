@@ -81,9 +81,11 @@ export interface Gap { id: string; question: string; occurrences: number; status
 export interface Feedback { id: string; source: string; rating: string; comment: string; correctedAnswer: string; createdAt: string; answer: string; question: string; messageId?: string; conversationName: string }
 export interface Memory { id: string; botId: string; botName: string; userId: string; displayName: string; kind: string; content: string; confidence: number; pinned: boolean; source: string; updatedAt: string; lastUsedAt?: string }
 export interface LearningStats { pendingCandidates: number; publishedEntries: number; openGaps: number; feedback7d: number; negativeFeedback7d: number; activeMemories: number; openHandoffs: number }
-export interface HandoffMessage { id: string; direction: string; senderName: string; content: string; eventType: string; eventAt: string }
+export interface HandoffMessage { id: string; direction: string; senderName: string; content: string; eventType: string; eventAt: string; status?: string; deliveryError?: string }
 export interface Handoff { id: string; conversationName: string; conversationType: string; userId: string; displayName: string; messageId?: string; messageContent: string; reason: string; status: string; pausedUntil?: string; createdAt: string; resolvedAt?: string; recent: HandoffMessage[] }
 export interface Member { userId: string; displayName: string; active: boolean; isStaff: boolean; lastSeenAt: string; memoryCount: number; messageCount: number }
+export interface StaffLearningJob { id: string; status: 'pending' | 'processing' | 'completed' | 'failed'; attempts: number; error: string; updatedAt: string }
+export interface StaffLearning { staff: Array<{ userId: string; displayName: string; availableMessages: number }>; style: string; sampleCount: number; sourceMessageIds: string[]; learnedAt: string | null; source: string; job: StaffLearningJob | null }
 export interface EvalCase { id?: string; question: string; expected: string; source?: string; enabled: boolean }
 export interface EvalRun { id: string; name: string; chatProfileName: string; status: string; total: number; completed: number; avgScore?: number; avgLength?: number; error?: string; createdAt: string; finishedAt?: string }
 export interface EvalResult { id: string; question: string; expected: string; answer: string; score?: number; verdict: string; toolsUsed: string[]; latencyMs: number; error?: string }
@@ -122,7 +124,7 @@ export const agentApi = {
   },
   learning: {
     stats: () => request<LearningStats>({ url: '/learning/stats' }, mock.mockLearningStats),
-    candidates: (status = 'pending') => request<Candidate[]>({ url: '/knowledge/candidates', params: { status } }, mock.mockCandidates),
+    candidates: (status = 'pending', conversationId?: string) => request<Candidate[]>({ url: '/knowledge/candidates', params: { status, conversationId: conversationId || undefined } }, mock.mockCandidates),
     approve: (id: string, data: { knowledgeBaseId: string; question: string; aliases: string[]; answer: string; note?: string }) => request<{ entryId: string }>({ method: 'POST', url: `/knowledge/candidates/${id}/approve`, data }),
     reject: (id: string, note: string) => request<{ rejected: boolean }>({ method: 'POST', url: `/knowledge/candidates/${id}/reject`, data: { note } }),
     entries: (params: { knowledgeBaseId?: string; status?: string; q?: string }) => request<Entry[]>({ url: '/knowledge/entries', params }, mock.mockEntries),
@@ -151,6 +153,8 @@ export const agentApi = {
   members: {
     list: (conversationId: string) => request<Member[]>({ url: `/conversations/${conversationId}/members` }),
     setStaff: (conversationId: string, userId: string, isStaff: boolean) => request<{ updated: boolean }>({ method: 'PUT', url: `/conversations/${conversationId}/members/${encodeURIComponent(userId)}`, data: { isStaff } }),
+    staffLearning: (conversationId: string) => request<StaffLearning>({ url: `/conversations/${conversationId}/staff-learning` }),
+    startStaffLearning: (conversationId: string) => request<{ jobId: string; source: string; maxMessages: number }>({ method: 'POST', url: `/conversations/${conversationId}/staff-learning`, data: {} }),
     summaries: (conversationId: string) => request<Array<{ scope: string; summary: string; updatedAt: string }>>({ url: `/conversations/${conversationId}/summaries` }),
   },
   eval: {

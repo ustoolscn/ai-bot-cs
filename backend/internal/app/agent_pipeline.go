@@ -119,7 +119,7 @@ func (a *App) processInbox(ctx context.Context) error {
 	if userContent == "" && len(imageParts) > 0 {
 		userContent = "请分析用户发送的图片并回答。"
 	}
-	in := agentInput{rt: rt, client: client, profileID: profileID, businessPrompt: j.SystemPrompt, senderIsStaff: isStaff,
+	in := agentInput{rt: rt, client: client, profileID: profileID, businessPrompt: j.SystemPrompt + a.staffStylePrompt(ctx, j.ConversationID), senderIsStaff: isStaff,
 		summary: summary, memories: memories, knowledge: kbContext, history: turns, userContent: userContent, imageParts: imageParts, deadline: j.Deadline}
 	out := a.runAgent(ctx, in)
 	steps = append(steps, out.steps...)
@@ -150,7 +150,7 @@ func (a *App) processInbox(ctx context.Context) error {
 		var outID string
 		err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,content,parts,reply_to_message_id,status,event_at,reply_deadline) VALUES('qq',$1,$2,'outbound','AI_RESPONSE',$3,$4::jsonb,$5,'pending',now()+($6 * interval '1 millisecond'),$7) RETURNING id::text`, j.BotID, j.ConversationID, part, string(partsJSON), j.PlatformMessageID, i, j.Deadline).Scan(&outID)
 		if err == nil {
-			_, err = tx.Exec(ctx, "INSERT INTO outbox_tasks(message_id,msg_seq,next_attempt_at) VALUES($1,$2,now()+($3 * interval '1500 milliseconds'))", outID, 2+i, i)
+			_, err = tx.Exec(ctx, "INSERT INTO outbox_tasks(message_id,msg_seq,next_attempt_at) VALUES($1,$2,now()+($3 * interval '1500 milliseconds'))", outID, 1+i, i)
 		}
 	}
 	if err == nil {
@@ -199,10 +199,8 @@ func (a *App) shapeReply(s agent.Settings, conversationType, content string) []s
 	return parts
 }
 
+// Group context is shared; personal memory is scoped separately by sender ID.
 func threadScope(conversationType, senderID string, s agent.Settings) string {
-	if conversationType == "group" && s.GroupThreadMode && senderID != "" {
-		return senderID
-	}
 	return ""
 }
 
@@ -277,7 +275,7 @@ func (a *App) loadHistory(ctx context.Context, conversationID, currentMessageID 
 		if hasContentPart(h.parts, "image") {
 			content = strings.TrimSpace(content + " [图片]")
 		}
-		t := agent.Turn{Role: "user", Name: h.senderName, Content: content, Staff: h.staff}
+		t := agent.Turn{Role: "user", Name: firstNonEmpty(h.senderName, h.senderID), Content: content, Staff: h.staff}
 		if h.direction == "outbound" {
 			t = agent.Turn{Role: "assistant", Content: content}
 		}

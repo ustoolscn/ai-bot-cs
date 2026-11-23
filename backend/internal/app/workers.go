@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"ai-bot/backend/internal/agent"
 	"ai-bot/backend/internal/domain"
 	"ai-bot/backend/internal/knowledge"
 	"ai-bot/backend/internal/qq"
@@ -306,7 +307,11 @@ func (a *App) processOutbox(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if j.Deadline != nil && time.Now().After(*j.Deadline) {
+	if j.EventType == "PROCESSING_ACK" {
+		_, err = a.db.Exec(ctx, "UPDATE outbox_tasks SET status='expired',updated_at=now() WHERE id=$1", j.TaskID)
+		return err
+	}
+	if j.EventType != "HUMAN_REPLY" && j.Deadline != nil && time.Now().After(*j.Deadline) {
 		_, err = a.db.Exec(ctx, "UPDATE outbox_tasks SET status='expired',last_error='reply deadline exceeded',updated_at=now() WHERE id=$1", j.TaskID)
 		_, _ = a.db.Exec(ctx, "UPDATE messages SET status='expired' WHERE id=$1", j.MessageID)
 		if err == nil && j.EventType == "AI_RESPONSE" {
@@ -336,7 +341,20 @@ func (a *App) processOutbox(ctx context.Context) error {
 	if hasContentPart(j.Parts, "ark_ack") {
 		sendCtx, cancelSend = context.WithTimeout(ctx, 5*time.Second)
 	}
-	pid, err := client.Send(sendCtx, domain.OutboundMessage{ID: j.MessageID, Channel: "qq", BotID: j.BotID, ConversationType: j.ConversationType, ConversationID: j.ConversationID, ReplyToMessageID: j.ReplyTo, Text: j.Text, Format: format, Parts: j.Parts, ReplyDeadline: j.Deadline, Sequence: j.Sequence})
+	replyTo := j.ReplyTo
+	active := humanReplyNeedsActive(j, time.Now())
+	if active {
+		replyTo = ""
+	}
+	var mention, mentionName, quote string
+	var raw []byte
+	if j.EventType == "AI_RESPONSE" && j.ConversationType == "group" {
+		if err := a.db.QueryRow(ctx, `SELECT sender_id,sender_name,content,raw_event FROM messages WHERE conversation_id=$1 AND platform_message_id=$2 AND direction='inbound'`, j.ConversationRecordID, j.ReplyTo).Scan(&mention, &mentionName, &quote, &raw); err != nil {
+			return a.retryOutbox(ctx, j, err)
+		}
+		quote = agent.TruncateRunes(quote, 120)
+	}
+	pid, err := client.Send(sendCtx, domain.OutboundMessage{ID: j.MessageID, Channel: "qq", BotID: j.BotID, ConversationType: j.ConversationType, ConversationID: j.ConversationID, ReplyToMessageID: replyTo, MentionUserID: mention, MentionUserName: mentionName, ReferenceMessageID: qq.ReferenceIndex(raw), QuotedText: quote, Text: j.Text, Format: format, Parts: j.Parts, ReplyDeadline: j.Deadline, Sequence: j.Sequence})
 	cancelSend()
 	if err != nil {
 		if hasContentPart(j.Parts, "ark_ack") {
@@ -344,6 +362,9 @@ func (a *App) processOutbox(ctx context.Context) error {
 			_, _ = a.db.Exec(ctx, "UPDATE outbox_tasks SET status='failed',last_error=$1,updated_at=now() WHERE id=$2", err.Error(), j.TaskID)
 			_, _ = a.db.Exec(ctx, "UPDATE messages SET status='failed' WHERE id=$1", j.MessageID)
 			return nil
+		}
+		if active {
+			err = fmt.Errorf("qq_active_send_failed: QQ 主动消息发送失败，请检查主动消息权限、接收设置和平台频率额度：%w", err)
 		}
 		return a.retryOutbox(ctx, j, err)
 	}
@@ -363,6 +384,11 @@ func (a *App) processOutbox(ctx context.Context) error {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// Keep the persisted reply association for history and sequence accounting.
+func humanReplyNeedsActive(j outboxJob, now time.Time) bool {
+	return j.EventType == "HUMAN_REPLY" && (j.ReplyTo == "" || j.Sequence > 5 || (j.Deadline != nil && !now.Before(*j.Deadline)))
 }
 
 const scheduleProcessingAckRetractionSQL = `INSERT INTO message_retractions(message_id)

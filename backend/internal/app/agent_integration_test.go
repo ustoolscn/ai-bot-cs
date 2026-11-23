@@ -90,6 +90,10 @@ func (m *agentMock) handleChat(w http.ResponseWriter, body []byte) {
 		m.mu.Unlock()
 	}
 	switch {
+	case bytes.Contains(body, []byte("分析客服样本的表达风格")):
+		aux("staff_style")
+		reply("语气自然亲切，先说结论，再补充一步操作。", nil)
+		return
 	case bytes.Contains(body, []byte("可以独立理解")):
 		aux("rewrite")
 		reply("gpt-4o 在 vip 分组的价格是多少", nil)
@@ -252,7 +256,7 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 		t.Fatalf("expected tool round trip (2 main calls), got %d", len(calls))
 	}
 	first := string(calls[0])
-	if !strings.Contains(first, "vip 分组") || strings.Contains(first, "BOB_SECRET") || !strings.Contains(first, "get_model_price") || !strings.Contains(first, "vip：异常") {
+	if !strings.Contains(first, "vip 分组") || !strings.Contains(first, "BOB_SECRET") || !strings.Contains(first, "get_model_price") || !strings.Contains(first, "vip：异常") {
 		t.Fatalf("thread context / tools / live snapshot wrong: %s", first)
 	}
 	if !strings.Contains(string(calls[1]), `inputUsdPerMillionTokens\":2`) {
@@ -260,7 +264,7 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	}
 	rows, _ := pool.Query(ctx, `SELECT m.content,t.msg_seq FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.reply_to_message_id='m3' AND m.event_type='AI_RESPONSE' ORDER BY t.msg_seq`)
 	var parts []string
-	expectSeq := 2
+	expectSeq := 1
 	for rows.Next() {
 		var content string
 		var seq int
@@ -301,6 +305,16 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 		err := pool.QueryRow(ctx, `SELECT id::text FROM knowledge_candidates WHERE source='staff' AND status='pending'`).Scan(&candidateID)
 		return candidateID != "", nilIfNoRows(err)
 	})
+	requestJSON(t, client, http.MethodPost, server.URL+"/api/conversations/"+convID+"/staff-learning", map[string]any{}, http.StatusOK)
+	eventually(t, 8*time.Second, "staff history style learned", func() (bool, error) {
+		var n int
+		err := pool.QueryRow(ctx, `SELECT sample_count FROM conversation_staff_styles WHERE conversation_id=$1`, convID).Scan(&n)
+		return n == 2, nilIfNoRows(err)
+	})
+	learned := dataMap(t, requestJSON(t, client, http.MethodGet, server.URL+"/api/conversations/"+convID+"/staff-learning", nil, http.StatusOK))
+	if learned["sampleCount"] != float64(2) || !strings.Contains(fmt.Sprint(learned["style"]), "先说结论") || !strings.Contains(application.staffStylePrompt(ctx, convID), "先说结论") {
+		t.Fatalf("staff learning API: %#v", learned)
+	}
 	approved := requestJSON(t, client, http.MethodPost, server.URL+"/api/knowledge/candidates/"+candidateID+"/approve", map[string]any{
 		"knowledgeBaseId": kbID, "question": "充值多久到账", "aliases": []string{"充值没到账"}, "answer": "一般 5 分钟内到账",
 	}, http.StatusOK)

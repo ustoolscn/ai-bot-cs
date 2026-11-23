@@ -247,3 +247,79 @@ func TestClientSendLocalImageData(t *testing.T) {
 		t.Fatalf("unexpected file_data: %#v", uploadBody)
 	}
 }
+
+func TestClientActiveSendOmitsPassiveFields(t *testing.T) {
+	for _, kind := range []string{"group", "private"} {
+		for _, format := range []string{"", "markdown"} {
+			t.Run(kind+"/"+format, func(t *testing.T) {
+				attempts := 0
+				s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/token" {
+						_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "token"})
+						return
+					}
+					attempts++
+					wantPath := "/v2/groups/target/messages"
+					if kind == "private" {
+						wantPath = "/v2/users/target/messages"
+					}
+					if r.URL.Path != wantPath {
+						t.Errorf("path=%s want=%s", r.URL.Path, wantPath)
+					}
+					var body map[string]any
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					for _, key := range []string{"msg_id", "msg_seq", "event_id"} {
+						if _, ok := body[key]; ok {
+							t.Errorf("active payload contains %s: %#v", key, body)
+						}
+					}
+					if format == "markdown" && attempts == 1 {
+						http.Error(w, "unsupported", 400)
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]string{"id": "active-id"})
+				}))
+				defer s.Close()
+				id, err := NewClient("app", "secret", s.URL, s.URL+"/token").Send(context.Background(), domain.OutboundMessage{ConversationType: kind, ConversationID: "target", Text: "人工回复", Format: format, Sequence: 6})
+				if err != nil || id != "active-id" {
+					t.Fatalf("id=%s err=%v", id, err)
+				}
+			})
+		}
+	}
+}
+
+func TestGroupReferencePayload(t *testing.T) {
+	m := domain.OutboundMessage{ConversationType: "group", ReplyToMessageID: "passive", ReferenceMessageID: "REFIDX_question", MentionUserID: "member", Text: "answer", Sequence: 2}
+	p := textPayload(m)
+	if p["msg_id"] != "passive" || p["message_reference"].(map[string]any)["message_id"] != "REFIDX_question" {
+		t.Fatalf("incorrect reference: %#v", p)
+	}
+	m.ConversationType = "private"
+	if _, ok := textPayload(m)["message_reference"]; ok {
+		t.Fatal("group reference leaked into private reply")
+	}
+}
+
+func TestGroupMarkdownMentionAndNativeQuote(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			json.NewEncoder(w).Encode(map[string]string{"access_token": "t"})
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		json.NewEncoder(w).Encode(map[string]string{"id": "sent"})
+	}))
+	defer server.Close()
+	_, err := NewClient("app", "secret", server.URL, server.URL+"/token").Send(context.Background(), domain.OutboundMessage{ConversationType: "group", ConversationID: "group", ReplyToMessageID: "passive", ReferenceMessageID: "REFIDX_question", MentionUserID: "member", Text: "answer", Format: "markdown", Sequence: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["content"]; ok {
+		t.Fatal("markdown must not also send content")
+	}
+	if body["markdown"].(map[string]any)["content"] != `<qqbot-at-user id="member" /> answer` || body["message_reference"].(map[string]any)["message_id"] != "REFIDX_question" {
+		t.Fatalf("wrong quote or mention: %#v", body)
+	}
+}

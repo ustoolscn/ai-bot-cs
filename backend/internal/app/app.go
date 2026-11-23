@@ -27,7 +27,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -153,6 +152,8 @@ func (a *App) Router() http.Handler {
 	auth.PUT("/tools/:id", a.saveTool)
 	auth.DELETE("/tools/:id", a.deleteTool)
 	auth.POST("/tools/:id/test", a.testTool)
+	auth.GET("/conversations/:id/staff-learning", a.getStaffLearning)
+	auth.POST("/conversations/:id/staff-learning", a.startStaffLearning)
 	auth.GET("/conversations/:id/members", a.listMembers)
 	auth.PUT("/conversations/:id/members/:userId", a.updateMember)
 	auth.GET("/conversations/:id/summaries", a.getSummary)
@@ -1026,16 +1027,7 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 		return err
 	}
 	if !blocked && qq.ShouldQueue(msg.EventType, triggerMode, msg.MentionsBot) {
-		var taskTag pgconn.CommandTag
-		taskTag, err = tx.Exec(ctx, "INSERT INTO inbox_tasks(message_id) VALUES($1) ON CONFLICT DO NOTHING", mid)
-		if err == nil && taskTag.RowsAffected() > 0 {
-			var ackID string
-			err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,content,parts,reply_to_message_id,status,event_at,reply_deadline)
-				VALUES('qq',$1,$2,'outbound','PROCESSING_ACK','👀','[{"type":"ark_ack"}]'::jsonb,$3,'pending',now(),$4) RETURNING id::text`, msg.BotID, cid, msg.PlatformMessageID, msg.ReplyDeadline).Scan(&ackID)
-			if err == nil {
-				_, err = tx.Exec(ctx, "INSERT INTO outbox_tasks(message_id,msg_seq) VALUES($1,1)", ackID)
-			}
-		}
+		_, err = tx.Exec(ctx, "INSERT INTO inbox_tasks(message_id) VALUES($1) ON CONFLICT DO NOTHING", mid)
 	}
 	if err != nil {
 		return err

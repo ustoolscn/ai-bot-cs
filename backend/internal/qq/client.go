@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -58,10 +59,18 @@ func (c *Client) Send(ctx context.Context, m domain.OutboundMessage) (string, er
 	} else {
 		prefix = "/v2/groups/" + url.PathEscape(m.ConversationID)
 	}
-	payload := map[string]any{"content": m.Text, "msg_type": 0, "msg_id": m.ReplyToMessageID, "msg_seq": m.Sequence}
+	payload := textPayload(m)
 	if m.Format == "markdown" {
 		payload["msg_type"] = 2
-		payload["markdown"] = map[string]any{"content": m.Text}
+		content := m.Text
+		if m.ConversationType == "group" && m.ReferenceMessageID == "" && m.QuotedText != "" {
+			content = "回复「" + html.EscapeString(m.QuotedText) + "」\n" + content
+		}
+		if m.ConversationType == "group" && m.MentionUserID != "" {
+			content = `<qqbot-at-user id="` + html.EscapeString(m.MentionUserID) + `" /> ` + content
+		}
+		payload["markdown"] = map[string]any{"content": content}
+		delete(payload, "content")
 	}
 	isAck := hasPartType(m.Parts, "ark_ack")
 	if isAck {
@@ -82,7 +91,8 @@ func (c *Client) Send(ctx context.Context, m domain.OutboundMessage) (string, er
 	}
 	id, err := c.sendPayload(ctx, token, prefix+"/messages", payload)
 	if err != nil && isAck {
-		fallback := map[string]any{"content": "👀", "msg_type": 0, "msg_id": m.ReplyToMessageID, "msg_seq": m.Sequence}
+		fallback := textPayload(m)
+		fallback["content"] = "👀"
 		fallbackID, fallbackErr := c.sendPayload(ctx, token, prefix+"/messages", fallback)
 		if fallbackErr != nil {
 			return "", fmt.Errorf("QQ ARK send failed (%v); text fallback failed: %w", err, fallbackErr)
@@ -90,7 +100,7 @@ func (c *Client) Send(ctx context.Context, m domain.OutboundMessage) (string, er
 		return fallbackID, nil
 	}
 	if err != nil && m.Format == "markdown" {
-		fallback := map[string]any{"content": m.Text, "msg_type": 0, "msg_id": m.ReplyToMessageID, "msg_seq": m.Sequence}
+		fallback := textPayload(m)
 		fallbackID, fallbackErr := c.sendPayload(ctx, token, prefix+"/messages", fallback)
 		if fallbackErr != nil {
 			return "", fmt.Errorf("QQ markdown send failed (%v); text fallback failed: %w", err, fallbackErr)
@@ -98,6 +108,30 @@ func (c *Client) Send(ctx context.Context, m domain.OutboundMessage) (string, er
 		return fallbackID, nil
 	}
 	return id, err
+}
+
+// An absent reply ID explicitly selects active sending, including text fallbacks.
+func textPayload(m domain.OutboundMessage) map[string]any {
+	text := m.Text
+	if m.ConversationType == "group" && m.MentionUserID != "" {
+		name := m.MentionUserName
+		if name == "" {
+			name = m.MentionUserID
+		}
+		text = "@" + name + " " + text
+	}
+	if m.ConversationType == "group" && m.ReferenceMessageID == "" && m.QuotedText != "" {
+		text = "回复「" + m.QuotedText + "」\n" + text
+	}
+	payload := map[string]any{"content": text, "msg_type": 0}
+	if m.ConversationType == "group" && m.ReferenceMessageID != "" {
+		payload["message_reference"] = map[string]any{"message_id": m.ReferenceMessageID}
+	}
+	if m.ReplyToMessageID != "" {
+		payload["msg_id"] = m.ReplyToMessageID
+		payload["msg_seq"] = m.Sequence
+	}
+	return payload
 }
 
 func (c *Client) Retract(ctx context.Context, conversationType, conversationID, messageID string) error {

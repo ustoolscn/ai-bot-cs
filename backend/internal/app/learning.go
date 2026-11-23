@@ -86,7 +86,7 @@ func (a *App) createEntry(ctx context.Context, kbID, question string, aliases []
 func (a *App) listCandidates(c *gin.Context) {
 	status := c.DefaultQuery("status", "pending")
 	queryList(c, a, `SELECT k.id::text,k.knowledge_base_id::text AS "knowledgeBaseId",kb.name AS "knowledgeBaseName",k.question,k.aliases,k.answer,k.source,k.evidence,k.confidence,k.status,k.entry_id::text AS "entryId",k.review_note AS "reviewNote",k.created_at AS "createdAt",k.reviewed_at AS "reviewedAt"
-		FROM knowledge_candidates k LEFT JOIN knowledge_bases kb ON kb.id=k.knowledge_base_id WHERE ($1='all' OR k.status=$1) ORDER BY k.created_at DESC LIMIT 300`, status)
+		FROM knowledge_candidates k LEFT JOIN knowledge_bases kb ON kb.id=k.knowledge_base_id WHERE ($1='all' OR k.status=$1) AND ($2='' OR k.evidence @> jsonb_build_array(jsonb_build_object('conversationId',$2::text))) ORDER BY k.created_at DESC LIMIT 300`, status, c.Query("conversationId"))
 }
 
 func (a *App) approveCandidateAPI(c *gin.Context) {

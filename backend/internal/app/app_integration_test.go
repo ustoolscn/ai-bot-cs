@@ -173,8 +173,8 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	eventually(t, 8*time.Second, "RAG answer delivered to QQ", func() (bool, error) {
 		var sent int
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
-		if err != nil || (sent == 2 && mock.QQSendCount() == 2) {
-			return sent == 2 && mock.QQSendCount() == 2, err
+		if err != nil || (sent == 1 && mock.QQSendCount() == 1) {
+			return sent == 1 && mock.QQSendCount() == 1, err
 		}
 		var inboxStatus, outboxStates string
 		_ = pool.QueryRow(ctx, `SELECT COALESCE(max(status),'') FROM inbox_tasks`).Scan(&inboxStatus)
@@ -194,31 +194,21 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	}
 
 	sends := mock.QQSends()
-	if len(sends) != 2 {
-		t.Fatalf("expected processing ARK and final QQ send, got %d", len(sends))
+	if len(sends) != 1 {
+		t.Fatalf("expected final reply only, got %d", len(sends))
 	}
-	if sends[0].Authorization != "QQBot mock-access-token" || sends[0].Path != "/v2/groups/group-open-id/messages" {
-		t.Fatalf("unexpected QQ request: %+v", sends[0])
+	body := sends[0].Body
+	md, _ := body["markdown"].(map[string]any)
+	if body["msg_id"] != "message-mention" || body["msg_type"] != float64(2) || !strings.Contains(fmt.Sprint(md["content"]), "根据知识库，退款期限是七天。") || !strings.Contains(fmt.Sprint(md["content"]), "qqbot-at-user") {
+		t.Fatalf("unexpected final reply: %#v", body)
 	}
-	if sends[0].Body["msg_type"] != float64(3) || sends[0].Body["msg_seq"] != float64(1) {
-		t.Fatalf("unexpected processing ARK body: %#v", sends[0].Body)
-	}
-	if sends[1].Body["content"] != "根据知识库，退款期限是七天。" || sends[1].Body["msg_id"] != "message-mention" || sends[1].Body["msg_type"] != float64(2) || sends[1].Body["msg_seq"] != float64(2) {
-		t.Fatalf("unexpected QQ markdown body: %#v", sends[1].Body)
-	}
-	eventually(t, 5*time.Second, "processing ARK retracted after final answer", func() (bool, error) {
-		var retracted int
-		err := pool.QueryRow(ctx, `SELECT count(*) FROM message_retractions WHERE status='retracted'`).Scan(&retracted)
-		return retracted == 1 && mock.QQRetractionCount() == 1, err
-	})
-	retractions := mock.QQRetractions()
-	if retractions[0].Authorization != "QQBot mock-access-token" || retractions[0].Path != "/v2/groups/group-open-id/messages/qq-outbound-message-1" {
-		t.Fatalf("unexpected QQ retraction request: %+v", retractions[0])
+	if mock.QQRetractionCount() != 0 {
+		t.Fatal("unexpected placeholder retraction")
 	}
 
 	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, mentionBody)
 	time.Sleep(250 * time.Millisecond)
-	if len(mainChatRequests(mock.ChatRequests())) != 1 || mock.QQSendCount() != 2 {
+	if len(mainChatRequests(mock.ChatRequests())) != 1 || mock.QQSendCount() != 1 {
 		t.Fatalf("duplicate event was processed again: chats=%d sends=%d", mock.ChatCount(), mock.QQSendCount())
 	}
 	var webhookEvents, inboundMessages, agentRuns, outboundMessages int
@@ -229,7 +219,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 		(SELECT count(*) FROM messages WHERE direction='outbound' AND reply_to_message_id='message-mention')`).Scan(&webhookEvents, &inboundMessages, &agentRuns, &outboundMessages); err != nil {
 		t.Fatal(err)
 	}
-	if webhookEvents != 1 || inboundMessages != 1 || agentRuns != 1 || outboundMessages != 2 {
+	if webhookEvents != 1 || inboundMessages != 1 || agentRuns != 1 || outboundMessages != 1 {
 		t.Fatalf("idempotency counts are wrong: events=%d inbound=%d runs=%d outbound=%d", webhookEvents, inboundMessages, agentRuns, outboundMessages)
 	}
 
@@ -243,7 +233,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	eventually(t, 8*time.Second, "always mode ordinary message delivered", func() (bool, error) {
 		var sent int
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
-		return sent == 4 && mock.QQSendCount() == 4 && mock.QQRetractionCount() == 2, err
+		return sent == 2 && mock.QQSendCount() == 2 && mock.QQRetractionCount() == 0, err
 	})
 
 	mock.SetNextChatContent("这是图片回复。\n![结果](https://example.com/result.png)")
@@ -252,14 +242,14 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	eventually(t, 8*time.Second, "image answer delivered to QQ", func() (bool, error) {
 		var sent int
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
-		return sent == 6 && len(mainChatRequests(mock.ChatRequests())) == 3 && mock.QQSendCount() == 6 && mock.QQRetractionCount() == 3, err
+		return sent == 3 && len(mainChatRequests(mock.ChatRequests())) == 3 && mock.QQSendCount() == 3 && mock.QQRetractionCount() == 0, err
 	})
 	imageChatPayload := string(mainChatRequests(mock.ChatRequests())[2])
 	if !strings.Contains(imageChatPayload, `"type":"image_url"`) || !strings.Contains(imageChatPayload, `"url":"data:image/png;base64,`) {
 		t.Fatalf("image was not sent to the multimodal model: %s", imageChatPayload)
 	}
-	imageSend := mock.QQSends()[5]
-	if imageSend.Body["msg_type"] != float64(2) || imageSend.Body["msg_id"] != "message-image" || imageSend.Body["msg_seq"] != float64(2) {
+	imageSend := mock.QQSends()[2]
+	if imageSend.Body["msg_type"] != float64(2) || imageSend.Body["msg_id"] != "message-image" || imageSend.Body["msg_seq"] != float64(1) {
 		t.Fatalf("unexpected QQ image message: %#v", imageSend.Body)
 	}
 	markdown, _ := imageSend.Body["markdown"].(map[string]any)
@@ -382,8 +372,8 @@ func TestGroupMentionQueuesWhenFullEventArrivesFirst(t *testing.T) {
 	if messages != 1 || events != 2 || tasks != 1 || eventType != "GROUP_AT_MESSAGE_CREATE" {
 		t.Fatalf("duplicate group event reconciliation failed: messages=%d events=%d tasks=%d eventType=%q", messages, events, tasks, eventType)
 	}
-	if ackTasks != 1 || ackSequence != 1 {
-		t.Fatalf("processing ARK was not queued exactly once: tasks=%d seq=%d", ackTasks, ackSequence)
+	if ackTasks != 0 || ackSequence != 0 {
+		t.Fatalf("processing ARK must not be queued: tasks=%d seq=%d", ackTasks, ackSequence)
 	}
 	for _, tc := range []struct {
 		name   string
@@ -432,7 +422,7 @@ func TestGroupMentionQueuesWhenFullEventArrivesFirst(t *testing.T) {
 			if tc.name == "mention-only" {
 				wantContent = "mention"
 			}
-			if count != 1 || ackCount != 1 || content != wantContent {
+			if count != 1 || ackCount != 0 || content != wantContent {
 				t.Fatalf("tasks=%d acks=%d content=%q", count, ackCount, content)
 			}
 		})
@@ -527,8 +517,8 @@ func TestModel403ExcludesMessageFromFutureContext(t *testing.T) {
 	eventually(t, 5*time.Second, "normal message delivered after moderation failure", func() (bool, error) {
 		var sent int
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_tasks WHERE status='sent'`).Scan(&sent)
-		if err != nil || sent == 3 {
-			return sent == 3, err
+		if err != nil || sent == 1 {
+			return sent == 1, err
 		}
 		rows, queryErr := pool.Query(ctx, `SELECT m.event_type,t.msg_seq,t.status,COALESCE(t.last_error,'') FROM outbox_tasks t JOIN messages m ON m.id=t.message_id ORDER BY t.created_at`)
 		if queryErr != nil {

@@ -6,7 +6,7 @@
     <el-tabs v-model="tab" @tab-change="onTabChange">
       <el-tab-pane name="candidates">
         <template #label>待审核<span class="count-pill" :class="{ hot: stats?.pendingCandidates }">{{ stats?.pendingCandidates ?? 0 }}</span></template>
-        <div class="toolbar"><el-segmented v-model="candidateStatus" :options="candidateStatusOptions" @change="loadTab" /></div>
+        <div class="toolbar"><el-segmented v-model="candidateStatus" :options="candidateStatusOptions" @change="loadTab" /><el-tag v-if="candidateConversation" closable round @close="clearConversationFilter">只看群：{{ candidateConversationName || candidateConversation }}</el-tag></div>
         <section class="table-panel">
           <el-table v-loading="loading" :data="candidates" :empty-text="candidateStatus === 'pending' ? '没有待审核的知识。在“群与会话 → 成员”里标记官方客服后，他们在群里的回答会自动出现在这里。' : '暂无记录'">
             <el-table-column label="问题 / 答案" min-width="380"><template #default="{ row }"><div class="qa"><strong>{{ row.question }}</strong><span>{{ row.answer }}</span><small v-if="row.aliases?.length">相似问：{{ row.aliases.join('；') }}</small></div></template></el-table-column>
@@ -129,6 +129,10 @@ const knowledgeBases = ref<KnowledgeBase[]>([])
 const defaultKB = ref('')
 const candidates = ref<Candidate[]>([])
 const candidateStatus = ref('pending')
+const candidateConversation = computed(() => typeof route.query.conversationId === 'string' ? route.query.conversationId : '')
+const candidateConversationName = computed(() => typeof route.query.conversationName === 'string' ? route.query.conversationName : '')
+function clearConversationFilter() { router.replace({ query: {} }) }
+watch(candidateConversation, () => { if (tab.value === 'candidates') loadTab() })
 const entries = ref<Entry[]>([])
 const entryQuery = ref('')
 const entryKB = ref('')
@@ -154,7 +158,7 @@ async function reload() {
 async function loadTab() {
   loading.value = true
   try {
-    if (tab.value === 'candidates') candidates.value = await agentApi.learning.candidates(candidateStatus.value)
+    if (tab.value === 'candidates') candidates.value = await agentApi.learning.candidates(candidateStatus.value, candidateConversation.value || undefined)
     if (tab.value === 'entries') entries.value = await agentApi.learning.entries({ knowledgeBaseId: entryKB.value || undefined, status: entryStatus.value, q: entryQuery.value || undefined })
     if (tab.value === 'gaps') gaps.value = await agentApi.learning.gaps()
     if (tab.value === 'feedback') feedback.value = await agentApi.learning.feedback(feedbackRating.value)

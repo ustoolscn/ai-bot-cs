@@ -15,8 +15,8 @@ func (a *App) listHandoffs(c *gin.Context) {
 	queryList(c, a, `SELECT h.id::text,h.bot_id::text AS "botId",h.conversation_id::text AS "conversationId",c.name AS "conversationName",c.type AS "conversationType",
 		h.platform_user_id AS "userId",h.display_name AS "displayName",h.message_id::text AS "messageId",COALESCE(m.content,'') AS "messageContent",
 		h.reason,h.status,h.paused_until AS "pausedUntil",h.created_at AS "createdAt",h.resolved_at AS "resolvedAt",
-		COALESCE((SELECT json_agg(x ORDER BY x."eventAt") FROM (SELECT mm.id::text AS id,mm.direction,mm.sender_name AS "senderName",mm.content,mm.event_type AS "eventType",mm.event_at AS "eventAt"
-			FROM messages mm WHERE mm.conversation_id=h.conversation_id AND mm.event_type<>'PROCESSING_ACK' AND mm.content<>'' AND mm.event_at>h.created_at-interval '30 minutes'
+		COALESCE((SELECT json_agg(x ORDER BY x."eventAt") FROM (SELECT mm.id::text AS id,mm.direction,mm.sender_name AS "senderName",mm.content,mm.event_type AS "eventType",mm.event_at AS "eventAt",mm.status,COALESCE(ot.last_error,'') AS "deliveryError"
+			FROM messages mm LEFT JOIN outbox_tasks ot ON ot.message_id=mm.id WHERE mm.conversation_id=h.conversation_id AND mm.event_type<>'PROCESSING_ACK' AND mm.content<>'' AND mm.event_at>h.created_at-interval '30 minutes'
 			AND (mm.sender_id=h.platform_user_id OR mm.direction='outbound') ORDER BY mm.event_at DESC LIMIT 30) x),'[]') AS recent
 		FROM handoffs h JOIN conversations c ON c.id=h.conversation_id LEFT JOIN messages m ON m.id=h.message_id
 		WHERE ($1='all' OR h.status=$1) ORDER BY h.created_at DESC LIMIT 200`, status)
@@ -31,7 +31,7 @@ func (a *App) resolveHandoff(c *gin.Context) {
 	ok(c, gin.H{"resolved": true})
 }
 
-// humanReply sends an admin-written passive reply to an inbound QQ message.
+// humanReply queues an admin reply; delivery falls back to active sending when needed.
 func (a *App) humanReply(c *gin.Context) {
 	var in struct {
 		Text  string `json:"text"`
@@ -53,23 +53,22 @@ func (a *App) humanReply(c *gin.Context) {
 		window = 60 * time.Minute
 	}
 	deadline := eventAt.Add(window)
-	if time.Now().After(deadline) {
-		fail(c, 400, "reply_window_expired", "已超过 QQ 被动回复时限（群聊 5 分钟、私聊 60 分钟），无法回复该消息")
-		return
-	}
-	var seq int
-	_ = a.db.QueryRow(c, `SELECT COALESCE(max(t.msg_seq),1) FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.conversation_id=$1 AND m.reply_to_message_id=$2`, convID, platformID).Scan(&seq)
-	seq++
-	if seq > 5 {
-		fail(c, 400, "reply_limit", "该消息的被动回复次数已用完")
-		return
-	}
 	tx, err := a.db.Begin(c)
 	if err != nil {
 		fail(c, 500, "database_error", "发送失败")
 		return
 	}
 	defer tx.Rollback(c)
+	// Serialize sequence allocation with other human replies in this conversation.
+	if _, err = tx.Exec(c, "SELECT id FROM conversations WHERE id=$1 FOR UPDATE", convID); err != nil {
+		fail(c, 500, "database_error", "发送失败")
+		return
+	}
+	var seq int
+	if err = tx.QueryRow(c, `SELECT COALESCE(max(t.msg_seq),1)+1 FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.conversation_id=$1 AND m.reply_to_message_id=$2`, convID, platformID).Scan(&seq); err != nil {
+		fail(c, 500, "database_error", "发送失败")
+		return
+	}
 	var outID string
 	err = tx.QueryRow(c, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,content,parts,reply_to_message_id,status,event_at,reply_deadline) VALUES('qq',$1,$2,'outbound','HUMAN_REPLY',$3,'[]'::jsonb,$4,'pending',now(),$5) RETURNING id::text`,
 		botID, convID, strings.TrimSpace(in.Text), platformID, deadline).Scan(&outID)
@@ -108,6 +107,10 @@ func (a *App) updateMember(c *gin.Context) {
 	if err != nil || tag.RowsAffected() == 0 {
 		fail(c, 404, "not_found", "成员不存在")
 		return
+	}
+	_, _ = a.db.Exec(c, "DELETE FROM conversation_staff_styles WHERE conversation_id=$1", c.Param("id"))
+	if in.IsStaff {
+		a.enqueueJob(c, "staff_history", map[string]any{"conversationId": c.Param("id")}, "staff_history:"+c.Param("id"))
 	}
 	a.audit(c, "conversation.member.staff", "conversation_member", c.Param("userId"), map[string]any{"conversationId": c.Param("id"), "isStaff": in.IsStaff})
 	ok(c, gin.H{"updated": true})

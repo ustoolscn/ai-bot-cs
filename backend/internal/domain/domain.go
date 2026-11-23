@@ -30,12 +30,13 @@ type InboundMessage struct {
 }
 
 type OutboundMessage struct {
-	ID, Channel, BotID, ConversationType, ConversationID string
-	ReplyToMessageID, Text                               string
-	Format                                               string
-	Parts                                                []ContentPart
-	ReplyDeadline                                        *time.Time
-	Sequence                                             int
+	ID, Channel, BotID, ConversationType, ConversationID           string
+	ReplyToMessageID, Text                                         string
+	ReferenceMessageID, MentionUserID, MentionUserName, QuotedText string
+	Format                                                         string
+	Parts                                                          []ContentPart
+	ReplyDeadline                                                  *time.Time
+	Sequence                                                       int
 }
 
 type ChatContentPart struct {
