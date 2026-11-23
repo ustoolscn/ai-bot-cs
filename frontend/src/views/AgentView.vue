@@ -140,6 +140,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { Delete, Plus, Refresh, WarningFilled } from '@element-plus/icons-vue'
@@ -201,11 +202,11 @@ function applySettings(value: AgentSettings) {
   clearToken.value = false
 }
 
-async function load() {
+async function load(preserveEdits = false) {
   loadError.value = ''
   try {
     const [s, m, kbs] = await Promise.all([agentApi.settings.get(), api.models.list(), api.knowledge.list()])
-    applySettings(s)
+    if (!preserveEdits || !dirty.value) applySettings(s)
     models.value = m
     knowledgeBases.value = kbs
     nextTick(observeSections)
@@ -257,6 +258,7 @@ onBeforeRouteLeave(async () => {
 })
 onMounted(() => { load(); window.addEventListener('beforeunload', beforeUnload) })
 onBeforeUnmount(() => { observer?.disconnect(); window.removeEventListener('beforeunload', beforeUnload) })
+useAdminEvents(['system_settings','knowledge_bases','model_profiles'], async () => { if (!dirty.value) await load(true) })
 </script>
 
 <style scoped>

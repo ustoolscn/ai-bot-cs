@@ -103,6 +103,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, markRaw, onMounted, ref } from 'vue'
 import { ArrowRight, Bottom, ChatLineSquare, CircleCheck, Headset, Promotion, QuestionFilled, Reading, Refresh, Select, Timer, Top, WarningFilled } from '@element-plus/icons-vue'
 import { api } from '@/api'
@@ -179,8 +180,8 @@ function stageTip(row: PipelineRow) {
   return `上下文 ${label[row.contextStatus || 'success']} · 检索 ${label[row.retrieval.status] || row.retrieval.status}（命中 ${row.retrieval.hit}） · 模型 ${label[row.model.status] || row.model.status}${row.model.name ? `（${row.model.name}）` : ''} · 投递 ${label[row.delivery.status] || row.delivery.status}`
 }
 
-async function load() {
-  loading.value = true
+async function load(background: unknown = false) {
+  if (background !== true) loading.value = true
   overviewError.value = ''
   const [overviewResult, statsResult] = await Promise.allSettled([api.overview(), agentApi.learning.stats()])
   if (overviewResult.status === 'fulfilled') overview.value = overviewResult.value
@@ -190,6 +191,7 @@ async function load() {
   loading.value = false
 }
 onMounted(load)
+useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_calls','handoffs','knowledge_candidates','agent_runs','bots'], () => load(true))
 </script>
 
 <style scoped>

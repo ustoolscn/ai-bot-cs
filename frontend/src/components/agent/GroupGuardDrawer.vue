@@ -23,6 +23,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { request } from '@/api/client'
@@ -39,4 +40,5 @@ async function loadActions(){try{actions.value=await request({url:url+'/actions'
 async function load(){loading.value=true;error.value='';try{form.value=await request({url});await loadActions()}catch(e){error.value=e instanceof Error?e.message:'加载失败'}finally{loading.value=false}}
 async function save(){saving.value=true;try{form.value=await request({url,method:'PUT',data:form.value});ElMessage.success('群规则已保存')}catch(e){ElMessage.error(e instanceof Error?e.message:'保存失败')}finally{saving.value=false}}
 onMounted(load)
+useAdminEvents(['group_guard_actions','group_reviews','agent_jobs'], loadActions)
 </script>

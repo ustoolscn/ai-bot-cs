@@ -27,6 +27,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { Conversation } from '@/types'
@@ -71,6 +72,7 @@ async function remove(item:Schedule){
   try{await request({url:url+'/'+item.id,method:'DELETE'});await load()}catch(e){ElMessage.error(e instanceof Error?e.message:'删除失败')}
 }
 onMounted(load)
+useAdminEvents(['scheduled_posts','bot_services'], load)
 </script>
 <style scoped>
 .drawer-section h3 small{font-weight:400;font-size:13px;color:var(--text-secondary)}

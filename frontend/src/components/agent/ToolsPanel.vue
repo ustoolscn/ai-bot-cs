@@ -47,6 +47,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { onMounted, reactive, ref } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -109,6 +110,7 @@ async function runTest() {
   try { testResult.value = (await agentApi.tools.test(testID, args)).result } catch (e) { testResult.value = e instanceof Error ? e.message : '调用失败' } finally { testing.value = false }
 }
 onMounted(load)
+useAdminEvents(['tool_definitions'], load)
 </script>
 
 <style scoped>

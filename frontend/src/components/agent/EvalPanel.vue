@@ -50,7 +50,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { useAdminEvents } from '@/composables/useAdminEvents'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { Plus, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { agentApi, formatTime, type EvalCase, type EvalResult, type EvalRun } from '@/api/agent'
@@ -69,7 +70,6 @@ const runForm = reactive({ name: '', chatProfileId: '', knowledgeBaseIds: [] as 
 const resultDrawer = ref(false)
 const results = ref<EvalResult[]>([])
 const currentRun = ref<EvalRun | null>(null)
-let timer: ReturnType<typeof setInterval> | undefined
 const enabledCount = computed(() => cases.value.filter(c => c.enabled).length)
 // 与下一行（更早的一次）已完成评测对比
 function delta(index: number, key: 'avgScore' | 'avgLength') {
@@ -92,11 +92,8 @@ async function startRun() {
   try { await agentApi.eval.createRun({ ...runForm }); ElMessage.success('已开始评测'); await load() } catch (e) { ElMessage.error(e instanceof Error ? e.message : '创建失败') }
 }
 async function openRun(row: EvalRun) { currentRun.value = row; results.value = await agentApi.eval.results(row.id); resultDrawer.value = true }
-onMounted(() => {
-  load()
-  timer = setInterval(async () => { if (runs.value.some(r => r.status === 'pending' || r.status === 'running')) runs.value = await agentApi.eval.runs() }, 4000)
-})
-onBeforeUnmount(() => clearInterval(timer))
+onMounted(load)
+useAdminEvents(['eval_cases','eval_runs','eval_results'], async () => { await load(); const id = currentRun.value?.id; if (resultDrawer.value && id) { const updated = await agentApi.eval.results(id); if (currentRun.value?.id === id) results.value = updated } })
 </script>
 
 <style scoped>

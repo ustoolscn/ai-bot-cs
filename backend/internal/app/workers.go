@@ -17,6 +17,8 @@ import (
 
 func (a *App) RunWorkers(ctx context.Context) {
 	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); a.runAdminEvents(ctx) }()
 	for name, fn := range map[string]func(context.Context) error{"group-actions": a.processGuardAction, "group-reviews": a.processGuardReview, "inbox": a.processInbox, "documents": a.processDocument, "outbox": a.processOutbox, "retractions": a.processRetraction, "agent-jobs": a.processAgentJob, "eval": a.processEvalJob} {
 		name, fn := name, fn
 		wg.Add(1)

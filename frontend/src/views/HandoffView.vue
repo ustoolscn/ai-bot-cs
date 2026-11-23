@@ -62,6 +62,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { ChatLineSquare, CircleCheck, Headset, Loading, Promotion, Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -103,12 +104,13 @@ function select(h: Handoff) {
   replyText.value = ''
   nextTick(() => { if (chatBox.value) chatBox.value.scrollTop = chatBox.value.scrollHeight })
 }
-async function load() {
-  loading.value = true
+async function load(background: unknown = false) {
+  if (background !== true) loading.value = true
   try {
     items.value = (await agentApi.handoffs.list(status.value)).map(h => ({ ...h, recent: h.recent || [] }))
     const keep = items.value.find(h => h.id === selectedId.value) || items.value[0]
-    if (keep) select(keep)
+    if (keep && (background !== true || keep.id !== selectedId.value)) select(keep)
+    else if (keep) { if (!keep.recent.some(message => message.id === targetId.value) && !replyText.value.trim()) targetId.value = lastInbound(keep)?.id || '' }
     else selectedId.value = ''
   } catch (e) { ElMessage.error(e instanceof Error ? e.message : '加载失败') } finally { loading.value = false }
 }
@@ -131,6 +133,7 @@ async function resolve(h: Handoff) {
   await load()
 }
 onMounted(load)
+useAdminEvents(['handoffs','messages','outbox_tasks'], () => load(true))
 </script>
 
 <style scoped>

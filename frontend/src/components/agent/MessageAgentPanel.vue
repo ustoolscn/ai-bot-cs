@@ -48,6 +48,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api'
@@ -97,6 +98,7 @@ async function sendReply() {
   replying.value = true
   try { await agentApi.messages.reply(props.messageId, replyText.value.trim(), learn.value); replyText.value = ''; ElMessage.success('已加入发送队列'); setTimeout(load, 1500) } catch (e) { ElMessage.error(e instanceof Error ? e.message : '发送失败') } finally { replying.value = false }
 }
+useAdminEvents(['messages','agent_runs','model_calls','tool_calls','outbox_tasks','message_feedback'], load)
 </script>
 
 <style scoped>

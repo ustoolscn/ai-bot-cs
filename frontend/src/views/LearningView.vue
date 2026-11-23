@@ -108,6 +108,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { onMounted, reactive, ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useShellStore } from '@/stores/shell'
@@ -228,6 +229,7 @@ async function saveMemory() { await agentApi.memories.update(memoryForm.id, { co
 async function removeMemory(row: Memory) { await ElMessageBox.confirm('删除这条记忆？', '确认', { type: 'warning' }); await agentApi.memories.remove(row.id); await loadTab() }
 
 onMounted(reload)
+useAdminEvents(['knowledge_entries','knowledge_candidates','knowledge_gaps','user_memories','message_feedback'], reload)
 </script>
 
 <style scoped>

@@ -76,6 +76,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -199,6 +200,7 @@ async function unblock(row: Member) {
   try { await Promise.all(ids.map(id => agentApi.blacklist.remove(id))); ElMessage.success('已解除'); await reloadMembers() } catch (e) { ElMessage.error(e instanceof Error ? e.message : '解除失败') }
 }
 async function showMemories(row: Member) { memUser.value = row.displayName || row.userId; mems.value = await agentApi.memories.list({ userId: row.userId }); memDialog.value = true }
+useAdminEvents(['conversation_members','blocked_users'], async () => { if (props.modelValue && props.conversationId) await reloadMembers() })
 </script>
 
 <style scoped>

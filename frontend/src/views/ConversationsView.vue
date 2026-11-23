@@ -57,6 +57,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { botServices, type BotService } from "@/api/support"
 import { computed, onMounted, reactive, ref } from 'vue'; import { ChatDotRound, Refresh, Search, User } from '@element-plus/icons-vue'; import { ElMessage } from 'element-plus'; import { api } from '@/api'; import PageHeader from '@/components/PageHeader.vue'; import MembersDrawer from '@/components/agent/MembersDrawer.vue'; import type { Conversation, KnowledgeBase } from '@/types'
 import ScheduleDrawer from "@/components/agent/ScheduleDrawer.vue"
@@ -65,7 +66,7 @@ const guardGroup=ref<Conversation|null>(null)
 const scheduleGroup=ref<Conversation | null>(null)
 const conversations = ref<Conversation[]>([]); const knowledgeBases=ref<KnowledgeBase[]>([]); const search = ref(''); const type = ref('all'); const trigger = ref('all'); const drawer = ref(false); const editing = reactive<Conversation>({} as Conversation)
 const filtered = computed(() => conversations.value.filter(c => (!search.value || `${c.name}${c.id}`.includes(search.value)) && (type.value === 'all' || c.type === type.value) && (trigger.value === 'all' || c.triggerMode === trigger.value)))
-onMounted(load); async function load() { const [items,kbs]=await Promise.all([api.conversations.list(),api.knowledge.list()]);knowledgeBases.value=kbs;await Promise.all(items.map(async item=>{try{const detail=await api.conversations.detail(item.id);item.knowledgeBaseIds=detail.knowledgeBaseIds||[];item.knowledgeBaseNames=item.knowledgeBaseIds.map(id=>kbs.find(kb=>kb.id===id)?.name||id);item.chatProfileId=detail.chatProfileId||'';item.systemPrompt=detail.systemPrompt||item.systemPrompt}catch{/* mock data already contains detail */}}));conversations.value=items }
+onMounted(load); async function load() { const [items,kbs]=await Promise.all([api.conversations.list(),api.knowledge.list()]);knowledgeBases.value=kbs;for (const item of items) item.knowledgeBaseNames=(item.knowledgeBaseIds || []).map(id=>kbs.find(kb=>kb.id===id)?.name || id);conversations.value=items }
 function triggerText(value: string) { return ({ mention_only: '被 @ 时回复', smart: 'AI 判断后回复', disabled: '已停用' } as Record<string,string>)[value] }
 const services = ref<BotService[]>([])
 const loadingServices = ref(false)
@@ -83,4 +84,5 @@ async function edit(row: Conversation) { Object.assign(editing, row, { knowledge
 }
 const membersOpen = ref(false); const membersConv = reactive({ isGroup:false, id: '', name: '', botId: '', botName: '' }); function openMembers(row: Conversation) { Object.assign(membersConv, {isGroup:row.type==='group', id: row.id, name: row.name, botId: row.botId, botName: row.botName }); membersOpen.value = true }
 async function save() { editing.enabled=editing.triggerMode!=='disabled';await api.conversations.save(editing.id, editing); await load(); drawer.value = false; ElMessage.success('会话配置已保存') }
+useAdminEvents(['conversations','messages','conversation_members','bots','knowledge_bases','conversation_knowledge_bases'], load)
 </script>

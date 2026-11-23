@@ -28,6 +28,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { onMounted, reactive, ref } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -63,6 +64,7 @@ async function remove(row: Skill) {
   await load()
 }
 onMounted(load)
+useAdminEvents(['skills'], load)
 </script>
 
 <style scoped>

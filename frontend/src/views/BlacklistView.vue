@@ -57,6 +57,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, onMounted, ref } from 'vue'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -109,6 +110,7 @@ async function remove(row: BlockedUser) {
   } catch { return }
   try { await agentApi.blacklist.remove(row.id); ElMessage.success('已解除'); await load() } catch (e) { ElMessage.error(e instanceof Error ? e.message : '解除失败') }
 }
+useAdminEvents(['blacklist_actions','blocked_users'], load)
 </script>
 
 <style scoped>

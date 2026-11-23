@@ -36,6 +36,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { markRaw, onMounted, reactive, ref } from 'vue'
 import { Connection, Coin, FolderOpened, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -50,11 +51,22 @@ import { applySystemSettings, createSystemSettingsForm } from '@/utils/system-se
 
 const overview=ref<SystemOverview>(createEmptyOverview()),settings=reactive<SystemSettings>(createSystemSettingsForm()),loading=ref(false),saving=ref(false),settingsLoaded=ref(false),settingsError=ref('')
 const services=[{name:'后端服务',detail:'管理端和 QQ 回调的接口',status:'online',icon:markRaw(Connection)},{name:'数据库',detail:'PostgreSQL + pgvector，保存消息和知识索引',status:'online',icon:markRaw(Coin)},{name:'文件存储',detail:'本地存储（DATA_DIR），支持 .txt、.md',status:'online',icon:markRaw(FolderOpened)}]
+let savedSettings = JSON.stringify(settings)
+function rememberSettings(value: SystemSettings) {
+  applySystemSettings(settings, value)
+  savedSettings = JSON.stringify(settings)
+}
 const password=reactive({current:'',next:'',confirm:''})
 onMounted(load)
-async function load(){loading.value=true;settingsError.value='';const [overviewResult,settingsResult]=await Promise.allSettled([api.overview(),api.system.getSettings()]);if(overviewResult.status==='fulfilled')overview.value=overviewResult.value;if(settingsResult.status==='fulfilled'){applySystemSettings(settings,settingsResult.value);settingsLoaded.value=true}else{settingsLoaded.value=false;settingsError.value=settingsResult.reason instanceof Error?settingsResult.reason.message:'无法读取系统设置'}loading.value=false}
-async function saveSettings(){if(!settingsLoaded.value||saving.value)return;saving.value=true;settingsError.value='';try{const saved=await api.system.updateSettings(settings);applySystemSettings(settings,saved);ElMessage.success('已保存，无需重启')}catch(error){settingsError.value=error instanceof Error?error.message:'保存系统设置失败'}finally{saving.value=false}}
+async function load(){loading.value=true;settingsError.value='';const [overviewResult,settingsResult]=await Promise.allSettled([api.overview(),api.system.getSettings()]);if(overviewResult.status==='fulfilled')overview.value=overviewResult.value;if(settingsResult.status==='fulfilled'){rememberSettings(settingsResult.value);settingsLoaded.value=true}else{settingsLoaded.value=false;settingsError.value=settingsResult.reason instanceof Error?settingsResult.reason.message:'无法读取系统设置'}loading.value=false}
+async function saveSettings(){if(!settingsLoaded.value||saving.value)return;saving.value=true;settingsError.value='';try{const saved=await api.system.updateSettings(settings);rememberSettings(saved);ElMessage.success('已保存，无需重启')}catch(error){settingsError.value=error instanceof Error?error.message:'保存系统设置失败'}finally{saving.value=false}}
 async function retryFailed(){const result=await api.system.retryFailed();await load();ElMessage.success(`已重新入队 ${result.queued} 个任务`)}
 function formatUpdatedAt(value:string){const date=new Date(value);return Number.isNaN(date.getTime())?value:date.toLocaleString('zh-CN',{hour12:false})}
 async function changePassword(){if(password.next.length<8){ElMessage.error('新密码至少 8 位');return}if(password.next!==password.confirm){ElMessage.error('两次输入的新密码不一致');return}await api.auth.changePassword(password.current,password.next);Object.assign(password,{current:'',next:'',confirm:''});ElMessage.success('管理员密码已更新')}
+useAdminEvents(['inbox_tasks','outbox_tasks','system_alerts','knowledge_documents','messages'], async () => { overview.value = await api.overview() })
+useAdminEvents(['system_settings'], async () => {
+  if (saving.value || JSON.stringify(settings) !== savedSettings) return
+  const latest = await api.system.getSettings()
+  if (!saving.value && JSON.stringify(settings) === savedSettings) rememberSettings(latest)
+})
 </script>

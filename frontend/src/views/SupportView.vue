@@ -48,6 +48,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, reactive, ref, watch } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -78,10 +79,10 @@ const description = computed(() => ({
 const rows = computed(() => props.mode === 'services' ? services.value : props.mode === 'agents' ? agents.value : presets.value)
 const valid = computed(() => form.name.trim() && (props.mode === 'services' ? form.agentId : props.mode === 'agents' ? form.personalityId : form.prompt.trim()))
 let version = 0
-async function load() {
+async function load(background = false) {
   const current = ++version
   busy.value = true
-  open.value = false
+  if (!background) open.value = false
   error.value = ''
   try {
     const [p, a, s, bots, profiles] = await Promise.all([
@@ -103,7 +104,7 @@ async function load() {
     if (current === version) busy.value = false
   }
 }
-watch(() => [props.mode, props.botId], load, { immediate: true })
+watch(() => [props.mode, props.botId], () => load(), { immediate: true })
 function edit(row?: Personality | SupportAgent | BotService) {
   Object.assign(form, blank(), row)
   open.value = true
@@ -121,4 +122,5 @@ async function save() {
     ElMessage.error(e instanceof Error ? e.message : '保存失败')
   } finally { saving.value = false }
 }
+useAdminEvents(['model_profiles','bot_services','support_agents','personality_presets','bots'], () => load(true))
 </script>

@@ -30,6 +30,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ChatDotSquare, Coin, CopyDocument, Cpu, MagicStick, Plus, VideoPlay } from '@element-plus/icons-vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -45,4 +46,5 @@ onMounted(load);async function load(){models.value=await api.models.list()};func
 function openWorkbench(model:ModelProfile){testingModel.value=model;testForm.input=model.kind==='chat'?'请用一句话介绍你自己。':'这是一段用于测试向量模型的文本。';testForm.systemPrompt='';testResult.value=undefined;testError.value='';workbenchVisible.value=true}
 async function runTest(){if(!testingModel.value||!testForm.input.trim())return;testing.value=true;testResult.value=undefined;testError.value='';try{const result=await api.models.test(testingModel.value.id,{input:testForm.input.trim(),systemPrompt:testingModel.value.kind==='chat'&&testForm.systemPrompt.trim()?testForm.systemPrompt.trim():undefined});testResult.value=result;testingModel.value.latency=result.latencyMs;testingModel.value.status='online'}catch(error){testingModel.value.status='warning';testError.value=sanitizeServiceError(error instanceof Error?error.message:'模型测试失败')||'模型测试失败'}finally{testing.value=false}}
 async function copyText(value:string){await navigator.clipboard?.writeText(value);ElMessage.success('错误信息已复制')}
+useAdminEvents(['model_profiles'], load)
 </script>

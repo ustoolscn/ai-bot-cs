@@ -27,6 +27,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Connection, CopyDocument, Plus, Refresh } from '@element-plus/icons-vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -46,4 +47,5 @@ function edit(bot: Bot) { Object.assign(form, bot); secret.value = ''; dialogVis
 async function save() { await api.bots.save(form, secret.value); await load(); dialogVisible.value = false; ElMessage.success('机器人配置已保存') }
 function copy(value: string) { navigator.clipboard?.writeText(`${location.origin}${value}`); ElMessage.success('回调地址已复制') }
 async function toggle(bot: Bot) { try { await api.bots.save(bot); ElMessage.success(bot.enabled ? '机器人已启用' : '机器人已停用') } catch (e) { bot.enabled = !bot.enabled; ElMessage.error(e instanceof Error ? e.message : '操作失败') } }
+useAdminEvents(['bots','messages','system_alerts'], load)
 </script>

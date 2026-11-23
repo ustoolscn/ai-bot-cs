@@ -76,6 +76,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, onMounted, ref } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -103,6 +104,7 @@ async function refresh() {
 }
 onMounted(load)
 defineExpose({ load })
+useAdminEvents(['live_data_snapshots'], load)
 </script>
 
 <style scoped>

@@ -66,6 +66,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, onMounted, ref } from 'vue'
 import { ArrowRight, Download, Refresh, Search } from '@element-plus/icons-vue'
 import { connection } from '@/utils/connection'
@@ -112,8 +113,8 @@ const traceSteps = computed(() => {
 })
 
 onMounted(load)
-async function load() {
-  loading.value = true
+async function load(background: unknown = false) {
+  if (background !== true) loading.value = true
   loadError.value = ''
   try {
     const result = await api.messages.list()
@@ -135,4 +136,12 @@ function duration(value: number) { return value > 0 ? formatDuration(value) : '�
 function previewUrls(parts?: MessageAttachment[]) { return (parts || []).flatMap(part => part.previewUrl ? [part.previewUrl] : []) }
 function roleText(role: string) { return ({ system: '系统', developer: '开发者', user: '用户', assistant: '助手' } as Record<string, string>)[role] || role }
 function exportRows() { const csv = ['时间,机器人,会话,问题,状态,Token', ...filtered.value.map(m => `"${m.time}","${m.botName}","${m.conversationName}","${m.question.replaceAll('"','""')}","${m.status}","${m.tokens}"`)].join('\n'); const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv'})); a.download='messages.csv'; a.click(); URL.revokeObjectURL(a.href); ElMessage.success('消息记录已导出') }
+useAdminEvents(['messages','message_retractions','agent_runs','model_calls','tool_calls','outbox_tasks','inbox_tasks'], async () => {
+  await load(true)
+  const id = selected.value?.id
+  if (drawer.value && id) {
+    const detail = await api.messages.detail(id)
+    if (drawer.value && selected.value?.id === id) selected.value = detail
+  }
+})
 </script>

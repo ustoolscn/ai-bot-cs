@@ -47,6 +47,7 @@
         <span v-else>暂时连不上后端服务，数据可能不是最新的。请稍后点页面上的“刷新”重试。</span>
         <el-button text size="small" @click="bannerDismissed = true">知道了</el-button>
       </div>
+      <div v-if="reconnecting && !connection.lost" class="connection-banner" role="status">实时连接已断开，正在重新连接…</div>
       <main class="route-view"><router-view /></main>
     </div>
 
@@ -65,6 +66,7 @@
 </template>
 
 <script setup lang="ts">
+import { useAdminEvents, reconnecting } from '@/composables/useAdminEvents'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Expand, Fold, Menu, Search, Setting, SwitchButton, WarningFilled } from '@element-plus/icons-vue'
@@ -121,7 +123,7 @@ watch(() => route.path, (path) => {
   shell.refreshCounts()
 }, { immediate: true })
 
-let timer: number | undefined
-onMounted(() => { window.addEventListener('keydown', onGlobalKey); timer = window.setInterval(() => shell.refreshCounts(), 60000) })
-onBeforeUnmount(() => { window.removeEventListener('keydown', onGlobalKey); window.clearInterval(timer) })
+onMounted(() => { window.addEventListener('keydown', onGlobalKey) })
+onBeforeUnmount(() => { window.removeEventListener('keydown', onGlobalKey) })
+useAdminEvents(['handoffs','knowledge_candidates'], () => shell.refreshCounts(true))
 </script>
