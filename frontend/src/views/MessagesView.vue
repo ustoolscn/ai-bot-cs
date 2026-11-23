@@ -56,6 +56,8 @@
 
         <div v-if="selected.retrievedChunks?.length" class="detail-section"><h3>知识召回详情</h3><div class="retrieved-chunk-list"><article v-for="(chunk,index) in selected.retrievedChunks" :key="chunk.id || index"><strong>片段 {{ index + 1 }}<span v-if="chunk.score !== undefined"> · 相似度 {{ (chunk.score * 100).toFixed(1) }}%</span></strong><p>{{ chunk.content }}</p></article></div></div>
 
+        <MessageAgentPanel :message-id="selected.id" />
+
         <div class="detail-section"><h3>请求信息</h3><dl class="detail-list"><div><dt>事件类型</dt><dd>{{ selected.eventType }}</dd></div><div><dt>模型</dt><dd>{{ selected.model || '未调用' }}</dd></div><div><dt>输入 / 输出 Token</dt><dd>{{ selected.inputTokens }} / {{ selected.outputTokens }}</dd></div><div><dt>知识命中</dt><dd>{{ selected.knowledgeHits }} 条</dd></div><div><dt>QQ 消息 ID</dt><dd class="detail-id"><el-tooltip :content="selected.platformMessageId || '—'"><span>{{ selected.platformMessageId || '—' }}</span></el-tooltip></dd></div><div><dt>投递状态</dt><dd><StatusBadge :status="selected.deliveryStatus" /></dd></div><div v-if="selected.deliveryError"><dt>投递失败原因</dt><dd class="delivery-error">{{ selected.deliveryError }}</dd></div></dl></div>
       </div>
     </el-drawer>
@@ -69,6 +71,7 @@ import { ElMessage } from 'element-plus'
 import { api } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
+import MessageAgentPanel from '@/components/agent/MessageAgentPanel.vue'
 import type { MessageAttachment, MessageRecord, Status } from '@/types'
 import { formatDuration } from '@/utils/format'
 

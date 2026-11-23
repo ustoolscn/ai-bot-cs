@@ -63,6 +63,12 @@ func (a *App) processMaintenance(ctx context.Context) error {
 	if _, err = tx.Exec(ctx, "DELETE FROM webhook_events WHERE created_at<$1", cutoff); err != nil {
 		return fmt.Errorf("清理过期 Webhook 事件失败: %w", err)
 	}
+	if _, err = tx.Exec(ctx, "DELETE FROM agent_jobs WHERE status IN ('completed','failed') AND updated_at<now()-interval '7 days'"); err != nil {
+		return fmt.Errorf("清理后台任务失败: %w", err)
+	}
+	if _, err = tx.Exec(ctx, "DELETE FROM system_alerts WHERE created_at<$1", cutoff); err != nil {
+		return fmt.Errorf("清理告警失败: %w", err)
+	}
 	if _, err = tx.Exec(ctx, "DELETE FROM admin_sessions WHERE expires_at<now()"); err != nil {
 		return fmt.Errorf("清理过期管理会话失败: %w", err)
 	}

@@ -43,12 +43,15 @@ const mobileOpen = ref(false)
 const searchVisible = ref(false)
 const search = ref('')
 const navItems = [
-  { path: '/overview', label: '概览' }, { path: '/bots', label: '机器人' }, { path: '/conversations', label: '会话' }, { path: '/knowledge', label: '知识' }, { path: '/models', label: '模型' },
+  { path: '/overview', label: '概览' }, { path: '/bots', label: '机器人' }, { path: '/conversations', label: '会话' }, { path: '/agent', label: '智能体' }, { path: '/learning', label: '学习' }, { path: '/handoffs', label: '人工台' }, { path: '/knowledge', label: '知识' }, { path: '/models', label: '模型' },
 ]
 const results = [
   { title: '消息记录', subtitle: '查看完整处理链路', path: '/messages', icon: ChatDotRound },
   { title: '机器人管理', subtitle: '配置 QQ 机器人与回调', path: '/bots', icon: Cpu },
   { title: '知识库管理', subtitle: '管理文档与向量索引', path: '/knowledge', icon: Files },
+  { title: '智能体设置', subtitle: '回复风格、记忆、技能工具与网站数据', path: '/agent', icon: Setting },
+  { title: '知识学习', subtitle: '候选知识审核、FAQ、知识缺口与用户记忆', path: '/learning', icon: Files },
+  { title: '人工台', subtitle: '转人工工单与人工回复', path: '/handoffs', icon: ChatDotRound },
   { title: '系统状态', subtitle: '任务队列与服务配置', path: '/system', icon: Setting },
 ]
 const filteredResults = computed(() => !search.value ? results : results.filter((item) => `${item.title}${item.subtitle}`.includes(search.value)))
