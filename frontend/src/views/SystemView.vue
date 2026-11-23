@@ -1,6 +1,6 @@
 <template>
   <div class="content-page">
-    <PageHeader title="系统状态" description="后台服务是否正常、任务有没有堆积，以及全局参数和管理员密码。"><el-button :icon="Refresh" :loading="loading" @click="load">刷新状态</el-button></PageHeader>
+    <PageHeader title="系统状态"><el-button :icon="Refresh" :loading="loading" @click="load">刷新状态</el-button></PageHeader>
     <div class="system-grid">
       <section class="settings-panel">
         <h2>服务状态</h2>
@@ -9,11 +9,22 @@
       <section class="settings-panel">
         <div class="panel-title"><h2>任务队列</h2><el-button size="small" :disabled="!overview.queues.failed" @click="retryFailed">重试失败任务</el-button></div>
         <div class="queue-metrics" style="grid-template-columns: repeat(2, 1fr)"><div><span>待处理消息</span><strong>{{ overview.queues.inbox }}</strong></div><div><span>待发送回复</span><strong>{{ overview.queues.outbox }}</strong></div><div><span>待索引文档</span><strong>{{ overview.queues.knowledge }}</strong></div><div><span>失败任务</span><strong :class="{ 'danger-text': overview.queues.failed }">{{ overview.queues.failed }}</strong></div></div>
-        <p class="muted" style="font-size: 12px">数字持续变大说明处理不过来，可以检查模型响应速度或 QQ 投递是否异常。</p>
+        
+      </section>
+      <section class="settings-panel">
+        <h2>公网地址</h2>
+        <el-form label-position="top" @submit.prevent>
+          <el-form-item label="基础地址"><el-input v-model="settings.publicBaseUrl" placeholder="https://bot.example.com" :disabled="!settingsLoaded" class="mono-input" /></el-form-item>
+          <dl class="addr-list">
+            <div><dt>机器人回调</dt><dd class="mono">{{ base || '—' }}/callbacks/qq/&lt;机器人 ID&gt;</dd></div>
+            <div><dt>临时网页</dt><dd class="mono">{{ base || '—' }}/p/&lt;网页 ID&gt;</dd></div>
+          </dl>
+          <el-button type="primary" :loading="savingBase" :disabled="!settingsLoaded || !baseDirty" @click="saveBase">保存公网地址</el-button>
+        </el-form>
       </section>
       <section class="settings-panel">
         <h2>全局参数</h2>
-        
+
         <el-form label-position="top">
           <el-form-item label="新会话默认带上几条消息"><el-input-number v-model="settings.defaultContextLimit" :min="1" :max="100" :disabled="!settingsLoaded" /><small class="form-tip">包含当前问题；只影响之后新出现的会话，已有会话在“群与会话”里单独调整。</small></el-form-item>
           <el-form-item label="AI 请求超时"><el-input-number v-model="settings.aiRequestTimeoutSeconds" :min="10" :max="600" :disabled="!settingsLoaded" /><span class="unit-label">秒</span><small class="form-tip" style="width: 100%">保存后立即生效。</small></el-form-item>
@@ -37,7 +48,7 @@
 
 <script setup lang="ts">
 import { useAdminEvents } from '@/composables/useAdminEvents'
-import { markRaw, onMounted, reactive, ref } from 'vue'
+import { computed, markRaw, onMounted, reactive, ref } from 'vue'
 import { Connection, Coin, FolderOpened, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api'
@@ -51,14 +62,27 @@ import { applySystemSettings, createSystemSettingsForm } from '@/utils/system-se
 const overview=ref<SystemOverview>(createEmptyOverview()),settings=reactive<SystemSettings>(createSystemSettingsForm()),loading=ref(false),saving=ref(false),settingsLoaded=ref(false),settingsError=ref('')
 const services=[{name:'后端服务',detail:'管理端和 QQ 回调的接口',status:'online',icon:markRaw(Connection)},{name:'数据库',detail:'PostgreSQL + pgvector，保存消息和知识索引',status:'online',icon:markRaw(Coin)},{name:'文件存储',detail:'本地存储（DATA_DIR），支持 .txt、.md',status:'online',icon:markRaw(FolderOpened)}]
 let savedSettings = JSON.stringify(settings)
+const savedBase = ref('')
+const base = computed(() => settings.publicBaseUrl.trim().replace(/\/+$/, ''))
+const baseDirty = computed(() => settings.publicBaseUrl.trim() !== savedBase.value)
+const savingBase = ref(false)
+async function saveBase() {
+  savingBase.value = true
+  try {
+    const saved = await api.system.updateSettings({ ...JSON.parse(savedSettings), publicBaseUrl: settings.publicBaseUrl.trim() })
+    rememberSettings(saved)
+    ElMessage.success('公网地址已保存')
+  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '保存失败') } finally { savingBase.value = false }
+}
 function rememberSettings(value: SystemSettings) {
   applySystemSettings(settings, value)
   savedSettings = JSON.stringify(settings)
+  savedBase.value = settings.publicBaseUrl
 }
 const password=reactive({current:'',next:'',confirm:''})
 onMounted(load)
 async function load(){loading.value=true;settingsError.value='';const [overviewResult,settingsResult]=await Promise.allSettled([api.overview(),api.system.getSettings()]);if(overviewResult.status==='fulfilled')overview.value=overviewResult.value;if(settingsResult.status==='fulfilled'){rememberSettings(settingsResult.value);settingsLoaded.value=true}else{settingsLoaded.value=false;settingsError.value=settingsResult.reason instanceof Error?settingsResult.reason.message:'无法读取系统设置';ElMessage.error('系统参数读取失败：'+settingsError.value)}loading.value=false}
-async function saveSettings(){if(!settingsLoaded.value||saving.value)return;saving.value=true;settingsError.value='';try{const saved=await api.system.updateSettings(settings);rememberSettings(saved);ElMessage.success('已保存，无需重启')}catch(error){settingsError.value=error instanceof Error?error.message:'保存系统设置失败';ElMessage.error(settingsError.value)}finally{saving.value=false}}
+async function saveSettings(){if(!settingsLoaded.value||saving.value)return;saving.value=true;settingsError.value='';try{const saved=await api.system.updateSettings({...settings,publicBaseUrl:savedBase.value});rememberSettings(saved);ElMessage.success('已保存，无需重启')}catch(error){settingsError.value=error instanceof Error?error.message:'保存系统设置失败';ElMessage.error(settingsError.value)}finally{saving.value=false}}
 async function retryFailed(){const result=await api.system.retryFailed();await load();ElMessage.success(`已重新入队 ${result.queued} 个任务`)}
 function formatUpdatedAt(value:string){const date=new Date(value);return Number.isNaN(date.getTime())?value:date.toLocaleString('zh-CN',{hour12:false})}
 async function changePassword(){if(password.next.length<8){ElMessage.error('新密码至少 8 位');return}if(password.next!==password.confirm){ElMessage.error('两次输入的新密码不一致');return}await api.auth.changePassword(password.current,password.next);Object.assign(password,{current:'',next:'',confirm:''});ElMessage.success('管理员密码已更新')}
@@ -69,3 +93,10 @@ useAdminEvents(['system_settings'], async () => {
   if (!saving.value && JSON.stringify(settings) === savedSettings) rememberSettings(latest)
 })
 </script>
+
+<style scoped>
+.addr-list { display: grid; gap: 6px; margin: 0 0 14px; font-size: 13px; }
+.addr-list div { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 8px; }
+.addr-list dt { color: var(--muted); }
+.addr-list dd { margin: 0; overflow-wrap: anywhere; color: var(--text-2); }
+</style>

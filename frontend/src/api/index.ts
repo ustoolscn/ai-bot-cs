@@ -1,10 +1,10 @@
 import { ApiError, mockFallbackEnabled, request } from './client'
 import { connection } from '@/utils/connection'
 import { mockBots, mockConversations, mockKnowledgeBases, mockMessages, mockModels, mockOverview } from '@/mock/data'
-import type { Bot, Conversation, KnowledgeBase, KnowledgeDocument, MessageAttachment, MessageTimeline, MessageRecord, ModelProfile, ModelTestInput, ModelTestResult, Status, SystemOverview, SystemSettings } from '@/types'
+import type { ActiveTask, Bot, Conversation, KnowledgeBase, KnowledgeDocument, MessageAttachment, MessageTimeline, MessageRecord, ModelProfile, ModelTestInput, ModelTestResult, Status, SystemOverview, SystemSettings } from '@/types'
 import { createEmptyOverview } from '@/utils/overview'
 
-type BackendBot = { id: string; name: string; appId: string; enabled: boolean; status: string; lastEventAt?: string; hasSecret: boolean }
+type BackendBot = { id: string; name: string; appId: string; enabled: boolean; status: string; lastEventAt?: string; hasSecret: boolean; callbackUrl?: string }
 type BackendModel = { id: string; name: string; kind: 'chat' | 'embedding'; baseUrl: string; model: string; dimension?: number; enabled: boolean; isDefault: boolean; hasApiKey: boolean; webSearchMode?: 'disabled' | 'qwen' | 'openai' | 'responses' | 'custom'; reasoningEffort?: 'default' | 'none' | 'minimal' | 'low' | 'medium' | 'high'; extraBody?: Record<string, unknown> }
 type BackendConversation = { id: string; botId: string; serviceId?: string; channel: string; platformId: string; type: 'group' | 'private'; name: string; enabled: boolean; triggerMode: 'mention_only' | 'always' | 'smart'; contextLimit: number; systemPrompt: string; chatProfileId?: string; botName: string; updatedAt?: string; messageCount?: number | string; memberCount?: number | string; hasFullMessageEvents?: boolean; knowledgeBaseIds?: string[] }
 type BackendMessagePart = { waveUrl?:string; transcript?:string; type: string; text?: string; filename?: string; contentType?: string; sizeBytes?: number; width?: number; height?: number; previewUrl?: string; url?: string }
@@ -16,7 +16,7 @@ type BackendKnowledgeDocument = { id: string; name: string; status: string; size
 type BackendKnowledgeDetail = BackendKnowledgeBase & { documents: BackendKnowledgeDocument[] }
 type BackendPipeline = { timeline?: MessageTimeline; id: string; time: string; bot: string; conversation: string; content: string; eventType?: string; eventMs: number; contextMs: number; contextLabel?: string; contextStatus?: Status; retrieval: { status: Status; ms: number; hit: string }; model: { status: Status; ms?: number; name?: string }; delivery: { status: Status; ms?: number }; totalMs: number }
 type BackendAlert = { id: string; level: 'critical' | 'warning' | 'info'; time: string; bot: string; content: string; impact: string; recovered: boolean }
-type BackendOverview = { bots: number; conversations: number; messages24h: number; totalEvents?: number; triggered?: number; successful?: number; triggeredConversations?: number; averageLatencyMs?: number; slowCalls?: number; modelCalls?: number; sentDeliveries?: number; totalDeliveries?: number; pendingTasks: number; pendingInbox?: number; pendingOutbox?: number; pendingDocuments?: number; processingDocuments?: number; failedTasks?: number; readyDocuments: number; failedDocuments?: number; totalDocuments?: number; pipelines?: BackendPipeline[]; alerts?: BackendAlert[]; knowledgeQueues?: Array<{ id: string; name: string; progress: number; eta: string }>; version: string }
+type BackendOverview = { bots: number; conversations: number; messages24h: number; totalEvents?: number; triggered?: number; successful?: number; triggeredConversations?: number; averageLatencyMs?: number; slowCalls?: number; modelCalls?: number; sentDeliveries?: number; totalDeliveries?: number; pendingTasks: number; pendingInbox?: number; pendingOutbox?: number; pendingDocuments?: number; processingDocuments?: number; failedTasks?: number; readyDocuments: number; failedDocuments?: number; totalDocuments?: number; pipelines?: BackendPipeline[]; alerts?: BackendAlert[]; knowledgeQueues?: Array<{ id: string; name: string; progress: number; eta: string }>; activeTasks?: ActiveTask[]; queuedTasks?: number; processingTasks?: number; knowledge?: { documentCount: number; entryCount: number; indexedCount: number; indexedRatio: number }; stageAverages?: Array<{ label: string; averageMs: number; samples: number }>; version: string }
 
 const clone = <T>(value: T): T => structuredClone(value)
 const dateText = (value?: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '暂无'
@@ -38,7 +38,7 @@ async function loadOrMock<T>(loader: () => Promise<T>, fallback: T): Promise<T> 
 }
 
 function mapBot(item: BackendBot): Bot {
-  return { id: item.id, name: item.name, appId: item.appId, enabled: item.enabled, status: asStatus(item.status, item.enabled), callbackPath: `/callbacks/qq/${item.id}`, lastEventAt: dateText(item.lastEventAt) }
+  return { id: item.id, name: item.name, appId: item.appId, enabled: item.enabled, status: asStatus(item.status, item.enabled), callbackPath: `/callbacks/qq/${item.id}`, callbackUrl: item.callbackUrl || `/callbacks/qq/${item.id}`, lastEventAt: dateText(item.lastEventAt) }
 }
 function mapModel(item: BackendModel): ModelProfile {
   return { id: item.id, name: item.name, kind: item.kind, provider: 'OpenAI Compatible', model: item.model, baseUrl: item.baseUrl, maskedKey: item.hasApiKey ? '••••••••••••' : '未配置', status: item.enabled ? 'online' : 'offline', latency: 0, dimension: item.dimension, webSearchMode: item.webSearchMode || 'disabled', reasoningEffort: item.reasoningEffort || 'default', extraBody: item.extraBody || {} }
@@ -125,6 +125,20 @@ export const api = {
     view.queues.outbox = raw.pendingOutbox ?? 0
     view.queues.knowledge = (raw.pendingDocuments ?? 0) + (raw.processingDocuments ?? 0)
     view.queues.failed = raw.failedTasks ?? 0
+    if (raw.queuedTasks != null) view.queues.inbox = raw.queuedTasks
+    if (raw.knowledge) {
+      view.knowledge.total = raw.knowledge.documentCount
+      view.knowledge.entries = raw.knowledge.entryCount
+      view.knowledge.progress = Math.round(raw.knowledge.indexedRatio * 100)
+    }
+    view.stageAverages = (raw.stageAverages || []).map(s => ({ label: s.label, ms: s.averageMs, status: 'success', detail: s.samples + ' 次' }))
+    view.active = raw.activeTasks ?? view.pipelines
+      .filter(row => row.timeline && row.timeline.totalMs == null && row.timeline.stages.some(s => s.status === 'processing' || s.status === 'pending'))
+      .map(row => {
+        const stages = row.timeline!.stages
+        const current = stages.find(s => s.status === 'processing') ?? stages.find(s => s.status === 'pending')
+        return { id: row.id, bot: row.bot, conversation: row.conversation || '', sender: '', question: row.content || '', stage: current?.label || '处理中', elapsedMs: stages.at(-1)?.elapsedMs }
+      })
     return view
   }, mockOverview),
   bots: {
@@ -163,6 +177,6 @@ export const api = {
   system: {
     retryFailed: () => request<{ queued: number }>({ method: 'POST', url: '/system/retry-failed' }, { queued: 0 }),
     getSettings: () => request<SystemSettings>({ method: 'GET', url: '/system/settings' }),
-    updateSettings: (settings: SystemSettings) => request<SystemSettings>({ method: 'PUT', url: '/system/settings', data: { defaultContextLimit: settings.defaultContextLimit, aiRequestTimeoutSeconds: settings.aiRequestTimeoutSeconds, messageRetentionDays: settings.messageRetentionDays } }),
+    updateSettings: (settings: SystemSettings) => request<SystemSettings>({ method: 'PUT', url: '/system/settings', data: { publicBaseUrl: settings.publicBaseUrl, defaultContextLimit: settings.defaultContextLimit, aiRequestTimeoutSeconds: settings.aiRequestTimeoutSeconds, messageRetentionDays: settings.messageRetentionDays } }),
   },
 }

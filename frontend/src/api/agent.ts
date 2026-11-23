@@ -12,6 +12,7 @@ export interface LiveDataSettings {
   announcementKnowledgeBaseId: string
   injectSnapshot: boolean
   priceNote: string
+  statusPageUrl?: string
 }
 export interface AgentSettings {
   personaName: string
@@ -103,7 +104,8 @@ export interface Entry { id: string; knowledgeBaseId: string; knowledgeBaseName:
 export interface Gap { id: string; question: string; occurrences: number; status: string; firstSeenAt: string; lastSeenAt: string }
 export interface Feedback { id: string; source: string; rating: string; comment: string; correctedAnswer: string; createdAt: string; answer: string; question: string; messageId?: string; conversationName: string }
 export interface MemoryMember { botId: string; botName: string; conversationId: string; conversationName: string; conversationType: string; userId: string; displayName: string; count: number }
-export interface Memory { id: string; botId: string; botName: string; userId: string; displayName: string; kind: string; content: string; hasEmbedding: boolean; confidence: number; pinned: boolean; source: string; updatedAt: string; lastUsedAt?: string }
+export interface Memory { id: string; botId: string; botName: string; userId: string; displayName: string; kind: string; content: string; hasEmbedding: boolean; confidence: number; pinned: boolean; source: string; updatedAt: string; lastUsedAt?: string; eventAt?: string }
+export interface UserProfile { conversationId: string; userId: string; content: string; updatedAt?: string }
 export interface LearningStats { pendingCandidates: number; publishedEntries: number; openGaps: number; feedback7d: number; negativeFeedback7d: number; activeMemories: number; openHandoffs: number }
 export interface HandoffMessage { id: string; direction: string; senderName: string; content: string; eventType: string; eventAt: string; status?: string; deliveryError?: string }
 export interface Handoff { id: string; conversationName: string; conversationType: string; userId: string; displayName: string; messageId?: string; messageContent: string; reason: string; status: string; pausedUntil?: string; createdAt: string; resolvedAt?: string; recent: HandoffMessage[] }
@@ -167,6 +169,14 @@ export const agentApi = {
     list: (params: { userId?: string; botId?: string; conversationId?: string; q?: string }) => request<Memory[]>({ url: '/memories', params }),
     update: (id: string, data: { content: string; kind: string; pinned: boolean }) => request<{ updated: boolean }>({ method: 'PUT', url: `/memories/${id}`, data }),
     remove: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/memories/${id}` }),
+    profile: (conversationId: string, userId: string) => {
+      const url = `/conversations/${conversationId}/user-profiles/${encodeURIComponent(userId)}`
+      return {
+        get: () => request<UserProfile>({ url }),
+        save: (content: string) => request<UserProfile>({ method: 'PUT', url, data: { content } }),
+        clear: () => request<UserProfile>({ method: 'DELETE', url }),
+      }
+    },
   },
   handoffs: {
     list: (status = 'open') => request<Handoff[]>({ url: '/handoffs', params: { status } }, status === 'resolved' ? [] : mock.mockHandoffs),

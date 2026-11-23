@@ -15,9 +15,10 @@ const router = createRouter({
       { path: 'messages', name: 'messages', component: () => import('@/views/MessagesView.vue') },
       { path: 'knowledge', name: 'knowledge', component: () => import('@/views/KnowledgeView.vue') },
       { path: 'models', name: 'models', component: () => import('@/views/ModelsView.vue') },
-      { path: 'agent', name: 'agent', component: () => import('@/views/SupportView.vue'), props: { mode: 'agents' } },
-      { path: 'personalities', name: 'personalities', component: () => import('@/views/SupportView.vue'), props: { mode: 'personalities' } },
-      { path: 'bots/:id/services', name: 'bot-services', component: () => import('@/views/SupportView.vue'), props: route => ({ mode: 'services', botId: route.params.id }) },
+      { path: 'agent', redirect: '/bots' },
+      { path: 'personalities', redirect: '/bots' },
+      { path: 'bots/:id/services', name: 'bot-services', component: () => import('@/views/SupportView.vue'), props: route => ({ botId: route.params.id }) },
+      { path: 'bots/:id/services/:serviceId', name: 'bot-service', component: () => import('@/views/ServiceDetailView.vue'), props: route => ({ botId: route.params.id, serviceId: route.params.serviceId }) },
       { path: 'shared-settings', name: 'shared-settings', component: () => import('@/views/AgentView.vue') },
       { path: 'memories', name: 'memories', component: () => import('@/views/MemoriesView.vue') },
       { path: 'learning', redirect: to => to.query.tab === 'memories'

@@ -1,5 +1,5 @@
 import { markRaw, type Component } from 'vue'
-import { ChatDotRound, ChatLineSquare, CircleClose, Clock, Collection, Connection, Cpu, DataAnalysis, Headset, MagicStick, Monitor, Odometer, Reading, Setting } from '@element-plus/icons-vue'
+import { ChatDotRound, ChatLineSquare, CircleClose, Clock, Collection, Connection, Cpu, DataAnalysis, Headset, Monitor, Odometer, Reading, Setting } from '@element-plus/icons-vue'
 
 export interface NavItem { path: string; label: string; description: string; icon: Component; badge?: 'handoffs' | 'candidates'; keywords?: string }
 export interface NavGroup { title: string; items: NavItem[] }
@@ -18,9 +18,8 @@ export const navGroups: NavGroup[] = [
     { path: '/blacklist', label: '黑名单', description: '拉黑的群成员，机器人不理睬并可自动踢出', icon: icon(CircleClose), keywords: '拉黑 踢人' },
   ] },
   { title: 'AI 客服', items: [
-    { path: '/bots', label: '机器人与客服', description: 'QQ 机器人接入，以及每个机器人下的 AI 客服', icon: icon(Connection), keywords: 'AppID 回调 AI 客服' },
-    { path: '/agent', label: '智能体与性格', description: '客服职责和可复用的说话风格', icon: icon(MagicStick), keywords: '性格 人设 职责' },
-    { path: '/shared-settings', label: '通用设置', description: '回复长度、上下文、记忆、辅助模型、实时数据、技能与工具', icon: icon(Setting), keywords: '技能 工具 实时数据 转人工 记忆' },
+    { path: '/bots', label: '机器人与客服', description: 'QQ 机器人接入和每个 AI 客服的人设、网站、工具', icon: icon(Connection), keywords: 'AppID 回调 AI 客服 人设 性格 智能体 实时数据 网站 技能 工具 转人工' },
+    { path: '/shared-settings', label: '通用设置', description: '回复长度、上下文与记忆、辅助模型、技能与工具库', icon: icon(Setting), keywords: '技能 工具 记忆 上下文' },
   ] },
   { title: '知识与记忆', items: [
     { path: '/knowledge', label: '知识库', description: '文档、知识问答、待审核、没答上的问题和反馈', icon: icon(Collection), badge: 'candidates', keywords: '审核 FAQ 文档 上传 缺口' },

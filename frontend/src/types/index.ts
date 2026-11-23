@@ -10,6 +10,7 @@ export interface Bot {
   status: Status
   enabled: boolean
   callbackPath: string
+  callbackUrl: string
   lastEventAt: string
 }
 
@@ -175,17 +176,31 @@ export interface AlertItem {
   recovered: boolean
 }
 
+/** 正在处理中的一条消息：哪个机器人在哪个群回复谁的什么问题，走到哪一步。 */
+export interface ActiveTask {
+  id: string
+  bot: string
+  conversation: string
+  sender: string
+  question: string
+  stage: string
+  elapsedMs?: number | null
+}
+
 export interface SystemOverview {
+  active: ActiveTask[]
   messages24h: number | null
   successRate: number | null
   metrics: Array<{ label: string; value: string; sub?: string; trend?: string; direction?: 'up' | 'down'; good?: boolean }>
   pipelines: PipelineRow[]
   alerts: AlertItem[]
-  knowledge: { progress: number; total: number; completed: number; indexing: number; failed: number; pending: number; queues: Array<{ name: string; progress: number; eta: string }> }
+  stageAverages: TimingStage[]
+  knowledge: { entries: number | null; progress: number; total: number; completed: number; indexing: number; failed: number; pending: number; queues: Array<{ name: string; progress: number; eta: string }> }
   queues: { inbox: number; outbox: number; knowledge: number; failed: number }
 }
 
 export interface SystemSettings {
+  publicBaseUrl: string
   defaultContextLimit: number
   aiRequestTimeoutSeconds: number
   messageRetentionDays: number

@@ -2,6 +2,7 @@ import type { SystemOverview } from '@/types'
 
 export function createEmptyOverview(): SystemOverview {
   return {
+    active: [],
     messages24h: null,
     successRate: null,
     metrics: [
@@ -14,7 +15,8 @@ export function createEmptyOverview(): SystemOverview {
     ],
     pipelines: [],
     alerts: [],
-    knowledge: { progress: 0, total: 0, completed: 0, indexing: 0, failed: 0, pending: 0, queues: [] },
+    stageAverages: [],
+    knowledge: { entries: null, progress: 0, total: 0, completed: 0, indexing: 0, failed: 0, pending: 0, queues: [] },
     queues: { inbox: 0, outbox: 0, knowledge: 0, failed: 0 },
   }
 }

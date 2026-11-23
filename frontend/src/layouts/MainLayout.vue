@@ -91,7 +91,7 @@ const filteredResults = computed(() => {
 watch(search, () => { activeIndex.value = 0 })
 
 // 子页面（例如群详情、机器人的客服）也让对应的导航项保持高亮。
-const extraMatches: Record<string, string[]> = { '/bots': ['/bots'], '/agent': ['/agent', '/personalities'], '/conversations': ['/conversations'] }
+const extraMatches: Record<string, string[]> = { '/bots': ['/bots'], '/conversations': ['/conversations'] }
 function isActive(path: string) { return (extraMatches[path] || [path]).some(prefix => route.path === prefix || route.path.startsWith(prefix + '/')) }
 function badgeCount(kind: 'handoffs' | 'candidates') { return kind === 'handoffs' ? shell.openHandoffs : shell.pendingCandidates }
 function toggleCollapsed() { collapsed.value = !collapsed.value; localStorage.setItem('sidebar-collapsed', collapsed.value ? '1' : '0') }

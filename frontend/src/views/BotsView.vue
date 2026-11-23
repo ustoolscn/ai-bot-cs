@@ -1,17 +1,17 @@
 <template>
   <div class="content-page">
-    <PageHeader title="机器人与客服" description="接入的 QQ 机器人。把回调地址填到 QQ 开放平台，机器人才能收到消息；每个机器人下可以配置多个 AI 客服，再到群里选择由谁接待。"><el-button :icon="Refresh" @click="load">刷新状态</el-button><el-button type="primary" :icon="Plus" @click="openCreate">添加机器人</el-button></PageHeader>
+    <PageHeader title="机器人与客服"><el-button :icon="Refresh" @click="load">刷新状态</el-button><el-button type="primary" :icon="Plus" @click="openCreate">添加机器人</el-button></PageHeader>
     <div class="stat-strip"><div><span>机器人</span><strong>{{ bots.length }}</strong></div><div><span>在线</span><strong>{{ bots.filter(b => b.status === 'online').length }}</strong></div><div><span>最近 24 小时消息</span><strong>{{ todayMessages }}</strong></div><div><span>成功回复率</span><strong>{{ averageSuccessRate }}</strong></div></div>
     <div v-if="bots.length" class="entity-list">
       <div v-for="bot in bots" :key="bot.id" class="entity-row">
         <div class="entity-name"><span class="entity-icon"><el-icon><Connection /></el-icon></span><div><strong>{{ bot.name }} <StatusBadge :status="bot.enabled ? bot.status : 'offline'" :text="bot.enabled ? undefined : '已停用'" /></strong><small>AppID {{ bot.appId }}</small></div></div>
         <div class="entity-facts">
           <div><span>最近收到消息</span><strong>{{ bot.lastEventAt || '—' }}</strong></div>
-          <div><span>回调地址</span><strong class="mono" :title="bot.callbackPath">{{ bot.callbackPath }}</strong></div>
+          <div><span>回调地址</span><strong v-if="isAbsolute(bot.callbackUrl)" class="mono" :title="bot.callbackUrl">{{ bot.callbackUrl }}</strong><el-button v-else link type="warning" @click="$router.push('/system')">先配置公网地址</el-button></div>
         </div>
         <div class="entity-actions">
           <el-tooltip :content="bot.enabled ? '停用后不再回复任何消息' : '启用机器人'"><el-switch v-model="bot.enabled" :aria-label="'启用 ' + bot.name" @change="toggle(bot)" /></el-tooltip>
-          <el-button :icon="CopyDocument" @click="copy(bot.callbackPath)">复制回调</el-button>
+          <el-button :icon="CopyDocument" :disabled="!isAbsolute(bot.callbackUrl)" @click="copy(bot.callbackUrl)">复制回调</el-button>
           <el-button @click="edit(bot)">接入配置</el-button>
           <el-button type="primary" plain @click="$router.push({ name: 'bot-services', params: { id: bot.id } })">AI 客服</el-button>
         </div>
@@ -45,7 +45,8 @@ function openCreate() { Object.assign(form, { id: '', name: '', appId: '', enabl
 function edit(bot: Bot) { Object.assign(form, bot); secret.value = ''; dialogVisible.value = true }
 const saving = ref(false)
 async function save() { saving.value = true; try { await api.bots.save(form, secret.value); await load(); dialogVisible.value = false; ElMessage.success('机器人配置已保存') } catch (e) { ElMessage.error(e instanceof Error ? e.message : '保存失败') } finally { saving.value = false } }
-function copy(value: string) { navigator.clipboard?.writeText(`${location.origin}${value}`); ElMessage.success('回调地址已复制') }
+const isAbsolute = (url: string) => /^https?:\/\//.test(url)
+function copy(value: string) { navigator.clipboard?.writeText(value); ElMessage.success('回调地址已复制') }
 async function toggle(bot: Bot) { try { await api.bots.save(bot); ElMessage.success(bot.enabled ? '机器人已启用' : '机器人已停用') } catch (e) { bot.enabled = !bot.enabled; ElMessage.error(e instanceof Error ? e.message : '操作失败') } }
 useAdminEvents(['bots','messages','system_alerts'], load)
 </script>

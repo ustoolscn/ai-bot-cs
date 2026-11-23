@@ -6,7 +6,7 @@
         <span><el-button size="small" :icon="Refresh" :loading="refreshing" :disabled="!!blockedReason" @click="refresh">立即同步</el-button></span>
       </el-tooltip>
     </div>
-    <p class="muted" style="margin-bottom: 12px">{{ blockedReason || '保存设置后，机器人会按刷新间隔自动同步；也可以手动同步一次。' }}</p>
+    <p v-if="blockedReason" class="muted" style="margin-bottom: 12px">{{ blockedReason }}</p>
     <template v-if="data">
       <dl class="detail-list">
         <div><dt>站点</dt><dd>{{ data.systemName || '—' }}</dd></div>
@@ -83,7 +83,8 @@ import { ElMessage } from 'element-plus'
 import { agentApi, formatTime, type LiveData } from '@/api/agent'
 
 // blockedReason：设置有未保存的修改或实时数据未启用时，先不允许同步，避免后端按旧配置同步失败（400）。
-const props = defineProps<{ blockedReason?: string }>()
+const props = defineProps<{ blockedReason?: string; source?: { get: () => Promise<LiveData>; refresh: () => Promise<LiveData> } }>()
+const api = () => props.source || agentApi.liveData
 
 const serviceWindows = [{ key: 'hour', label: '最近 24 小时' }, { key: 'day', label: '最近 90 天' }] as const
 function metric(value: number | null, unit: string) { return value == null ? '暂无数据' : value + unit }
@@ -95,12 +96,12 @@ const filteredModels = computed(() => (data.value?.models || []).filter(m => !fi
 function statusText(s: number) { return ({ 1: '正常', 0: '异常', 2: '检测中', 3: '维护中' } as Record<number, string>)[s] || '未知' }
 async function load() {
   loading.value = true
-  try { data.value = await agentApi.liveData.get() } catch (e) { ElMessage.error(e instanceof Error ? e.message : '加载失败') } finally { loading.value = false }
+  try { data.value = await api().get() } catch (e) { ElMessage.error(e instanceof Error ? e.message : '加载失败') } finally { loading.value = false }
 }
 async function refresh() {
   if (props.blockedReason) return
   refreshing.value = true
-  try { data.value = await agentApi.liveData.refresh(); ElMessage.success('已同步') } catch (e) { ElMessage.error(e instanceof Error ? e.message : '同步失败') } finally { refreshing.value = false }
+  try { data.value = await api().refresh(); ElMessage.success('已同步') } catch (e) { ElMessage.error(e instanceof Error ? e.message : '同步失败') } finally { refreshing.value = false }
 }
 onMounted(load)
 defineExpose({ load })

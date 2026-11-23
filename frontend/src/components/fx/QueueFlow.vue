@@ -1,0 +1,33 @@
+<template>
+  <div class="queue-flow">
+    <template v-for="(node, index) in nodes" :key="node.label">
+      <div class="node" :class="[node.tone, { busy: node.count > 0 }]">
+        <strong><CountUp :value="node.count" /></strong>
+        <span>{{ node.label }}</span>
+      </div>
+      <span v-if="index < nodes.length - 1" class="pipe" :class="{ moving: node.count > 0 || nodes[index + 1].count > 0 }"><i /></span>
+    </template>
+  </div>
+</template>
+
+<script setup lang="ts">
+// 任务队列：节点之间有任务流动时，连线上的点在移动；数量变化时数字过渡。
+import CountUp from './CountUp.vue'
+
+defineProps<{ nodes: Array<{ label: string; count: number; tone?: string }> }>()
+</script>
+
+<style scoped>
+.queue-flow { display: flex; align-items: center; gap: 0; }
+.node { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 76px; padding: 10px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); transition: border-color .3s var(--ease), background .3s var(--ease); }
+.node strong { font-size: 20px; font-weight: 600; line-height: 1.2; }
+.node > span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.node.busy { border-color: var(--primary-soft, #bcd5f5); background: var(--primary-light); }
+.node.busy strong { color: var(--primary-text); }
+.node.danger.busy { border-color: #f0c4c4; background: var(--danger-light); }
+.node.danger.busy strong { color: var(--danger); }
+.pipe { position: relative; flex: 1; min-width: 16px; height: 2px; background: var(--line); overflow: hidden; }
+.pipe.moving { background: transparent; }
+.pipe.moving i { position: absolute; inset: 0 0 0 -12px; background: repeating-linear-gradient(90deg, var(--primary) 0 6px, transparent 6px 12px); animation: march .6s linear infinite; }
+@keyframes march { from { transform: translateX(-12px); } to { transform: translateX(0); } }
+</style>

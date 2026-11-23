@@ -1,6 +1,6 @@
 <template>
   <div class="content-page page-fill">
-    <PageHeader title="用户记忆" description="机器人在对话里记住的用户信息，例如分组、接入方式、常遇到的问题。先选会话，再选用户。是否记忆、每次带几条，在“通用设置 → 上下文与记忆”里调整。">
+    <PageHeader title="用户记忆">
       <el-button :icon="Refresh" @click="reload">刷新</el-button>
     </PageHeader>
         <div class="toolbar">
@@ -14,6 +14,17 @@
           <span class="spacer" />
           <el-button type="danger" plain :style="{ visibility: selectedIds.length ? 'visible' : 'hidden' }" :loading="deleting" @click="deleteSelected('memories', '用户记忆')">删除选中的 {{ selectedIds.length }} 条</el-button>
         </div>
+        <section v-if="currentMember" class="panel profile-panel" v-loading="profileLoading">
+          <header>
+            <h2>用户档案</h2>
+            <span class="muted">约 {{ profileTokens }} / 2000 token<template v-if="profile.updatedAt"> · {{ formatTime(profile.updatedAt) }} 更新</template></span>
+            <span class="spacer" />
+            <el-button v-if="profileSaved" size="small" type="danger" plain @click="clearProfile">清空</el-button>
+            <el-button size="small" type="primary" :disabled="profileDraft === profileSaved" :loading="profileSaving" @click="saveProfile">保存档案</el-button>
+          </header>
+          <div class="token-meter" :class="{ over: profileTokens > 2000 }"><i :style="{ transform: `scaleX(${Math.min(1, profileTokens / 2000)})` }" /></div>
+          <el-input v-model="profileDraft" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" placeholder="还没有档案。对话后会自动总结，也可以直接填写。" />
+        </section>
         <section class="table-panel">
           <el-table row-key="id" height="100%" :key="JSON.stringify([memoryGroup,memoryUser,memoryQuery])" v-loading="loading" :data="memories" @selection-change="(rows: {id:string}[]) => selectRows(rows)" :empty-text="!directory.length ? '暂无用户记忆' : !memoryGroup ? '请选择群聊或私聊' : !memoryUser ? '请选择该会话中的用户' : '暂无匹配的记忆'">
             <el-table-column type="selection" reserve-selection width="48" />
@@ -23,6 +34,7 @@
             <el-table-column label="记忆向量" width="105">
               <template #default="{ row }"><span :class="{ faint: row.hasEmbedding !== true }">{{ row.hasEmbedding === true ? '已生成' : row.hasEmbedding === false ? '未生成' : '—' }}</span></template>
             </el-table-column>
+            <el-table-column label="发生时间" width="150"><template #default="{ row }">{{ formatTime(row.eventAt || row.updatedAt) }}</template></el-table-column>
             <el-table-column label="来源" width="80"><template #default="{ row }">{{ memorySourceText[row.source] || row.source }}</template></el-table-column>
             <el-table-column label="更新" width="150"><template #default="{ row }">{{ formatTime(row.updatedAt) }}</template></el-table-column>
             <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="editMemory(row)">编辑</el-button><el-button link type="danger" @click="removeMemory(row)">删除</el-button></template></el-table-column>
@@ -46,7 +58,7 @@ import { onMounted, reactive, ref, computed, watch } from 'vue'
 import { Search, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
-import { agentApi, formatTime, type Memory, type MemoryMember } from '@/api/agent'
+import { agentApi, formatTime, type Memory, type MemoryMember, type UserProfile } from '@/api/agent'
 const kindText: Record<string, string> = { fact: '事实', preference: '偏好', issue: '问题', profile: '资料' }
 const memorySourceText: Record<string, string> = { extracted: '自动', tool: 'AI 记录', admin: '手动' }
 const loading = ref(false)
@@ -94,6 +106,40 @@ async function loadMemoryTab() {
   if (version === memoryRequest) memories.value = rows
 }
 
+// 用户档案：AI 每次对话后整体改写，上限约 2000 token
+const currentMember = computed(() => memoryMembers.value.find(m => m.userId === memoryUser.value))
+const profile = ref<Partial<UserProfile>>({})
+const profileDraft = ref('')
+const profileSaved = ref('')
+const profileLoading = ref(false)
+const profileSaving = ref(false)
+// 粗略估算：中文约 1 字 1 token，其他约 4 字符 1 token
+const profileTokens = computed(() => { const text = profileDraft.value; const cjk = (text.match(/[\u3400-\u9fff]/g) || []).length; return Math.round(cjk + (text.length - cjk) / 4) })
+function applyProfile(value: Partial<UserProfile>) { profile.value = value; profileDraft.value = value.content || ''; profileSaved.value = value.content || '' }
+async function loadProfile() {
+  const member = currentMember.value
+  if (!member) { applyProfile({}); return }
+  profileLoading.value = true
+  try { applyProfile(await agentApi.memories.profile(member.conversationId, member.userId).get()) }
+  catch { applyProfile({}) }
+  finally { profileLoading.value = false }
+}
+async function saveProfile() {
+  const member = currentMember.value
+  if (!member) return
+  profileSaving.value = true
+  try { applyProfile(await agentApi.memories.profile(member.conversationId, member.userId).save(profileDraft.value)); ElMessage.success('档案已保存') }
+  catch (error) { ElMessage.error(error instanceof Error ? error.message : '保存失败') }
+  finally { profileSaving.value = false }
+}
+async function clearProfile() {
+  const member = currentMember.value
+  if (!member) return
+  try { await ElMessageBox.confirm('清空这位用户的档案？AI 之后会重新总结。', '清空档案', { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消' }) } catch { return }
+  applyProfile(await agentApi.memories.profile(member.conversationId, member.userId).clear())
+}
+watch(currentMember, (now, before) => { if (now?.userId !== before?.userId || now?.conversationId !== before?.conversationId) loadProfile() })
+
 const { selectedIds, deleting, deleteSelected } = useBulkDelete(reload)
 function selectRows(rows: { id: string }[]) {
   const visible = new Set(memories.value.map(row => row.id))
@@ -115,4 +161,15 @@ async function removeMemory(row: Memory) { try { await ElMessageBox.confirm('删
 
 onMounted(reload)
 useAdminEvents(['user_memories','conversations','bots'], reload)
+useAdminEvents(['user_profiles'], () => { if (profileDraft.value === profileSaved.value) loadProfile() })
 </script>
+
+<style scoped>
+.profile-panel { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; padding: 14px 16px; flex: none; }
+.profile-panel header { display: flex; align-items: center; gap: 10px; }
+.profile-panel h2 { font-size: 14px; font-weight: 600; }
+.profile-panel .muted { font-size: 12px; font-variant-numeric: tabular-nums; }
+.token-meter { position: relative; height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+.token-meter i { position: absolute; inset: 0; background: var(--primary); transform-origin: left; transition: transform .4s var(--ease), background .2s var(--ease); }
+.token-meter.over i { background: var(--danger); }
+</style>

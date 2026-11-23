@@ -1,9 +1,9 @@
 import type { AlertItem, Bot, Conversation, KnowledgeBase, MessageRecord, ModelProfile, SystemOverview } from '@/types'
 
 export const mockBots: Bot[] = [
-  { id: 'bot-qq-service', name: '客服小Q', appId: '102*******31', status: 'online', enabled: true, callbackPath: '/callbacks/qq/bot-qq-service', lastEventAt: '刚刚' },
-  { id: 'bot-knowledge', name: '知识助手', appId: '102*******86', status: 'online', enabled: true, callbackPath: '/callbacks/qq/bot-knowledge', lastEventAt: '2 分钟前' },
-  { id: 'bot-campaign', name: '活动小助手', appId: '102*******12', status: 'warning', enabled: true, callbackPath: '/callbacks/qq/bot-campaign', lastEventAt: '18 分钟前' },
+  { id: 'bot-qq-service', name: '客服小Q', appId: '102*******31', status: 'online', enabled: true, callbackPath: '/callbacks/qq/bot-qq-service', callbackUrl: 'https://bot.example.com/callbacks/qq/bot-qq-service', lastEventAt: '刚刚' },
+  { id: 'bot-knowledge', name: '知识助手', appId: '102*******86', status: 'online', enabled: true, callbackPath: '/callbacks/qq/bot-knowledge', callbackUrl: 'https://bot.example.com/callbacks/qq/bot-knowledge', lastEventAt: '2 分钟前' },
+  { id: 'bot-campaign', name: '活动小助手', appId: '102*******12', status: 'warning', enabled: true, callbackPath: '/callbacks/qq/bot-campaign', callbackUrl: 'https://bot.example.com/callbacks/qq/bot-campaign', lastEventAt: '18 分钟前' },
 ]
 
 export const mockModels: ModelProfile[] = [
@@ -44,6 +44,9 @@ const alerts: AlertItem[] = [
 ]
 
 export const mockOverview: SystemOverview = {
+  active: [
+    { id: 'a1', bot: '客服小Q', conversation: '产品运营交流群', sender: '小林', question: 'claude sonnet 在 default 分组多少钱？', stage: '模型生成', elapsedMs: 2400 },
+  ],
   messages24h: 23842,
   successRate: 95.1,
   metrics: [
@@ -65,7 +68,8 @@ export const mockOverview: SystemOverview = {
     { id: 'p8', conversation: '用户 8G7X', content: '充值多久到账', time: '15:24:09', bot: '客服小Q', eventMs: 97, contextMs: 170, retrieval: { status: 'success', ms: 190, hit: '3/3' }, model: { status: 'success', ms: 660, name: 'qwen-plus' }, delivery: { status: 'success', ms: 220 }, totalMs: 1340 },
   ],
   alerts,
-  knowledge: { progress: 78.6, total: 24, completed: 15, indexing: 6, failed: 1, pending: 2, queues: [
+  stageAverages: [],
+  knowledge: { entries: 128, progress: 78.6, total: 24, completed: 15, indexing: 6, failed: 1, pending: 2, queues: [
     { name: '产品手册库', progress: 92, eta: '5 分钟后' }, { name: '售后知识库', progress: 67, eta: '12 分钟后' }, { name: '活动文案库', progress: 45, eta: '18 分钟后' }, { name: '常见问题库', progress: 38, eta: '21 分钟后' }, { name: '行业资料库', progress: 22, eta: '32 分钟后' }, { name: '历史对话库', progress: 15, eta: '47 分钟后' },
   ] },
   queues: { inbox: 3, outbox: 1, knowledge: 6, failed: 2 },

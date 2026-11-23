@@ -6,10 +6,10 @@
     </div>
 
     <div class="subsection">
-      <div class="subsection-head"><div><h3>接待客服</h3><p>从这个机器人下的 AI 客服里选一个。不选时使用“通用设置”里的默认人设。</p></div>
+      <div class="subsection-head"><div><h3>接待客服</h3></div>
         <el-button link type="primary" @click="$router.push({ name: 'bot-services', params: { id: conversation.botId } })">管理 AI 客服</el-button>
       </div>
-      <el-select v-model="form.serviceId" :value-on-clear="''" clearable placeholder="使用默认人设" :loading="loadingServices" style="width: 360px">
+      <el-select v-model="form.serviceId" :value-on-clear="''" clearable placeholder="系统默认" :loading="loadingServices" style="width: 360px">
         <el-option v-for="s in services" :key="s.id" :label="s.name" :value="s.id" />
       </el-select>
     </div>
