@@ -58,8 +58,8 @@
             </div>
             <div v-if="selected.handoffStatus" class="md-bubble is-bot is-human" :class="{ 'is-empty': !selected.humanReplyContent }">
               <small><span class="md-human-tag">人工客服</span>{{ selected.humanRepliedBy || '' }}<template v-if="selected.ticketNumber"> · 工单 #{{ selected.ticketNumber }}</template><template v-if="selected.humanRepliedAt"> · {{ selected.humanRepliedAt }}</template></small>
-              <p>{{ selected.humanReplyContent || (selected.handoffStatus === 'human_closed' ? '工单已结单，没有人工回复。' : '已转人工，等待人工客服回复。') }}</p>
-              <span v-if="selected.humanReplyContent && selected.handoffStatus === 'waiting_human'" class="md-human-state" :class="{ 'is-failed': selected.humanDeliveryStatus === 'failed' || selected.humanDeliveryStatus === 'expired' }"><i v-if="selected.humanDeliveryStatus === 'pending' || selected.humanDeliveryStatus === 'processing'" class="md-sending" />{{ selected.humanDeliveryStatus === 'failed' || selected.humanDeliveryStatus === 'expired' ? '发送失败' + (selected.humanDeliveryError ? '：' + selected.humanDeliveryError : '，可在人工台重新回复') : '正在发到群里' }}</span>
+              <p>{{ selected.humanReplyContent || (selected.handoffStatus === 'human_closed' ? '工单已结单，没有人工回复。' : selected.handoffStatus === 'human_processing' ? '人工客服已接单，还没有回复。' : '已转人工，等待人工客服接单。') }}</p>
+              <span v-if="selected.humanReplyContent && selected.handoffStatus === 'human_processing' && selected.humanDeliveryStatus !== 'sent'" class="md-human-state" :class="{ 'is-failed': selected.humanDeliveryStatus === 'failed' || selected.humanDeliveryStatus === 'expired' }"><i v-if="selected.humanDeliveryStatus === 'pending' || selected.humanDeliveryStatus === 'processing'" class="md-sending" />{{ selected.humanDeliveryStatus === 'failed' || selected.humanDeliveryStatus === 'expired' ? '发送失败' + (selected.humanDeliveryError ? '：' + selected.humanDeliveryError : '，可在人工台重新回复') : '正在发到群里' }}</span>
             </div>
           </div>
         </section>

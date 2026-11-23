@@ -55,7 +55,7 @@ export interface HumanOperator {
   enabled: boolean
 }
 
-export type HandoffStatus = 'waiting_human' | 'human_replied' | 'human_closed'
+export type HandoffStatus = 'waiting_human' | 'human_processing' | 'human_closed'
 
 export interface ModelTestInput {
   input: string

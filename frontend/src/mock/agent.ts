@@ -88,7 +88,7 @@ export const mockHandoffs: Handoff[] = [
     { id: 'r2', direction: 'outbound', senderName: '客服小Q', content: '一般几秒内到账，方便把订单号发我吗？', eventType: 'REPLY', eventAt: ago(8) },
     { id: 'msg-2', direction: 'inbound', senderName: '周周', content: '订单号 20261123-8812，急用，找人工', eventType: 'MESSAGE', eventAt: ago(6) },
   ] },
-  { id: 'h2', conversationName: '用户 8G7X', conversationType: 'c2c', userId: 'u3', displayName: 'Miya', messageId: 'msg-3', messageContent: '帮我查询订单', reason: 'AI 无法解决', status: 'open', createdAt: ago(40), recent: [
+  { id: 'h2', conversationName: '用户 8G7X', conversationType: 'c2c', userId: 'u3', displayName: 'Miya', messageId: 'msg-3', messageContent: '帮我查询订单', reason: 'AI 无法解决', status: 'processing', claimedByName: 'admin', claimedVia: 'web', claimedAt: ago(38), pausedUntil: new Date(Date.now() + 22 * 60000).toISOString(), createdAt: ago(40), recent: [
     { id: 'msg-3', direction: 'inbound', senderName: 'Miya', content: '帮我查询订单', eventType: 'MESSAGE', eventAt: ago(41) },
   ] },
 ]

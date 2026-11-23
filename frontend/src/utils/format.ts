@@ -9,12 +9,12 @@ export function statusText(status: string) {
 
 /** 消息结论：转人工的消息按工单进度显示，其余按原状态。 */
 export function messageVerdict(m: { status: string; handoffStatus?: string | null; humanDeliveryStatus?: string | null }): { status: string; text?: string } {
-  if (m.handoffStatus === 'human_replied') return { status: 'success', text: '人工已回复' }
   if (m.handoffStatus === 'human_closed') return { status: 'skipped', text: '人工已结单' }
-  if (m.handoffStatus === 'waiting_human') {
+  if (m.handoffStatus === 'waiting_human') return { status: 'warning', text: '待人工接单' }
+  if (m.handoffStatus === 'human_processing') {
     if (m.humanDeliveryStatus === 'failed' || m.humanDeliveryStatus === 'expired') return { status: 'failed', text: '人工回复发送失败' }
     if (m.humanDeliveryStatus === 'pending' || m.humanDeliveryStatus === 'processing') return { status: 'processing', text: '人工回复发送中' }
-    return { status: 'warning', text: '待人工回复' }
+    return { status: 'processing', text: '人工处理中' }
   }
   return { status: m.status }
 }
