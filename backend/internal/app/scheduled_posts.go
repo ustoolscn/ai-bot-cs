@@ -81,7 +81,7 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 	var cid, profile, persona, style, role, source, format, instruction string
 	var day, deadline time.Time
 	err := a.db.QueryRow(ctx, `SELECT c.id::text,COALESCE(svc.chat_profile_id::text,
-        CASE WHEN dest.service_id IS NULL THEN cfg.chat_profile_id::text END,''),COALESCE(svc.name,''),COALESCE(p.prompt,''),COALESCE(ag.instructions,''),
+        CASE WHEN dest.service_id IS NULL THEN cfg.chat_profile_id::text END,''),COALESCE(svc.name,''),COALESCE(svc.settings->>'stylePrompt',p.prompt,''),COALESCE(svc.instructions,ag.instructions,''),
         s.source,s.format,s.instruction,r.run_date,r.deadline
  FROM schedule_deliveries d JOIN schedule_runs r ON r.id=d.run_id JOIN scheduled_posts s ON s.id=r.schedule_id AND s.revision=r.revision
  JOIN schedule_recipients dest ON dest.schedule_id=s.id AND dest.conversation_id=d.conversation_id JOIN conversations c ON c.id=d.conversation_id
@@ -102,7 +102,7 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 	}
 	var pageBase string
 	if format == "link" {
-		pageBase, err = scheduledPageBase(a.cfg.PublicBaseURL)
+		pageBase, err = a.pageBase(ctx)
 		if err != nil {
 			return err
 		}

@@ -193,3 +193,28 @@ func scaled(price *float64, factor float64) *float64 {
 }
 
 func round(v float64) float64 { return math.Round(v*1e12) / 1e12 }
+
+// Display exposes the final customer prices in the selected currency.
+func (q PriceQuote) Display(exchange float64) map[string]any {
+	out := map[string]any{"model": q.Model, "group": q.Group, "billing": q.Billing}
+	if q.Note != "" {
+		out["note"] = q.Note
+	}
+	for name, price := range map[string]*float64{"inputPerMillionTokens": q.InputPerMillion, "outputPerMillionTokens": q.OutputPerMillion, "perCall": q.PerCall, "cacheReadPerMillionTokens": q.CacheRead, "cacheWritePerMillionTokens": q.CacheWrite, "inputPerSecond": q.VideoInput} {
+		if price != nil {
+			out[name] = round(*price * exchange)
+		}
+	}
+	if len(q.VideoRates) > 0 {
+		rates := map[string]float64{}
+		for key, v := range q.VideoRates {
+			rates[key] = round(v * exchange)
+		}
+		out["outputPerSecond"] = rates
+	}
+	if q.BillingExpr != "" {
+		out["baseBillingExpr"] = q.BillingExpr
+		out["applyToExpressionResult"] = q.GroupRatio * exchange
+	}
+	return out
+}

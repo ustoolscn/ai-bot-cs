@@ -12,6 +12,7 @@ import (
 const runtimeSettingsKey = "runtime_defaults"
 
 type RuntimeSettings struct {
+	PublicBaseURL           string     `json:"publicBaseUrl"`
 	DefaultContextLimit     int        `json:"defaultContextLimit"`
 	AIRequestTimeoutSeconds int        `json:"aiRequestTimeoutSeconds"`
 	MessageRetentionDays    int        `json:"messageRetentionDays"`
@@ -32,7 +33,8 @@ func (a *App) seededRuntimeSettings() RuntimeSettings {
 		retention = 90
 	}
 	now := time.Now().UTC()
-	return RuntimeSettings{DefaultContextLimit: contextLimit, AIRequestTimeoutSeconds: timeout, MessageRetentionDays: retention, UpdatedAt: &now}
+	base, _ := scheduledPageBase(a.cfg.PublicBaseURL)
+	return RuntimeSettings{PublicBaseURL: base, DefaultContextLimit: contextLimit, AIRequestTimeoutSeconds: timeout, MessageRetentionDays: retention, UpdatedAt: &now}
 }
 func validateRuntimeSettings(s RuntimeSettings) error {
 	if s.DefaultContextLimit < 1 || s.DefaultContextLimit > 100 {
@@ -52,7 +54,7 @@ func (a *App) ensureRuntimeSettings(ctx context.Context) error {
 		return fmt.Errorf("环境变量中的运行时默认设置无效: %w", err)
 	}
 	value, _ := json.Marshal(s)
-	_, err := a.db.Exec(ctx, "INSERT INTO system_settings(key,value) VALUES($1,$2::jsonb) ON CONFLICT(key) DO NOTHING", runtimeSettingsKey, string(value))
+	_, err := a.db.Exec(ctx, "INSERT INTO system_settings(key,value) VALUES($1,$2::jsonb) ON CONFLICT(key) DO UPDATE SET value=system_settings.value || jsonb_build_object('publicBaseUrl',EXCLUDED.value->'publicBaseUrl') WHERE NOT system_settings.value ? 'publicBaseUrl' ", runtimeSettingsKey, string(value))
 	return err
 }
 func (a *App) runtimeSettings(ctx context.Context) (RuntimeSettings, error) {
@@ -78,7 +80,11 @@ func (a *App) getSystemSettings(c *gin.Context) {
 	ok(c, s)
 }
 func (a *App) putSystemSettings(c *gin.Context) {
-	var s RuntimeSettings
+	s, err := a.runtimeSettings(c)
+	if err != nil {
+		fail(c, 500, "settings_error", err.Error())
+		return
+	}
 	if c.ShouldBindJSON(&s) != nil {
 		fail(c, 400, "invalid_request", "设置参数格式无效")
 		return
@@ -86,6 +92,13 @@ func (a *App) putSystemSettings(c *gin.Context) {
 	if err := validateRuntimeSettings(s); err != nil {
 		fail(c, 400, "invalid_settings", err.Error())
 		return
+	}
+	if s.PublicBaseURL != "" {
+		s.PublicBaseURL, err = scheduledPageBase(s.PublicBaseURL)
+		if err != nil {
+			fail(c, 400, "invalid_settings", err.Error())
+			return
+		}
 	}
 	now := time.Now().UTC()
 	s.UpdatedAt = &now
@@ -105,4 +118,12 @@ func (a *App) putSystemSettings(c *gin.Context) {
 		return
 	}
 	ok(c, s)
+}
+
+func (a *App) pageBase(ctx context.Context) (string, error) {
+	s, err := a.runtimeSettings(ctx)
+	if err != nil {
+		return "", err
+	}
+	return scheduledPageBase(s.PublicBaseURL)
 }

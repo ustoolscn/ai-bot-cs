@@ -21,7 +21,7 @@ func scheduledPageBase(raw string) (string, error) {
 			return strings.TrimRight(u.String(), "/"), nil
 		}
 	}
-	return "", fmt.Errorf("网页链接需要在服务器配置群成员可访问的 PUBLIC_BASE_URL")
+	return "", fmt.Errorf("网页链接需要在后台配置群成员可访问的公网基础地址")
 }
 
 func (a *App) scheduledWebPage(c *gin.Context) {

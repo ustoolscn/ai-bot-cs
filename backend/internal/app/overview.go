@@ -50,11 +50,46 @@ func (a *App) overview(c *gin.Context) {
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents").Scan(&totalDocuments)
 	_ = a.db.QueryRow(c, `SELECT (SELECT count(*) FROM inbox_tasks WHERE status='failed')+(SELECT count(*) FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE t.status='failed' AND m.event_type<>'PROCESSING_ACK')+(SELECT count(*) FROM knowledge_documents WHERE status='failed')`).Scan(&failedTasks)
 
+	var active, stages json.RawMessage
+	err := a.db.QueryRow(c, `SELECT coalesce(jsonb_agg(to_jsonb(q)),'[]') FROM (
+ SELECT t.id::text AS "taskId",m.id::text AS id,round(extract(epoch FROM now()-t.locked_at)*1000)::bigint AS "elapsedMs",b.id::text AS "botId",b.name AS bot,c.id::text AS "conversationId",coalesce(nullif(c.name,''),c.platform_id) AS conversation,m.sender_id AS "userId",coalesce(nullif(m.sender_name,''),m.sender_id) AS sender,m.content AS question,coalesce((SELECT label FROM message_stages WHERE message_id=m.id ORDER BY id DESC LIMIT 1),'接单检查') AS stage
+ FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='processing' ORDER BY t.locked_at) q`).Scan(&active)
+	if err != nil {
+		fail(c, 500, "database_error", "读取处理中任务失败")
+		return
+	}
+	err = a.db.QueryRow(c, `SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY q."averageMs" DESC),'[]') FROM (SELECT label,round(avg(ms))::bigint AS "averageMs",count(*) AS samples FROM (
+ SELECT label,extract(epoch FROM finished_at-started_at)*1000 AS ms FROM message_stages WHERE finished_at>=now()-interval '24 hours'
+ UNION ALL SELECT '等待处理',extract(epoch FROM locked_at-created_at)*1000 FROM inbox_tasks WHERE locked_at>=now()-interval '24 hours'
+ UNION ALL SELECT delays.label,extract(epoch FROM delays.duration)*1000 FROM outbox_tasks t JOIN messages m ON m.id=t.message_id
+ CROSS JOIN LATERAL (VALUES ('等待投递',t.locked_at-t.created_at),('QQ 投递',t.updated_at-t.locked_at)) AS delays(label,duration)
+ WHERE m.event_type='AI_RESPONSE' AND t.status IN ('sent','failed','expired') AND t.updated_at>=now()-interval '24 hours' AND t.locked_at IS NOT NULL
+ ) timings GROUP BY label) q`).Scan(&stages)
+	if err != nil {
+		fail(c, 500, "database_error", "读取环节耗时失败")
+		return
+	}
+	var entries, indexed, queued, processing int64
+	err = a.db.QueryRow(c, `SELECT count(*),count(*) FILTER(WHERE index_status='ready') FROM knowledge_entries WHERE status='published'`).Scan(&entries, &indexed)
+	if err != nil {
+		fail(c, 500, "database_error", "读取知识索引失败")
+		return
+	}
+	err = a.db.QueryRow(c, `SELECT count(*) FILTER(WHERE status='pending'),count(*) FILTER(WHERE status='processing') FROM (SELECT status FROM inbox_tasks UNION ALL SELECT t.status FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.event_type<>'PROCESSING_ACK') tasks`).Scan(&queued, &processing)
+	if err != nil {
+		fail(c, 500, "database_error", "读取队列失败")
+		return
+	}
+	var ratio float64
+	if totalDocuments+entries > 0 {
+		ratio = float64(readyDocuments+indexed) / float64(totalDocuments+entries)
+	}
 	pipelines := a.overviewPipelines(c)
 	alerts := a.overviewAlerts(c)
 	knowledgeQueues := a.overviewKnowledgeQueues(c)
 
 	ok(c, gin.H{
+		"activeTasks": active, "stageAverages": stages, "queuedTasks": queued, "processingTasks": processing, "knowledge": gin.H{"documentCount": totalDocuments, "entryCount": entries, "indexedCount": readyDocuments + indexed, "indexedRatio": ratio},
 		"bots": bots, "conversations": conversations, "messages24h": messages24h,
 		"totalEvents": totalEvents, "triggered": triggered, "successful": successful,
 		"triggeredConversations": triggeredConversations, "averageLatencyMs": int64(averageLatencyMS),

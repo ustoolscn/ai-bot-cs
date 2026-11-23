@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"ai-bot/backend/internal/agent"
 	"ai-bot/backend/internal/domain"
@@ -23,6 +26,7 @@ type turnRuntime struct {
 	botID            string
 	conversationID   string
 	conversationType string
+	question         string
 	senderID         string
 	senderName       string
 	messageID        string
@@ -37,6 +41,8 @@ type turnRuntime struct {
 	toolsUsed        []string
 	quoteTarget      string
 	screenshot       *domain.ContentPart
+	statusImage      *domain.ContentPart
+	publishedURL     string
 }
 
 type builtinTool struct {
@@ -47,16 +53,17 @@ type builtinTool struct {
 
 var builtinTools = []builtinTool{
 	{spec: domain.ToolSpec{Name: "quote_previous_reply", Description: "当用户要求引用机器人此前的答复时，用上一条答复中的原文片段定位本会话内的回复，为即将发送的答复附上 QQ 原生引用。请核对返回的原文。", Parameters: objSchema(map[string]any{"excerpt": strProp("目标回复中连续出现的原文片段")}, "excerpt")}},
-	{spec: domain.ToolSpec{Name: "render_html_image", Description: "把你编写的静态 HTML/CSS 排版成 PNG，直接作为本次 QQ 回复发送。适用于用户要求图片、海报、表格或网页截图。使用内联样式或 style，按 1000px 宽排版，不使用脚本和外部资源。", Parameters: objSchema(map[string]any{"html": strProp("完整 HTML 网页或片段")}, "html")}},
+	{spec: domain.ToolSpec{Name: "publish_html_page", Description: "内容较多或一两句难以解释时主动发布静态 HTML 网页，向用户发送返回的临时链接。只写可公开的信息。", Parameters: objSchema(map[string]any{"html": strProp("静态 HTML 正文及内联样式")}, "html")}},
+	{spec: domain.ToolSpec{Name: "render_html_image", Description: "把你编写的静态 HTML/CSS 排版成 PNG，直接作为本次 QQ 回复发送。可主动用图片强调信息、展示对比或表格。长内容优先发布网页。使用内联样式或 style，按 1000px 宽排版，不使用脚本和外部资源。", Parameters: objSchema(map[string]any{"html": strProp("完整 HTML 网页或片段")}, "html")}},
 	{spec: domain.ToolSpec{Name: "search_knowledge", Description: "在知识库中检索资料。当预先提供的知识库结果不足以回答、或用户换了话题时使用。", Parameters: objSchema(map[string]any{"query": strProp("要检索的完整问题")}, "query")}, needsKB: true},
-	{spec: domain.ToolSpec{Name: "get_model_price", Description: "查询网站上模型的实时价格（美元）。支持模糊模型名，如 4o、claude sonnet、deepseek。", Parameters: objSchema(map[string]any{"model": strProp("模型名称或关键词"), "group": strProp("分组名，可选，默认 default")}, "model")}, needsLive: true},
-	{spec: domain.ToolSpec{Name: "get_service_status", Description: "按全站、模型或计费分组查询成功率（%）、请求数、首个 Token 延迟中位数（毫秒）和趋势。无数据时不要推断故障。", Parameters: objSchema(map[string]any{
+	{spec: domain.ToolSpec{Name: "get_model_price", Description: "查询分组实际价格，按提问语言给出人民币或美元报价。支持模糊模型名，如 4o、claude sonnet、deepseek。", Parameters: objSchema(map[string]any{"model": strProp("模型名称或关键词"), "group": strProp("分组名，可选，默认 default")}, "model")}, needsLive: true},
+	{spec: domain.ToolSpec{Name: "get_service_status", Description: "按全站、模型或计费分组查询成功率（%）、请求数、首个 Token 延迟中位数（毫秒）和趋势。问状态时调用此工具，已配置状态页则自动发送截图。无数据时不要推断故障。", Parameters: objSchema(map[string]any{
 		"scope":       map[string]any{"type": "string", "enum": []string{"overall", "model", "group"}},
 		"name":        strProp("模型或分组名称，可模糊匹配"),
 		"granularity": map[string]any{"type": "string", "enum": []string{"hour", "day"}, "description": "hour 为最近24小时（默认），day 为最近90天"},
 		"recent":      map[string]any{"type": "integer", "minimum": 1, "maximum": 24, "description": "附带最近几个小时或天的逐段统计，可选"},
 	}, "scope")}, needsLive: true},
-	{spec: domain.ToolSpec{Name: "get_group_status", Description: "查询网站分组列表（倍率）和各分组/服务的实时可用状态。", Parameters: objSchema(map[string]any{"group": strProp("分组或服务名称，可选；为空返回全部")})}, needsLive: true},
+	{spec: domain.ToolSpec{Name: "get_group_status", Description: "查询网站分组列表（倍率）和各分组/服务的实时可用状态，自动附上已配置的状态页截图。", Parameters: objSchema(map[string]any{"group": strProp("分组或服务名称，可选；为空返回全部")})}, needsLive: true},
 	{spec: domain.ToolSpec{Name: "get_announcements", Description: "获取网站最新公告和通知全文。", Parameters: objSchema(map[string]any{"limit": map[string]any{"type": "integer", "description": "返回条数，默认 3"}})}, needsLive: true},
 	{spec: domain.ToolSpec{Name: "remember_user_fact", Description: "记住关于当前用户的一条长期有用的信息（如常用分组、接入方式、偏好）。不要记录密钥、密码等敏感信息。", Parameters: objSchema(map[string]any{"content": strProp("一句话描述的事实"), "kind": map[string]any{"type": "string", "enum": []string{"fact", "preference", "issue"}}}, "content")}},
 	{spec: domain.ToolSpec{Name: "handoff_to_human", Description: "把当前用户转给人工客服处理。用户要求人工、涉及退款/到账/封号等需人工核实、或你无法解决时使用。", Parameters: objSchema(map[string]any{"reason": strProp("转人工原因，一句话")}, "reason")}},
@@ -131,7 +138,10 @@ func (a *App) loadCustomTools(ctx context.Context, onlyEnabled bool) ([]customTo
 func (a *App) availableTools(ctx context.Context, rt *turnRuntime) ([]domain.ToolSpec, map[string]customTool) {
 	var specs []domain.ToolSpec
 	for _, t := range builtinTools {
-		if t.needsLive && !rt.snapshotOK {
+		if !toolSelected(rt, t.spec.Name) {
+			continue
+		}
+		if t.needsLive && !rt.snapshotOK && !statusPageTool(rt, t.spec.Name) {
 			continue
 		}
 		if t.needsKB && len(rt.knowledgeBases) == 0 {
@@ -143,6 +153,9 @@ func (a *App) availableTools(ctx context.Context, rt *turnRuntime) ([]domain.Too
 	tools, err := a.loadCustomTools(ctx, true)
 	if err == nil {
 		for _, t := range tools {
+			if !toolSelected(rt, t.Name) {
+				continue
+			}
 			params := t.Parameters
 			if params == nil {
 				params = objSchema(map[string]any{})
@@ -156,6 +169,9 @@ func (a *App) availableTools(ctx context.Context, rt *turnRuntime) ([]domain.Too
 
 // executeTool runs one tool call and returns a JSON string for the model.
 func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.ToolCall, custom map[string]customTool) (string, error) {
+	if !toolSelected(rt, call.Name) {
+		return "", fmt.Errorf("客服未启用该工具")
+	}
 	var args map[string]any
 	if strings.TrimSpace(call.Arguments) != "" {
 		if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
@@ -164,6 +180,14 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 	}
 	str := func(k string) string { v, _ := args[k].(string); return strings.TrimSpace(v) }
 	rt.toolsUsed = append(rt.toolsUsed, call.Name)
+	if statusPageTool(rt, call.Name) && !rt.dryRun {
+		if err := a.attachStatusPage(ctx, rt); err != nil {
+			return "", err
+		}
+		if !rt.snapshotOK || call.Name == "get_service_status" && len(rt.snapshot.ServiceStatus) == 0 {
+			return `{"statusPageScreenshot":true}`, nil
+		}
+	}
 	switch call.Name {
 	case "quote_previous_reply":
 		excerpt := str("excerpt")
@@ -177,6 +201,25 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		}
 		rt.quoteTarget = id
 		return jsonString(map[string]any{"quoted": agent.TruncateRunes(body, 1500)}), nil
+	case "publish_html_page":
+		doc, err := staticDocument(str("html"))
+		if err != nil {
+			return "", err
+		}
+		if rt.dryRun {
+			return `{"preview":true}`, nil
+		}
+		base, err := a.pageBase(ctx)
+		if err != nil {
+			return "", err
+		}
+		id := uuid.NewString()
+		_, err = a.db.Exec(ctx, "INSERT INTO scheduled_web_pages(id,document) VALUES($1,$2)", id, doc)
+		if err != nil {
+			return "", err
+		}
+		rt.publishedURL = base + "/p/" + id
+		return jsonString(map[string]any{"url": rt.publishedURL, "expiresInHours": 168}), nil
 	case "render_html_image":
 		if rt.dryRun {
 			return jsonString(map[string]any{"preview": true}), nil
@@ -209,11 +252,25 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		if len(models) == 0 {
 			return jsonString(map[string]any{"found": false, "message": "没有找到匹配的模型，请让用户确认模型名称", "groups": rt.snapshot.GroupList()}), nil
 		}
+		group := firstNonEmpty(str("group"), "default")
+		if _, ok := rt.snapshot.GroupRatio[group]; !ok {
+			return "", fmt.Errorf("分组 %s 缺少倍率，暂不能报价", group)
+		}
 		var quotes []newapi.PriceQuote
 		for _, m := range models {
 			quotes = append(quotes, rt.snapshot.Quote(m, str("group")))
 		}
-		return jsonString(map[string]any{"found": true, "unit": "美元。Token 单价按百万计。阶梯公式 baseBillingExpr 中 p/c/cr/cc 分别为输入、输出、缓存读取、缓存写入，系数为分组倍率前单价；按原条件选档并应用服务或时段系数，结果再乘 groupRatio 一次。视频费用为对应分辨率生成秒数乘输出秒价，加输入视频秒数乘输入秒价。视频、普通 Token 和按次单价已含分组倍率。unknown 表示价格待同步或规则不明。", "quotes": quotes, "dataTime": rt.snapshot.FetchedAt, "possiblyStale": rt.snapshotStale, "note": rt.settings.LiveData.PriceNote}), nil
+		currency := "USD"
+		factor := 1.0
+		if strings.ContainsFunc(rt.question, func(r rune) bool { return unicode.Is(unicode.Han, r) }) {
+			currency = "CNY"
+			factor = 7
+		}
+		display := make([]map[string]any, 0, len(quotes))
+		for _, q := range quotes {
+			display = append(display, q.Display(factor))
+		}
+		return jsonString(map[string]any{"found": true, "displayCurrency": currency, "displayQuotes": display, "unit": "向用户报 displayQuotes 的分组实际价和 displayCurrency，已含分组倍率与汇率。quotes 为美元核对数据。Token 单价按百万计。阶梯公式 baseBillingExpr 中 p/c/cr/cc 分别为输入、输出、缓存读取、缓存写入，系数为分组倍率前单价；按原条件选档并应用服务或时段系数，结果再乘 groupRatio 一次。视频费用为对应分辨率生成秒数乘输出秒价，加输入视频秒数乘输入秒价。视频、普通 Token 和按次单价已含分组倍率。unknown 表示价格待同步或规则不明。", "quotes": quotes, "dataTime": rt.snapshot.FetchedAt, "possiblyStale": rt.snapshotStale, "note": rt.settings.LiveData.PriceNote}), nil
 	case "get_service_status":
 		g := str("granularity")
 		if g == "" {
@@ -271,17 +328,11 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		if content == "" {
 			return "", fmt.Errorf("content 必填")
 		}
-		if rt.dryRun || rt.senderID == "" {
-			return `{"saved":true}`, nil
+		if privateMemory(content) {
+			return "", fmt.Errorf("不能保存敏感信息")
 		}
-		kind := str("kind")
-		if kind == "" {
-			kind = "fact"
-		}
-		if err := a.saveMemory(ctx, rt.settings, rt.botID, rt.conversationID, rt.senderID, rt.senderName, kind, content, 0.9, "tool", rt.messageID); err != nil {
-			return "", err
-		}
-		return `{"saved":true}`, nil
+		// The post-reply evaluation reconciles the user's request with existing memories.
+		return `{"queuedForPostReplyReview":true}`, nil
 	case "handoff_to_human":
 		rt.handoff = true
 		if rt.dryRun {
@@ -378,4 +429,11 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+func toolSelected(rt *turnRuntime, name string) bool {
+	return (rt.settings.ToolNames == nil || slices.Contains(rt.settings.ToolNames, name)) && (name != "remember_user_fact" || rt.settings.MemoryEnabled)
+}
+func statusPageTool(rt *turnRuntime, name string) bool {
+	return rt.settings.LiveData.StatusPageURL != "" && (name == "get_group_status" || name == "get_service_status")
 }

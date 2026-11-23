@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
+
 	"time"
 
 	"ai-bot/backend/internal/agent"
@@ -17,42 +17,21 @@ import (
 
 const liveSourceNewAPI = "newapi"
 
-type liveCache struct {
-	mu       sync.RWMutex
-	loaded   bool
-	snapshot newapi.Snapshot
-	stale    bool
-	lastErr  string
+func liveSource(s agent.Settings) string {
+	return liveSourceNewAPI + ":" + hashText(s.LiveData.BaseURL+"|"+s.LiveData.UserID+"|"+s.LiveData.AccessTokenEnc+"|"+s.LiveData.AnnouncementKBID)
 }
 
-func (a *App) invalidateLiveCache() {
-	a.live.mu.Lock()
-	a.live.loaded = false
-	a.live.mu.Unlock()
-}
-
-// liveSnapshot returns the cached snapshot, loading it from the database on
-// first use. ok is false when live data is disabled or nothing was fetched yet.
+// Read the snapshot for this site and credential only.
 func (a *App) liveSnapshot(ctx context.Context, s agent.Settings) (newapi.Snapshot, bool, bool) {
 	if !s.LiveData.Enabled {
 		return newapi.Snapshot{}, false, false
 	}
-	a.live.mu.RLock()
-	if a.live.loaded {
-		snap, stale := a.live.snapshot, a.live.stale
-		a.live.mu.RUnlock()
-		return snap, stale, !snap.FetchedAt.IsZero()
-	}
-	a.live.mu.RUnlock()
 	var raw []byte
 	var lastErr string
 	var snap newapi.Snapshot
-	if err := a.db.QueryRow(ctx, "SELECT data,last_error FROM live_data_snapshots WHERE source=$1", liveSourceNewAPI).Scan(&raw, &lastErr); err == nil {
+	if err := a.db.QueryRow(ctx, "SELECT data,last_error FROM live_data_snapshots WHERE source=$1", liveSource(s)).Scan(&raw, &lastErr); err == nil {
 		_ = json.Unmarshal(raw, &snap)
 	}
-	a.live.mu.Lock()
-	a.live.snapshot, a.live.stale, a.live.lastErr, a.live.loaded = snap, lastErr != "", lastErr, true
-	a.live.mu.Unlock()
 	return snap, lastErr != "", !snap.FetchedAt.IsZero()
 }
 
@@ -60,13 +39,40 @@ func (a *App) liveDataLoop(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
-		s := a.agentSettings(ctx)
-		if s.LiveData.Enabled && s.LiveData.BaseURL != "" {
-			var last *time.Time
-			_ = a.db.QueryRow(ctx, "SELECT last_attempt_at FROM live_data_snapshots WHERE source=$1", liveSourceNewAPI).Scan(&last)
-			if last == nil || time.Since(*last) >= time.Duration(s.LiveData.RefreshSeconds)*time.Second {
-				if err := a.refreshLiveData(ctx, s); err != nil && ctx.Err() == nil {
-					a.log.Warn("live data refresh failed", "error", err)
+		defaults := a.agentSettings(ctx)
+		configs := []agent.Settings{defaults}
+		rows, err := a.db.Query(ctx, "SELECT DISTINCT settings->'liveData' FROM bot_services WHERE settings ? 'liveData'")
+		if err == nil {
+			for rows.Next() {
+				var raw []byte
+				s := defaults
+				if rows.Scan(&raw) == nil && json.Unmarshal(raw, &s.LiveData) == nil {
+					s.Normalize()
+					configs = append(configs, s)
+				}
+			}
+			rows.Close()
+		}
+		sources := map[string]agent.Settings{}
+		for _, s := range configs {
+			if !s.LiveData.Enabled || s.LiveData.BaseURL == "" {
+				continue
+			}
+			key := liveSource(s)
+			if prev, ok := sources[key]; ok {
+				s.LiveData.RefreshSeconds = min(s.LiveData.RefreshSeconds, prev.LiveData.RefreshSeconds)
+				s.LiveData.SyncAnnouncements = s.LiveData.SyncAnnouncements || prev.LiveData.SyncAnnouncements
+			}
+			sources[key] = s
+		}
+		for _, s := range sources {
+			if s.LiveData.Enabled && s.LiveData.BaseURL != "" {
+				var last *time.Time
+				_ = a.db.QueryRow(ctx, "SELECT last_attempt_at FROM live_data_snapshots WHERE source=$1", liveSource(s)).Scan(&last)
+				if last == nil || time.Since(*last) >= time.Duration(s.LiveData.RefreshSeconds)*time.Second {
+					if err := a.refreshLiveData(ctx, s); err != nil && ctx.Err() == nil {
+						a.log.Warn("live data refresh failed", "error", err)
+					}
 				}
 			}
 		}
@@ -94,10 +100,7 @@ func (a *App) refreshLiveData(ctx context.Context, s agent.Settings) error {
 	snap, err := newapi.NewClient(s.LiveData.BaseURL, token, s.LiveData.UserID).Fetch(fetchCtx)
 	if err != nil {
 		_, _ = a.db.Exec(ctx, `INSERT INTO live_data_snapshots(source,last_attempt_at,last_error) VALUES($1,now(),$2)
-			ON CONFLICT(source) DO UPDATE SET last_attempt_at=now(),last_error=EXCLUDED.last_error`, liveSourceNewAPI, err.Error())
-		a.live.mu.Lock()
-		a.live.stale, a.live.lastErr = true, err.Error()
-		a.live.mu.Unlock()
+			ON CONFLICT(source) DO UPDATE SET last_attempt_at=now(),last_error=EXCLUDED.last_error`, liveSource(s), err.Error())
 		return err
 	}
 	prev, _, hadPrev := a.liveSnapshot(ctx, s)
@@ -112,17 +115,14 @@ func (a *App) refreshLiveData(ctx context.Context, s agent.Settings) error {
 	}
 	if _, err := a.db.Exec(ctx, `INSERT INTO live_data_snapshots(source,data,content_hash,fetched_at,last_attempt_at,last_error) VALUES($1,$2::jsonb,$3,now(),now(),$4)
 		ON CONFLICT(source) DO UPDATE SET data=EXCLUDED.data,content_hash=EXCLUDED.content_hash,fetched_at=now(),last_attempt_at=now(),last_error=EXCLUDED.last_error`,
-		liveSourceNewAPI, string(data), hashText(string(data)), partialErr); err != nil {
+		liveSource(s), string(data), hashText(string(data)), partialErr); err != nil {
 		return err
 	}
-	a.live.mu.Lock()
-	a.live.snapshot, a.live.stale, a.live.lastErr, a.live.loaded = snap, false, partialErr, true
-	a.live.mu.Unlock()
 	if hadPrev {
 		a.raiseMonitorAlerts(ctx, prev, snap)
 	}
 	if s.LiveData.SyncAnnouncements && s.LiveData.AnnouncementKBID != "" {
-		if err := a.syncAnnouncements(ctx, s.LiveData.AnnouncementKBID, snap); err != nil {
+		if err := a.syncAnnouncements(ctx, s.LiveData.AnnouncementKBID, s.LiveData.BaseURL, snap); err != nil {
 			a.log.Warn("announcement sync failed", "error", err)
 		}
 	}
@@ -150,7 +150,8 @@ func (a *App) raiseMonitorAlerts(ctx context.Context, prev, cur newapi.Snapshot)
 
 // syncAnnouncements mirrors site announcements into FAQ entries. Entries for
 // announcements no longer on the site are archived.
-func (a *App) syncAnnouncements(ctx context.Context, kbID string, snap newapi.Snapshot) error {
+func (a *App) syncAnnouncements(ctx context.Context, kbID, site string, snap newapi.Snapshot) error {
+	prefix := "site:" + hashText(site+"|"+kbID) + ":"
 	type ann struct{ key, question, answer string }
 	var items []ann
 	for _, an := range snap.Announcements {
@@ -162,10 +163,10 @@ func (a *App) syncAnnouncements(ctx context.Context, kbID string, snap newapi.Sn
 		if len(date) > 10 {
 			date = date[:10]
 		}
-		items = append(items, ann{key: "newapi:announcement:" + hashText(an.PublishDate + content)[:16], question: "网站公告（" + date + "）：" + agent.TruncateRunes(firstLine(content), 40), answer: content})
+		items = append(items, ann{key: prefix + "announcement:" + hashText(an.PublishDate + content)[:16], question: "网站公告（" + date + "）：" + agent.TruncateRunes(firstLine(content), 40), answer: content})
 	}
 	if n := strings.TrimSpace(snap.Notice); n != "" {
-		items = append(items, ann{key: "newapi:notice", question: "网站当前通知：" + agent.TruncateRunes(firstLine(n), 40), answer: n})
+		items = append(items, ann{key: prefix + "notice", question: "网站当前通知：" + agent.TruncateRunes(firstLine(n), 40), answer: n})
 	}
 	keys := make([]string, 0, len(items))
 	for _, it := range items {
@@ -186,7 +187,7 @@ func (a *App) syncAnnouncements(ctx context.Context, kbID string, snap newapi.Sn
 			a.enqueueJob(ctx, "index_entry", map[string]any{"entryId": id}, "index_entry:"+id)
 		}
 	}
-	rows, err := a.db.Query(ctx, "UPDATE knowledge_entries SET status='archived',updated_at=now() WHERE source='announcement' AND status='published' AND external_key LIKE 'newapi:%' AND NOT (external_key = ANY($1)) RETURNING id::text", keys)
+	rows, err := a.db.Query(ctx, "UPDATE knowledge_entries SET status='archived',updated_at=now() WHERE source='announcement' AND status='published' AND knowledge_base_id=$2 AND external_key LIKE $3 AND NOT (external_key = ANY($1)) RETURNING id::text", keys, kbID, prefix+"%")
 	if err != nil {
 		return err
 	}
@@ -217,11 +218,14 @@ func hashText(s string) string {
 }
 
 func (a *App) getLiveData(c *gin.Context) {
-	s := a.agentSettings(c)
+	s, okSettings := a.liveRequestSettings(c)
+	if !okSettings {
+		return
+	}
 	var raw []byte
 	var fetchedAt, attemptAt *time.Time
 	var lastErr string
-	_ = a.db.QueryRow(c, "SELECT data,fetched_at,last_attempt_at,last_error FROM live_data_snapshots WHERE source=$1", liveSourceNewAPI).Scan(&raw, &fetchedAt, &attemptAt, &lastErr)
+	_ = a.db.QueryRow(c, "SELECT data,fetched_at,last_attempt_at,last_error FROM live_data_snapshots WHERE source=$1", liveSource(s)).Scan(&raw, &fetchedAt, &attemptAt, &lastErr)
 	var snap newapi.Snapshot
 	_ = json.Unmarshal(raw, &snap)
 	stale := lastErr != "" && !strings.HasPrefix(lastErr, "部分")
@@ -260,7 +264,10 @@ func firstModels(s newapi.Snapshot, n int) []newapi.PriceQuote {
 }
 
 func (a *App) refreshLiveDataNow(c *gin.Context) {
-	s := a.agentSettings(c)
+	s, okSettings := a.liveRequestSettings(c)
+	if !okSettings {
+		return
+	}
 	if !s.LiveData.Enabled || s.LiveData.BaseURL == "" {
 		fail(c, 400, "live_data_disabled", "请先启用并填写网站地址")
 		return
@@ -279,4 +286,17 @@ func (a *App) listAlerts(c *gin.Context) {
 func (a *App) ackAlerts(c *gin.Context) {
 	_, _ = a.db.Exec(c, "UPDATE system_alerts SET acknowledged=true WHERE acknowledged=false")
 	ok(c, gin.H{"acknowledged": true})
+}
+
+func (a *App) liveRequestSettings(c *gin.Context) (agent.Settings, bool) {
+	s := a.agentSettings(c)
+	if id := c.Param("item"); id != "" {
+		var raw []byte
+		if err := a.db.QueryRow(c, "SELECT settings FROM bot_services WHERE bot_id=$1 AND id=$2", c.Param("id"), id).Scan(&raw); err != nil || json.Unmarshal(raw, &s) != nil {
+			fail(c, 404, "not_found", "客服不存在")
+			return s, false
+		}
+	}
+	s.Normalize()
+	return s, true
 }

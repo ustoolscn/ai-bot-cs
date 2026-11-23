@@ -109,7 +109,7 @@ func BuildSystemPrompt(in PromptInput) []string {
 		out = append(out, "知识库检索结果（仅在相关时使用；只挑与问题直接相关的一两点回答，不要复述整段资料）：\n"+in.Knowledge)
 	}
 	if in.ToolsAvailable {
-		out = append(out, "你可以调用工具获取实时数据或执行操作。需要时先调用工具，拿到结果后再用自己的话简短回答。")
+		out = append(out, "你可以调用工具获取实时数据或执行操作。复杂说明主动优先用临时网页并发回完整链接，需要突出重点时可生成图片。分组或服务状态必须调用状态工具以附上配置的状态页截图。报价必须说明分组，实际美元价格=基础价×分组倍率，工具中已乘倍率的数字不能重复乘。英文提问报美元，中文提问按1美元=7元人民币换算。需要时先调用工具，拿到结果后再用自己的话简短回答。")
 	}
 	return out
 }
@@ -130,7 +130,8 @@ const EvaluationPrompt = `你是客服质检与记忆整理助手。阅读下面
   "knowledge_gap": "",                // 若因缺少资料没能回答，写出一个概括后的标准问题，否则为空字符串
   "previous_feedback": "none",        // 用户本轮发言是否表明“上一条客服回答”没帮上忙：helpful / unhelpful / none
   "too_long": true/false,             // 客服回答是否明显啰嗦
-  "memories": [                       // 关于该用户、值得长期记住的事实（最多 3 条，没有则为空数组）
+  "profile": "以已有档案为基础整体改写，保留仍有效且由用户确认的身份与偏好，上限约2000 token，不推断敏感属性；没有变化沿用原文",
+  "memories": [                       // 关于该用户、值得长期记住的事实（最多 3 条，没有则为空数组；每项另含 action=add/update/delete/unchanged，更新删除须引用已有事件 id。eventAt 为用户明确提及的事件时间 RFC3339，未知留空。禁止保存手机号、证件号、令牌、密码）
     {"kind": "fact|preference|issue", "content": "一句话描述", "confidence": 0.0-1.0}
   ]
 }

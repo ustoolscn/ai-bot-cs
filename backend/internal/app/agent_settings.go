@@ -42,13 +42,17 @@ func (a *App) putAgentSettings(c *gin.Context) {
 		agent.Settings
 		LiveDataAccessToken *string `json:"liveDataAccessToken"`
 	}
+	current := a.agentSettings(c)
+	in.Settings = current
 	if c.ShouldBindJSON(&in) != nil {
 		fail(c, 400, "invalid_request", "设置参数格式无效")
 		return
 	}
-	current := a.agentSettings(c)
 	s := in.Settings
 	s.LiveData.AccessTokenEnc = current.LiveData.AccessTokenEnc
+	if strings.TrimRight(strings.TrimSpace(s.LiveData.BaseURL), "/") != current.LiveData.BaseURL {
+		s.LiveData.AccessTokenEnc = ""
+	}
 	if in.LiveDataAccessToken != nil {
 		token := strings.TrimSpace(*in.LiveDataAccessToken)
 		if token == "" {
@@ -73,7 +77,7 @@ func (a *App) putAgentSettings(c *gin.Context) {
 		return
 	}
 	a.audit(c, "agent.settings.update", "system_settings", agentSettingsKey, map[string]any{"liveDataEnabled": s.LiveData.Enabled})
-	a.invalidateLiveCache()
+
 	s.LiveData.HasAccessToken = s.LiveData.AccessTokenEnc != ""
 	ok(c, publicAgentSettings(s))
 }

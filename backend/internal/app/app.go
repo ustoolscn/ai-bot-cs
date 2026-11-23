@@ -40,8 +40,8 @@ type App struct {
 	images    *storage.Local
 	imageHTTP *http.Client
 	log       *slog.Logger
-	live      liveCache
-	events    adminEvents
+
+	events adminEvents
 }
 
 func New(ctx context.Context, cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (*App, error) {
@@ -176,6 +176,9 @@ func (a *App) Router() http.Handler {
 	auth.GET("/conversations/:id/members", a.listMembers)
 	auth.PUT("/conversations/:id/members/:userId", a.updateMember)
 	auth.GET("/conversations/:id/summaries", a.getSummary)
+	for _, method := range []string{"GET", "PUT", "DELETE"} {
+		auth.Handle(method, "/conversations/:id/user-profiles/:user", a.userProfile)
+	}
 	auth.GET("/memories/directory", a.memoryDirectory)
 	auth.GET("/memories", a.listMemories)
 	auth.POST("/memories", a.createMemory)
@@ -341,7 +344,7 @@ func queryList(c *gin.Context, a *App, sql string, args ...any) {
 }
 
 func (a *App) listBots(c *gin.Context) {
-	queryList(c, a, `SELECT id::text,name,channel,app_id AS "appId",enabled,status,last_event_at AS "lastEventAt",created_at AS "createdAt",app_secret_enc<>'' AS "hasSecret" FROM bots ORDER BY created_at DESC`)
+	queryList(c, a, `SELECT coalesce((SELECT value->>'publicBaseUrl' FROM system_settings WHERE key='runtime_defaults'),'') || '/callbacks/qq/' || id::text AS "callbackUrl", id::text,name,channel,app_id AS "appId",enabled,status,last_event_at AS "lastEventAt",created_at AS "createdAt",app_secret_enc<>'' AS "hasSecret" FROM bots ORDER BY created_at DESC`)
 }
 func (a *App) saveBot(c *gin.Context) {
 	var in struct {

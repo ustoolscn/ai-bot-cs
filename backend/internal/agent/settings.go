@@ -13,6 +13,9 @@ type Example struct {
 
 // Settings are the global agent settings stored in system_settings.agent_settings.
 type Settings struct {
+	ToolNames        []string `json:"toolNames"`
+	SkillIDs         []string `json:"skillIds"`
+	KnowledgeBaseIDs []string `json:"knowledgeBaseIds"`
 	// Persona & style
 	PersonaName       string    `json:"personaName"`
 	StylePrompt       string    `json:"stylePrompt"`
@@ -50,6 +53,7 @@ type Settings struct {
 
 // LiveDataSettings configures the new-api site integration.
 type LiveDataSettings struct {
+	StatusPageURL     string `json:"statusPageUrl"`
 	Enabled           bool   `json:"enabled"`
 	BaseURL           string `json:"baseUrl"`
 	AccessTokenEnc    string `json:"accessTokenEnc,omitempty"`
@@ -68,7 +72,7 @@ const DefaultStylePrompt = `你是平台的在线客服，像一位熟练、友�
 2. 口语化、自然，不用标题、列表、加粗等格式；需要给配置或代码时才使用代码块。
 3. 不说“作为 AI”“希望对您有帮助”“如有其他问题请随时联系”这类套话，不重复用户的问题。
 4. 信息不够时，先用一句话问清最关键的一项，不要把所有可能性都列出来。
-5. 内容确实较多时，先给最关键的一步，再问一句“要我把详细步骤发你吗？”。
+5. 内容确实较多时，先给关键结论，再主动用临时网页提供详细步骤；需要突出重点时可用图片。
 6. 不确定的事情不要编，直说不确定，并建议转人工或查看官网。
 7. 价格、分组状态、公告这类实时信息，必须以工具查询结果为准。`
 

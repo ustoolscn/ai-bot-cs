@@ -10,6 +10,7 @@ import (
 
 	"ai-bot/backend/internal/agent"
 	"ai-bot/backend/internal/domain"
+	"ai-bot/backend/internal/openai"
 )
 
 func itoa(n int) string { return strconv.Itoa(n) }
@@ -100,6 +101,9 @@ func (a *App) runJob(ctx context.Context, j agentJob) error {
 	default:
 		err = fmt.Errorf("unknown job kind %s", j.Kind)
 	}
+	if openai.IsHTTPStatus(err, 403) && str("messageId") != "" {
+		err = a.quarantineBackground(ctx, str("messageId"))
+	}
 	if err == nil {
 		_, e := a.db.Exec(ctx, "UPDATE agent_jobs SET status='completed',last_error=NULL,updated_at=now() WHERE id=$1", j.ID)
 		return e
@@ -151,11 +155,15 @@ func (a *App) auxText(ctx context.Context, s agent.Settings, fallbackProfile, ki
 }
 
 type evaluation struct {
-	Answered         bool   `json:"answered"`
-	KnowledgeGap     string `json:"knowledge_gap"`
-	PreviousFeedback string `json:"previous_feedback"`
-	TooLong          bool   `json:"too_long"`
+	Profile          *string `json:"profile"`
+	Answered         bool    `json:"answered"`
+	KnowledgeGap     string  `json:"knowledge_gap"`
+	PreviousFeedback string  `json:"previous_feedback"`
+	TooLong          bool    `json:"too_long"`
 	Memories         []struct {
+		Action     string  `json:"action"`
+		ID         string  `json:"id"`
+		EventAt    string  `json:"eventAt"`
 		Kind       string  `json:"kind"`
 		Content    string  `json:"content"`
 		Confidence float64 `json:"confidence"`
@@ -188,7 +196,7 @@ func (a *App) jobEvaluate(ctx context.Context, runID, messageID, profileID strin
 	// Previous bot answer to the same user within 30 minutes.
 	var prevAnswerID, prevAnswer, prevQuestion string
 	_ = a.db.QueryRow(ctx, `SELECT o.id::text,o.content,i.content FROM messages i JOIN messages o ON o.conversation_id=i.conversation_id AND o.reply_to_message_id=i.platform_message_id AND o.direction='outbound' AND o.event_type='AI_RESPONSE'
-		WHERE i.conversation_id=$1 AND i.direction='inbound' AND i.sender_id=$2 AND i.event_at<$3 AND i.event_at>$3-interval '30 minutes' AND i.id<>$4
+		WHERE NOT i.context_excluded AND NOT o.context_excluded AND i.event_at>coalesce((SELECT moderation_cutoff FROM conversations WHERE id=$1),'-infinity') AND i.conversation_id=$1 AND i.direction='inbound' AND i.sender_id=$2 AND i.event_at<$3 AND i.event_at>$3-interval '30 minutes' AND i.id<>$4
 		ORDER BY i.event_at DESC, o.event_at DESC LIMIT 1`, convID, senderID, eventAt, messageID).Scan(&prevAnswerID, &prevAnswer, &prevQuestion)
 
 	var b strings.Builder
@@ -196,21 +204,26 @@ func (a *App) jobEvaluate(ctx context.Context, runID, messageID, profileID strin
 		fmt.Fprintf(&b, "（上一轮）用户：%s\n（上一轮）客服：%s\n\n", agent.TruncateRunes(prevQuestion, 300), agent.TruncateRunes(prevAnswer, 500))
 	}
 	fmt.Fprintf(&b, "（本轮）用户：%s\n（本轮）客服：%s", agent.TruncateRunes(question, 800), agent.TruncateRunes(answer, 1200))
+	var previousProfile, existing string
+	if s.MemoryEnabled && senderID != "" {
+		if err = a.db.QueryRow(ctx, `SELECT coalesce((SELECT content FROM user_profiles WHERE conversation_id=$1 AND platform_user_id=$2),''),coalesce((SELECT jsonb_agg(jsonb_build_object('id',id,'content',content,'eventAt',coalesce(event_at,created_at))) FROM user_memories WHERE conversation_id=$1 AND platform_user_id=$2 AND status='active'),'[]')::text`, convID, senderID).Scan(&previousProfile, &existing); err != nil {
+			return err
+		}
+		fmt.Fprintf(&b, "\n本轮时间：%s\n已有用户档案：%s\n已有事件：%s", eventAt.Format(time.RFC3339), previousProfile, existing)
+	}
 	var ev evaluation
 	if err := a.auxJSON(ctx, s, profileID, runID, "evaluate", agent.EvaluationPrompt, b.String(), &ev); err != nil {
 		return err
 	}
-	evJSON, _ := json.Marshal(ev)
+	evForAudit := ev
+	evForAudit.Profile = nil
+	evForAudit.Memories = nil
+	evJSON, _ := json.Marshal(evForAudit)
 	_, _ = a.db.Exec(ctx, "UPDATE agent_runs SET evaluation=$1::jsonb WHERE id=$2", string(evJSON), runID)
 
 	if s.MemoryEnabled && senderID != "" {
-		for i, m := range ev.Memories {
-			if i >= 3 || m.Confidence < 0.6 {
-				continue
-			}
-			if err := a.saveMemory(ctx, s, botID, convID, senderID, senderName, m.Kind, m.Content, m.Confidence, "extracted", messageID); err != nil {
-				a.log.Warn("save memory failed", "error", err)
-			}
+		if err = a.applyExtractedMemory(ctx, ev, previousProfile, existing, convID, senderID, senderName, botID, messageID, eventAt, s); err != nil {
+			return err
 		}
 	}
 	if !s.EvaluationEnabled {
@@ -286,20 +299,28 @@ func (a *App) jobSummarize(ctx context.Context, conversationID, scope, until, pr
 	}
 	var summary string
 	coveredUntil := time.Unix(0, 0).UTC()
-	_ = a.db.QueryRow(ctx, "SELECT summary,covered_until FROM conversation_summaries WHERE conversation_id=$1 AND scope_key=$2", conversationID, scope).Scan(&summary, &coveredUntil)
+	var cutoff time.Time
+	if err = a.db.QueryRow(ctx, `SELECT coalesce(s.summary,''),coalesce(s.covered_until,'epoch'),coalesce(c.moderation_cutoff,'epoch') FROM conversations c LEFT JOIN conversation_summaries s ON s.conversation_id=c.id AND s.scope_key=$2 WHERE c.id=$1`, conversationID, scope).Scan(&summary, &coveredUntil, &cutoff); err != nil {
+		return err
+	}
+	if cutoff.After(coveredUntil) {
+		coveredUntil = cutoff
+		summary = ""
+	}
 	if !untilAt.After(coveredUntil) {
 		return nil
 	}
-	rows, err := a.db.Query(ctx, `SELECT m.direction,m.sender_id,m.sender_name,m.content,COALESCE(m.reply_to_message_id,''),COALESCE(m.platform_message_id,'') FROM messages m
+	rows, err := a.db.Query(ctx, `SELECT m.id::text,m.direction,m.sender_id,m.sender_name,m.content,COALESCE(m.reply_to_message_id,''),COALESCE(m.platform_message_id,'') FROM messages m
 		WHERE m.conversation_id=$1 AND m.event_at>$2 AND m.event_at<$3 AND m.content<>'' AND m.context_excluded=false AND m.event_type<>'PROCESSING_ACK' ORDER BY m.event_at LIMIT 300`, conversationID, coveredUntil, untilAt)
 	if err != nil {
 		return err
 	}
 	var lines []string
+	var latest string
 	mine := map[string]bool{}
 	for rows.Next() {
-		var dir, sid, name, content, replyTo, pid string
-		if rows.Scan(&dir, &sid, &name, &content, &replyTo, &pid) != nil {
+		var id, dir, sid, name, content, replyTo, pid string
+		if rows.Scan(&id, &dir, &sid, &name, &content, &replyTo, &pid) != nil {
 			continue
 		}
 		if scope != "" {
@@ -319,19 +340,37 @@ func (a *App) jobSummarize(ctx context.Context, conversationID, scope, until, pr
 		} else if name != "" {
 			role = "用户(" + name + ")"
 		}
+		latest = id
 		lines = append(lines, role+"："+agent.TruncateRunes(content, 300))
 	}
 	rows.Close()
-	if len(lines) == 0 {
-		_, err = a.db.Exec(ctx, `INSERT INTO conversation_summaries(conversation_id,scope_key,summary,covered_until) VALUES($1,$2,$3,$4) ON CONFLICT(conversation_id,scope_key) DO UPDATE SET covered_until=EXCLUDED.covered_until,updated_at=now()`, conversationID, scope, summary, untilAt)
-		return err
+	out := summary
+	if len(lines) > 0 {
+		input := "已有摘要：\n" + firstNonEmpty(summary, "（无）") + "\n\n新增对话：\n" + strings.Join(lines, "\n")
+		out, err = a.auxText(ctx, s, profileID, "summarize", agent.SummaryPrompt, input)
+		if openai.IsHTTPStatus(err, 403) {
+			return a.quarantineBackground(ctx, latest)
+		}
+		if err != nil {
+			return err
+		}
 	}
-	input := "已有摘要：\n" + firstNonEmpty(summary, "（无）") + "\n\n新增对话：\n" + strings.Join(lines, "\n")
-	out, err := a.auxText(ctx, s, profileID, "summarize", agent.SummaryPrompt, input)
+	tx, err := a.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	_, err = a.db.Exec(ctx, `INSERT INTO conversation_summaries(conversation_id,scope_key,summary,covered_until) VALUES($1,$2,$3,$4) ON CONFLICT(conversation_id,scope_key) DO UPDATE SET summary=EXCLUDED.summary,covered_until=EXCLUDED.covered_until,updated_at=now()`, conversationID, scope, agent.TruncateRunes(out, 600), untilAt)
+	defer tx.Rollback(ctx)
+	var fresh bool
+	if err = tx.QueryRow(ctx, "SELECT coalesce(moderation_cutoff,'epoch')=$2 FROM conversations WHERE id=$1 FOR UPDATE", conversationID, cutoff).Scan(&fresh); err != nil {
+		return err
+	}
+	if !fresh {
+		return nil
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO conversation_summaries(conversation_id,scope_key,summary,covered_until) VALUES($1,$2,$3,$4) ON CONFLICT(conversation_id,scope_key) DO UPDATE SET summary=EXCLUDED.summary,covered_until=EXCLUDED.covered_until,updated_at=now() WHERE conversation_summaries.covered_until<EXCLUDED.covered_until`, conversationID, scope, agent.TruncateRunes(out, 600), untilAt)
+	if err == nil {
+		err = tx.Commit(ctx)
+	}
 	return err
 }
 
@@ -355,12 +394,17 @@ func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool
 		return nil
 	}
 	s := a.agentSettings(ctx)
-	if !s.StaffMiningEnabled && !forced {
-		return nil
-	}
+
 	var convID, content, source string
 	var eventAt time.Time
 	if err := a.db.QueryRow(ctx, "SELECT conversation_id::text,content,event_type,event_at FROM messages WHERE id=$1", messageID).Scan(&convID, &content, &source, &eventAt); err != nil {
+		return nil
+	}
+	s, _, profile, err := a.conversationAgent(ctx, convID, s)
+	if err != nil {
+		return err
+	}
+	if !s.StaffMiningEnabled && !forced {
 		return nil
 	}
 	var mined bool
@@ -408,10 +452,7 @@ func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool
 	}
 	input := strings.Join(lines, "\n") + "\n" + label + "：" + agent.TruncateRunes(content, 1000)
 	var res staffMining
-	_, _, profile, err := a.conversationAgent(ctx, convID, s)
-	if err != nil {
-		return err
-	}
+
 	if err := a.auxJSON(ctx, s, profile, "", "staff_mining", agent.StaffMiningPrompt, input, &res); err != nil {
 		return err
 	}

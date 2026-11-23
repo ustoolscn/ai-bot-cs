@@ -148,11 +148,14 @@ func (a *App) excludeModeratedMessage(ctx context.Context, j inboxJob, cause err
 		return err
 	}
 	defer tx.Rollback(ctx)
-	reason := "模型返回 HTTP 403，已从后续会话上下文排除"
-	if _, err = tx.Exec(ctx, `UPDATE messages SET context_excluded=true,context_exclusion_reason=$1 WHERE id=$2`, reason, j.MessageID); err != nil {
+	if err = a.quarantine(ctx, tx, j.MessageID); err != nil {
 		return err
 	}
+
 	if _, err = tx.Exec(ctx, `UPDATE inbox_tasks SET status='failed',last_error=$1,next_attempt_at=now(),updated_at=now() WHERE id=$2`, cause.Error(), j.TaskID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, "UPDATE agent_runs SET status='failed',error=$2,completed_at=now() WHERE message_id=$1 AND completed_at IS NULL", j.MessageID, cause.Error()); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, scheduleProcessingAckRetractionSQL, j.BotID, j.ConversationID, j.PlatformMessageID); err != nil {

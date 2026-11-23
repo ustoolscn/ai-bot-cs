@@ -17,6 +17,7 @@ import (
 
 // agentStep is one recorded step of an agent run (shown in the admin UI).
 type agentStep struct {
+	moderated error
 	Type      string `json:"type"` // rewrite | model | tool
 	Name      string `json:"name,omitempty"`
 	Input     string `json:"input,omitempty"`
@@ -67,6 +68,7 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.scheduleProcessingAckRetraction(ctx, j.BotID, j.ConversationID, j.PlatformMessageID)
 	}
 
+	originalQuestion := j.Content
 	j.Content, err = a.qqContext(ctx, j)
 	if err != nil {
 		return a.retryInbox(ctx, j, err)
@@ -79,7 +81,7 @@ func (a *App) processInbox(ctx context.Context) error {
 		err = a.db.QueryRow(ctx, `SELECT prev.id::text FROM (
       SELECT id,parts,context_excluded,platform_message_id FROM messages
       WHERE conversation_id=$1 AND sender_id=$2 AND direction='inbound' AND id<>$3
-      AND event_at <= $4 AND event_at >= $4::timestamptz-interval '10 minutes'
+      AND event_at>coalesce((SELECT moderation_cutoff FROM conversations WHERE id=$1),'-infinity') AND event_at <= $4 AND event_at >= $4::timestamptz-interval '10 minutes'
       ORDER BY event_at DESC,created_at DESC LIMIT 1
    ) prev WHERE NOT prev.context_excluded AND prev.parts @> '[{"type":"image"}]'::jsonb
    AND NOT EXISTS (SELECT FROM messages reply WHERE reply.conversation_id=$1
@@ -117,6 +119,9 @@ func (a *App) processInbox(ctx context.Context) error {
 			decisionText = "无需回复"
 		}
 		finish(decisionText, err)
+		if openai.IsHTTPStatus(err, 403) {
+			return a.excludeModeratedMessage(ctx, j, err)
+		}
 		if err != nil {
 			return a.retryInbox(ctx, j, err)
 		}
@@ -136,9 +141,12 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.retryInbox(ctx, j, err)
 	}
 
-	rt := &turnRuntime{settings: settings, botID: j.BotID, conversationID: j.ConversationID, conversationType: j.ConversationType,
+	rt := &turnRuntime{question: originalQuestion, settings: settings, botID: j.BotID, conversationID: j.ConversationID, conversationType: j.ConversationType,
 		senderID: senderID, senderName: senderName, messageID: j.MessageID, runID: runID}
 	rt.knowledgeBases = a.conversationKnowledgeBases(ctx, j.ConversationID)
+	if settings.KnowledgeBaseIDs != nil {
+		rt.knowledgeBases = settings.KnowledgeBaseIDs
+	}
 	rt.snapshot, rt.snapshotStale, rt.snapshotOK = a.liveSnapshot(ctx, settings)
 
 	// Working memory.
@@ -166,6 +174,10 @@ func (a *App) processInbox(ctx context.Context) error {
 	if settings.RewriteQuery && query != "" && len(turns) > 0 {
 		finish := a.startStage(ctx, j.MessageID, "问题改写")
 		rewritten, step := a.rewriteQuery(ctx, settings, profileID, runID, turns, query)
+		if step.moderated != nil {
+			finish("", step.moderated)
+			return a.excludeModeratedMessage(ctx, j, step.moderated)
+		}
 		var cause error
 		if step.Error != "" {
 			cause = errors.New(step.Error)
@@ -241,7 +253,9 @@ func (a *App) processInbox(ctx context.Context) error {
 			break
 		}
 		_, mediaParts := extractOutboundImage(part)
-		if i == 0 && rt.screenshot != nil {
+		if i == 0 && rt.statusImage != nil {
+			mediaParts = []domain.ContentPart{*rt.statusImage}
+		} else if i == 0 && rt.screenshot != nil {
 			mediaParts = []domain.ContentPart{*rt.screenshot}
 		}
 		partsJSON, _ := json.Marshal(mediaParts)
@@ -264,13 +278,18 @@ func (a *App) processInbox(ctx context.Context) error {
 		_ = tx.Rollback(ctx)
 		return a.retryInbox(ctx, j, err)
 	}
+	if settings.EvaluationEnabled || settings.MemoryEnabled {
+		_, err = tx.Exec(ctx, `INSERT INTO agent_jobs(kind,payload,dedupe_key) VALUES('evaluate',jsonb_build_object('runId',$1::text,'messageId',$2::text,'profileId',$3::text),'evaluate:'||$1::text)`, runID, j.MessageID, profileID)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return a.retryInbox(ctx, j, err)
+		}
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return err
 	}
 	a.recordEntryHits(ctx, rt.hits)
-	if settings.EvaluationEnabled || settings.MemoryEnabled {
-		a.enqueueJob(ctx, "evaluate", map[string]any{"runId": runID, "messageId": j.MessageID, "profileId": profileID}, "evaluate:"+runID)
-	}
+
 	return nil
 }
 
@@ -331,7 +350,7 @@ func (a *App) loadHistory(ctx context.Context, conversationID, currentMessageID 
 	}
 	rows, err := a.db.Query(ctx, `SELECT m.id::text,m.direction,m.sender_id,m.sender_name,m.content,m.parts,m.event_type,COALESCE(m.platform_message_id,''),COALESCE(m.reply_to_message_id,''),COALESCE(cm.is_staff,false),m.event_at
 		FROM messages m LEFT JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id
-		WHERE m.conversation_id=$1 AND m.id<>$2 AND m.event_at<=$3 AND m.context_excluded=false AND m.event_type NOT IN ('PROCESSING_ACK')
+		WHERE m.conversation_id=$1 AND m.event_at>coalesce((SELECT moderation_cutoff FROM conversations WHERE id=$1),'-infinity') AND m.id<>$2 AND m.event_at<=$3 AND m.context_excluded=false AND m.event_type NOT IN ('PROCESSING_ACK')
 		AND (m.content<>'' OR m.parts::text LIKE '%"image"%')
 		ORDER BY m.event_at DESC LIMIT $4`, conversationID, currentMessageID, before, fetch)
 	if err != nil {
@@ -413,6 +432,9 @@ func (a *App) rewriteQuery(ctx context.Context, s agent.Settings, profileID, run
 	step := agentStep{Type: "rewrite", Name: "问题改写", Input: query}
 	cl, auxID, err := a.auxModel(ctx, s, profileID)
 	if err != nil {
+		if openai.IsHTTPStatus(err, 403) {
+			step.moderated = err
+		}
 		step.Error = err.Error()
 		return "", step
 	}
@@ -436,6 +458,9 @@ func (a *App) rewriteQuery(ctx context.Context, s agent.Settings, profileID, run
 	step.LatencyMs = time.Since(started).Milliseconds()
 	a.recordModelCall(ctx, runID, auxID, "rewrite", res, step.LatencyMs, err)
 	if err != nil {
+		if openai.IsHTTPStatus(err, 403) {
+			step.moderated = err
+		}
 		step.Error = err.Error()
 		return "", step
 	}
@@ -484,6 +509,9 @@ type agentOutput struct {
 // runAgent builds the prompt and runs the model/tool loop.
 func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 	rt := in.rt
+	if rt.question == "" {
+		rt.question = in.userContent
+	}
 	s := rt.settings
 	var tools []domain.ToolSpec
 	custom := map[string]customTool{}
@@ -492,11 +520,21 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 	}
 	var skills []agent.SkillPrompt
 	if s.ToolsEnabled {
-		skills = a.enabledSkills(ctx)
+		skills = a.enabledSkills(ctx, s.SkillIDs)
 	}
 	live := ""
 	if rt.snapshotOK && s.LiveData.InjectSnapshot {
 		live = rt.snapshot.PromptSummary(rt.snapshotStale)
+	}
+	if !rt.dryRun && s.ToolsEnabled && s.LiveData.StatusPageURL != "" && (toolSelected(rt, "get_service_status") || toolSelected(rt, "get_group_status")) && explicitStatusQuestion(rt.question) {
+		finish := a.startStage(ctx, rt.messageID, "状态页截图")
+		err := a.attachStatusPage(ctx, rt)
+		finish("", err)
+		if err == nil {
+			live += "\n本轮已准备好管理员配置的状态页截图，将随回复发送。"
+		} else {
+			live += "\n本轮状态页截图读取失败，不要声称已发送截图。"
+		}
 	}
 	systems := agent.BuildSystemPrompt(agent.PromptInput{Settings: s, ConversationType: rt.conversationType, BusinessPrompt: in.businessPrompt,
 		SenderName: rt.senderName, SenderIsStaff: in.senderIsStaff, Now: time.Now().In(chinaLocation), Summary: in.summary, Memories: in.memories,
@@ -536,6 +574,9 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 		out.steps = append(out.steps, ms)
 		if final || len(res.ToolCalls) == 0 {
 			out.content = res.Content
+			if rt.publishedURL != "" && !strings.Contains(out.content, rt.publishedURL) {
+				out.content = strings.TrimSpace(out.content + "\n" + rt.publishedURL)
+			}
 			if strings.TrimSpace(out.content) == "" && rt.handoff {
 				out.content = "已经帮你转给人工客服了，请稍等一下～"
 			}
@@ -660,8 +701,8 @@ func (a *App) recordEntryHits(ctx context.Context, hits []map[string]any) {
 	}
 }
 
-func (a *App) enabledSkills(ctx context.Context) []agent.SkillPrompt {
-	rows, err := a.db.Query(ctx, "SELECT name,description,instructions FROM skills WHERE enabled ORDER BY sort_order,name")
+func (a *App) enabledSkills(ctx context.Context, ids []string) []agent.SkillPrompt {
+	rows, err := a.db.Query(ctx, "SELECT name,description,instructions FROM skills WHERE enabled AND ($1::text[] IS NULL OR id::text=ANY($1)) ORDER BY sort_order,name", ids)
 	if err != nil {
 		return nil
 	}
