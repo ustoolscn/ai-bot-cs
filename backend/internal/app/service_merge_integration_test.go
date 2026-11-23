@@ -134,7 +134,7 @@ func TestServiceMergeAndMemory(t *testing.T) {
 	if !strings.Contains(string(req("GET", "memories/directory", nil, 200)), "alice") {
 		t.Fatal("missing profile-only user")
 	}
-	memories := a.loadMemories(ctx, s, bot, cid, "alice", "")
+	memories := a.loadMemories(ctx, s, bot, cid, "alice", "", &queryEmbeddings{})
 	if len(memories) != 1 || memories[0].Kind != "profile" {
 		t.Fatal(memories)
 	}

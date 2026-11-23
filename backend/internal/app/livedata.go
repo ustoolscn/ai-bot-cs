@@ -187,7 +187,12 @@ func (a *App) syncAnnouncements(ctx context.Context, kbID, site string, snap new
 			a.enqueueJob(ctx, "index_entry", map[string]any{"entryId": id}, "index_entry:"+id)
 		}
 	}
-	rows, err := a.db.Query(ctx, "UPDATE knowledge_entries SET status='archived',updated_at=now() WHERE source='announcement' AND status='published' AND knowledge_base_id=$2 AND external_key LIKE $3 AND NOT (external_key = ANY($1)) RETURNING id::text", keys, kbID, prefix+"%")
+	// A partial fetch cannot establish that the missing endpoint deleted its entries.
+	rows, err := a.db.Query(ctx, `UPDATE knowledge_entries SET status='archived',updated_at=now()
+		WHERE source='announcement' AND status='published' AND knowledge_base_id=$2 AND external_key LIKE $3
+		AND NOT (external_key = ANY($1))
+		AND CASE WHEN external_key=$4 THEN $5::boolean ELSE $6::boolean END RETURNING id::text`,
+		keys, kbID, prefix+"%", prefix+"notice", snap.Errors["notice"] == "", snap.Errors["status"] == "")
 	if err != nil {
 		return err
 	}

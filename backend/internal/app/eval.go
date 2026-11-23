@@ -149,7 +149,7 @@ func (a *App) jobEvalRun(ctx context.Context, runID string) error {
 			return ctx.Err()
 		}
 		rt := &turnRuntime{settings: settings, conversationType: "private", senderName: "评测用户", knowledgeBases: kbs, snapshot: snapshot, snapshotOK: snapOK, snapshotStale: stale, dryRun: true}
-		knowledge, hits, _ := a.retrieve(ctx, kbs, cs.q)
+		knowledge, hits, _ := a.retrieve(ctx, kbs, cs.q, &rt.embeddings)
 		rt.hits = hits
 		started := time.Now()
 		out := a.runAgent(ctx, agentInput{rt: rt, client: client, profileID: profileID, knowledge: knowledge, userContent: cs.q})

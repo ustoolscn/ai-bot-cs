@@ -410,7 +410,7 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 		t.Fatal(err)
 	}
 	memorySettings := application.agentSettings(ctx)
-	if got := application.loadMemories(ctx, memorySettings, botID, otherGroup, "alice", ""); len(got) != 0 {
+	if got := application.loadMemories(ctx, memorySettings, botID, otherGroup, "alice", "", &queryEmbeddings{}); len(got) != 0 {
 		t.Fatalf("cross-group recall: %v", got)
 	}
 	requestJSON(t, client, http.MethodPost, server.URL+"/api/memories", map[string]any{"botId": botID, "conversationId": otherGroup, "userId": "alice", "content": "用户使用 vip 分组", "pinned": true}, http.StatusCreated)

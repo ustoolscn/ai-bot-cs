@@ -12,15 +12,20 @@ import (
 
 // loadMemories returns pinned memories first, then the most relevant (by
 // vector similarity when an embedding model is configured) or most recent.
-func (a *App) loadMemories(ctx context.Context, s agent.Settings, botID, conversationID, userID, query string) []agent.Memory {
+func (a *App) loadMemories(ctx context.Context, s agent.Settings, botID, conversationID, userID, query string, embeddings *queryEmbeddings) []agent.Memory {
 	limit := s.MaxMemories
 	var rowsSQL string
 	args := []any{botID, conversationID, userID, limit}
 	if cl, pid, ok := a.embeddingModel(ctx, s); ok && strings.TrimSpace(query) != "" {
-		if v, err := cl.Embed(ctx, []string{query}); err == nil && len(v) == 1 {
-			rowsSQL = `SELECT kind,to_char(coalesce(event_at,created_at) AT TIME ZONE 'UTC','YYYY-MM-DD') || ' · ' || content FROM user_memories WHERE bot_id=$1 AND conversation_id=$2 AND platform_user_id=$3 AND status='active' AND (expires_at IS NULL OR expires_at>now())
+		var searchable bool
+		err := a.db.QueryRow(ctx, `SELECT EXISTS(SELECT FROM user_memories WHERE bot_id=$1 AND conversation_id=$2 AND platform_user_id=$3 AND status='active'
+			AND (expires_at IS NULL OR expires_at>now()) AND embedding IS NOT NULL AND embedding_profile_id=$4)`, botID, conversationID, userID, pid).Scan(&searchable)
+		if searchable || err != nil {
+			if v, err := embeddings.get(ctx, cl, pid, query); err == nil {
+				rowsSQL = `SELECT kind,to_char(coalesce(event_at,created_at) AT TIME ZONE 'UTC','YYYY-MM-DD') || ' · ' || content FROM user_memories WHERE bot_id=$1 AND conversation_id=$2 AND platform_user_id=$3 AND status='active' AND (expires_at IS NULL OR expires_at>now())
 				ORDER BY pinned DESC, CASE WHEN embedding IS NOT NULL AND embedding_profile_id=$5 AND vector_dims(embedding)=$7 THEN embedding <=> $6::vector ELSE 1 END, updated_at DESC LIMIT $4`
-			args = append(args, pid, vectorLiteral(v[0]), len(v[0]))
+				args = append(args, pid, vectorLiteral(v), len(v))
+			}
 		}
 	}
 	if rowsSQL == "" {

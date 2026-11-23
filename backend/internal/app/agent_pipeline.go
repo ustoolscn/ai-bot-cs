@@ -184,7 +184,7 @@ func (a *App) processInbox(ctx context.Context) error {
 	}
 	var memories []agent.Memory
 	if settings.MemoryEnabled && senderID != "" {
-		memories = a.loadMemories(ctx, settings, j.BotID, j.ConversationID, senderID, j.Content)
+		memories = a.loadMemories(ctx, settings, j.BotID, j.ConversationID, senderID, j.Content, &rt.embeddings)
 	}
 	contextLatency := time.Since(contextStarted).Milliseconds()
 	finishContext(fmt.Sprintf("历史 %d 条，记忆 %d 条", len(turns), len(memories)), nil)
@@ -217,7 +217,7 @@ func (a *App) processInbox(ctx context.Context) error {
 	if query != "" && len(rt.knowledgeBases) > 0 {
 		var hits []map[string]any
 		finish := a.startStage(ctx, j.MessageID, "知识库检索")
-		kbContext, hits, err = a.retrieve(ctx, rt.knowledgeBases, query)
+		kbContext, hits, err = a.retrieve(ctx, rt.knowledgeBases, query, &rt.embeddings)
 		finish(fmt.Sprintf("查询 %d 个知识库，召回 %d 个片段", len(rt.knowledgeBases), len(hits)), err)
 		if err != nil {
 			a.log.Warn("knowledge retrieval failed", "message", j.MessageID, "error", err)
@@ -667,12 +667,14 @@ func (a *App) conversationKnowledgeBases(ctx context.Context, conversationID str
 }
 
 // retrieve searches document chunks and FAQ entries of the given knowledge bases.
-func (a *App) retrieve(ctx context.Context, kbIDs []string, query string) (string, []map[string]any, error) {
+func (a *App) retrieve(ctx context.Context, kbIDs []string, query string, embeddings *queryEmbeddings) (string, []map[string]any, error) {
 	var all []map[string]any
 	var lastErr error
 	for _, kbID := range kbIDs {
 		var pid *string
-		if err := a.db.QueryRow(ctx, "SELECT embedding_profile_id::text FROM knowledge_bases WHERE id=$1", kbID).Scan(&pid); err != nil || pid == nil {
+		if err := a.db.QueryRow(ctx, `SELECT embedding_profile_id::text FROM knowledge_bases WHERE id=$1 AND EXISTS (
+			SELECT FROM knowledge_chunks c LEFT JOIN knowledge_entries e ON e.id=c.entry_id
+			WHERE c.knowledge_base_id=$1 AND (c.entry_id IS NULL OR e.status='published'))`, kbID).Scan(&pid); err != nil || pid == nil {
 			continue
 		}
 		cl, _, e := a.loadModel(ctx, *pid)
@@ -680,7 +682,7 @@ func (a *App) retrieve(ctx context.Context, kbIDs []string, query string) (strin
 			lastErr = e
 			continue
 		}
-		v, e := cl.Embed(ctx, []string{query})
+		v, e := embeddings.get(ctx, cl, *pid, query)
 		if e != nil {
 			lastErr = e
 			continue
@@ -688,7 +690,7 @@ func (a *App) retrieve(ctx context.Context, kbIDs []string, query string) (strin
 		rs, e := a.db.Query(ctx, `SELECT c.id::text,c.document_id::text,c.entry_id::text AS entry_id,c.content,1-(c.embedding <=> $1::vector) AS score
 			FROM knowledge_chunks c LEFT JOIN knowledge_entries e ON e.id=c.entry_id
 			WHERE c.knowledge_base_id=$2 AND (c.entry_id IS NULL OR e.status='published')
-			ORDER BY c.embedding <=> $1::vector LIMIT 8`, vectorLiteral(v[0]), kbID)
+			ORDER BY c.embedding <=> $1::vector LIMIT 8`, vectorLiteral(v), kbID)
 		if e != nil {
 			lastErr = e
 			continue

@@ -32,6 +32,7 @@ type turnRuntime struct {
 	messageID        string
 	runID            string
 	knowledgeBases   []string
+	embeddings       queryEmbeddings
 	snapshot         newapi.Snapshot
 	snapshotOK       bool
 	snapshotStale    bool
@@ -235,7 +236,7 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		if q == "" {
 			return "", fmt.Errorf("query 必填")
 		}
-		text, hits, err := a.retrieve(ctx, rt.knowledgeBases, q)
+		text, hits, err := a.retrieve(ctx, rt.knowledgeBases, q, &rt.embeddings)
 		if err != nil {
 			return "", err
 		}
