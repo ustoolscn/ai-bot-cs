@@ -135,7 +135,7 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 	}
 	started := time.Now()
 	res, err := client.ChatWith(ctx, []domain.ChatMessage{{Role: "system", Content: system}, {Role: "user", Content: instruction}}, domain.ChatOptions{RequireWebSearch: source == "web", DisableWebSearch: source != "web"})
-	a.recordModelCall(ctx, "", profile, "scheduled_post", res, time.Since(started).Milliseconds(), err)
+	a.recordModelCall(ctx, "", "", profile, "scheduled_post", res, time.Since(started).Milliseconds(), err)
 	if err != nil {
 		return err
 	}
@@ -152,7 +152,7 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 		}
 		start := time.Now()
 		layout, e := client.ChatWith(ctx, []domain.ChatMessage{{Role: "system", Content: layoutPrompt}, {Role: "user", Content: text}}, domain.ChatOptions{DisableWebSearch: true})
-		a.recordModelCall(ctx, "", profile, "scheduled_layout", layout, time.Since(start).Milliseconds(), e)
+		a.recordModelCall(ctx, "", "", profile, "scheduled_layout", layout, time.Since(start).Milliseconds(), e)
 		if e != nil {
 			return e
 		}

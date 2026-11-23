@@ -84,14 +84,13 @@ func SanitizeReply(s string) string {
 			return strings.Trim(m, "*_")
 		})
 		t = reFiller.ReplaceAllString(t, "")
-		segments[i].text = t
+		segments[i].text = reBlankLines.ReplaceAllString(t, "\n\n")
 	}
 	var b strings.Builder
 	for _, seg := range segments {
 		b.WriteString(seg.text)
 	}
-	out := reBlankLines.ReplaceAllString(b.String(), "\n\n")
-	return strings.TrimSpace(out)
+	return strings.TrimSpace(b.String())
 }
 
 type segment struct {
@@ -101,21 +100,17 @@ type segment struct {
 
 func splitFences(s string) []segment {
 	var out []segment
-	for {
-		i := strings.Index(s, "```")
-		if i < 0 {
-			out = append(out, segment{text: s})
-			return out
+	start := 0
+	for pos := 0; pos < len(s); {
+		line, end := replyLine(s, pos)
+		if fence := fenceMarker(line); fence != "" {
+			end = fenceEnd(s, end, fence)
+			out = append(out, segment{text: s[start:pos]}, segment{text: s[pos:end], code: true})
+			start = end
 		}
-		j := strings.Index(s[i+3:], "```")
-		if j < 0 {
-			out = append(out, segment{text: s})
-			return out
-		}
-		end := i + 3 + j + 3
-		out = append(out, segment{text: s[:i]}, segment{text: s[i:end], code: true})
-		s = s[end:]
+		pos = end
 	}
+	return append(out, segment{text: s[start:]})
 }
 
 // SplitReply splits a long reply into at most maxParts messages at paragraph
@@ -129,62 +124,180 @@ func SplitReply(s string, target, maxParts int) []string {
 	if target <= 0 || maxParts <= 1 || utf8.RuneCountInString(s) <= target {
 		return []string{s}
 	}
-	type unit struct {
-		text   string
-		inline bool // sentence continuing the previous unit's paragraph
-	}
-	var units []unit
-	for _, seg := range splitFences(s) {
-		if seg.code {
-			units = append(units, unit{text: strings.TrimSpace(seg.text)})
-			continue
-		}
-		for _, p := range strings.Split(seg.text, "\n\n") {
-			p = strings.TrimSpace(p)
-			if p == "" {
-				continue
-			}
-			if utf8.RuneCountInString(p) <= target {
-				units = append(units, unit{text: p})
-				continue
-			}
-			for i, sentence := range splitSentences(p) {
-				units = append(units, unit{text: sentence, inline: i > 0})
-			}
-		}
-	}
 	var parts []string
-	var cur strings.Builder
-	curLen := 0
-	for _, u := range units {
-		n := utf8.RuneCountInString(u.text)
-		if curLen > 0 && curLen+n > target && len(parts) < maxParts-1 {
-			parts = append(parts, strings.TrimSpace(cur.String()))
-			cur.Reset()
-			curLen = 0
+	start, length := 0, 0
+	for offset, unit := range replyUnits(s) {
+		n := utf8.RuneCountInString(unit)
+		if length > 0 && length+n > target && len(parts) < maxParts-1 {
+			if part := strings.TrimSpace(s[start:offset]); part != "" {
+				parts = append(parts, part)
+			}
+			start, length = offset, 0
 		}
-		if curLen > 0 && !u.inline {
-			cur.WriteString("\n\n")
-		}
-		cur.WriteString(u.text)
-		curLen += n
+		length += n
 	}
-	if strings.TrimSpace(cur.String()) != "" {
-		parts = append(parts, strings.TrimSpace(cur.String()))
+	if last := strings.TrimSpace(s[start:]); last != "" {
+		parts = append(parts, last)
 	}
 	return parts
 }
 
-var sentenceRe = regexp.MustCompile(`[^。！？!?；;\n]+[。！？!?；;]*\n?|\n`)
+var listStart = regexp.MustCompile(`^[ \t]*(?:[-+*]|[0-9]+[.)])[ \t]+`)
 
-func splitSentences(p string) []string {
-	var out []string
-	for _, s := range sentenceRe.FindAllString(p, -1) {
-		if strings.TrimSpace(s) != "" {
-			out = append(out, s)
+// Each block boundary is a safe delivery boundary. Inline links can span a
+// soft line break, so scan the whole prose block when finding its sentences.
+func replyUnits(s string) func(func(int, string) bool) {
+	return func(yield func(int, string) bool) {
+		for pos := 0; pos < len(s); {
+			line, end := replyLine(s, pos)
+			if fence := fenceMarker(line); fence != "" {
+				end = fenceEnd(s, end, fence)
+			} else if listStart.MatchString(line) {
+				for end < len(s) {
+					next, after := replyLine(s, end)
+					if listStart.MatchString(next) {
+						break
+					}
+					// An unindented line after a blank line starts a new paragraph.
+					if strings.TrimSpace(next) == "" {
+						look := after
+						for look < len(s) {
+							l, n := replyLine(s, look)
+							if strings.TrimSpace(l) != "" {
+								break
+							}
+							look = n
+						}
+						if look == len(s) || (s[look] != ' ' && s[look] != '\t') {
+							break
+						}
+					}
+					if f := fenceMarker(next); f != "" {
+						after = fenceEnd(s, after, f)
+					}
+					end = after
+				}
+			} else {
+				for end < len(s) {
+					next, after := replyLine(s, end)
+					if fenceMarker(next) != "" || listStart.MatchString(next) {
+						break
+					}
+					end = after
+				}
+				for _, unit := range splitSentences(s[pos:end]) {
+					if !yield(pos, unit) {
+						return
+					}
+					pos += len(unit)
+				}
+				continue
+			}
+			if !yield(pos, s[pos:end]) {
+				return
+			}
+			pos = end
 		}
 	}
-	return out
+}
+
+func replyLine(s string, pos int) (string, int) {
+	line, _, newline := strings.Cut(s[pos:], "\n")
+	end := pos + len(line)
+	if newline {
+		end++
+	}
+	return line, end
+}
+
+func fenceMarker(line string) string {
+	line = strings.TrimSpace(line)
+	if len(line) < 3 || (line[0] != '~' && line[0] != '`') {
+		return ""
+	}
+	n := 1
+	for n < len(line) && line[n] == line[0] {
+		n++
+	}
+	if n < 3 {
+		return ""
+	}
+	return line[:n]
+}
+
+func fenceEnd(s string, pos int, fence string) int {
+	for pos < len(s) {
+		line, end := replyLine(s, pos)
+		pos = end
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, fence) && strings.Trim(line, fence[:1]) == "" {
+			break
+		}
+	}
+	return pos
+}
+
+var urlStart = regexp.MustCompile(`(?i)^(?:https?://|www\.)[^\s<>]+`)
+
+func splitSentences(p string) []string {
+	var units []string
+	start := 0
+	for i := 0; i < len(p); {
+		if p[i] == '`' {
+			fence := 1
+			for i+fence < len(p) && p[i+fence] == '`' {
+				fence++
+			}
+			if end := strings.Index(p[i+fence:], p[i:i+fence]); end >= 0 {
+				i += end + 2*fence
+				continue
+			}
+			i += fence
+			continue
+		}
+		if p[i] == '[' {
+			if after := balancedEnd(p, i, '[', ']'); after > i && after < len(p) && p[after] == '(' {
+				if end := balancedEnd(p, after, '(', ')'); end > after {
+					i = end
+					continue
+				}
+			}
+		}
+		if p[i] == 'h' || p[i] == 'H' || p[i] == 'w' || p[i] == 'W' {
+			if m := urlStart.FindStringIndex(p[i:]); m != nil {
+				i += m[1]
+				continue
+			}
+		}
+		r, n := utf8.DecodeRuneInString(p[i:])
+		i += n
+		if strings.ContainsRune("。！？!?；;.\n", r) {
+			units = append(units, p[start:i])
+			start = i
+		}
+	}
+	if start < len(p) {
+		units = append(units, p[start:])
+	}
+	return units
+}
+
+func balancedEnd(s string, start int, open, close byte) int {
+	depth := 0
+	for i := start; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++
+		case open:
+			depth++
+		case close:
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return start
 }
 
 // ExtractJSON returns the outermost JSON object in s (models often wrap JSON

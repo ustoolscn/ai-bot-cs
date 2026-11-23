@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -104,7 +105,7 @@ func (m *agentMock) handleChat(w http.ResponseWriter, body []byte) {
 		if len(calls) > 0 {
 			msg["tool_calls"] = calls
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": msg}}, "usage": map[string]any{"prompt_tokens": 10, "completion_tokens": 5}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": msg}}, "usage": map[string]any{"prompt_tokens": 10, "completion_tokens": 5, "prompt_tokens_details": map[string]int{"cached_tokens": 2, "cache_write_tokens": 1}}})
 	}
 	aux := func(kind string) {
 		m.mu.Lock()
@@ -242,7 +243,7 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	requestJSON(t, client, http.MethodPost, server.URL+"/api/auth/login", map[string]any{"username": "admin", "password": "integration-password"}, http.StatusOK)
 
 	chatID := createdID(t, requestJSON(t, client, http.MethodPost, server.URL+"/api/model-profiles", map[string]any{
-		"name": "chat", "kind": "chat", "baseUrl": mock.URL + "/v1", "apiKey": "k", "model": "mock-chat", "enabled": true, "isDefault": true,
+		"name": "chat", "kind": "chat", "baseUrl": mock.URL + "/v1", "apiKey": "k", "model": "mock-chat", "enabled": true, "isDefault": true, "inputPricePerMillion": 2, "outputPricePerMillion": 4, "cacheReadPricePerMillion": 1, "cacheWritePricePerMillion": 3,
 	}, http.StatusOK))
 	embID := createdID(t, requestJSON(t, client, http.MethodPost, server.URL+"/api/model-profiles", map[string]any{
 		"name": "emb", "kind": "embedding", "baseUrl": mock.URL + "/v1", "apiKey": "k", "model": "mock-emb", "dimension": 3, "enabled": true, "isDefault": true,
@@ -291,7 +292,7 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	}
 	presetID := create("personalities", map[string]any{"name": "测试性格", "prompt": "初始表达习惯"})
 	agentID := create("support-agents", map[string]any{"name": "接入顾问", "personalityId": presetID, "instructions": "解答接入流程问题"})
-	serviceProfileID := create("model-profiles", map[string]any{"name": "客服专用", "kind": "chat", "baseUrl": mock.URL + "/v1", "apiKey": "k", "model": "service-chat", "enabled": true})
+	serviceProfileID := create("model-profiles", map[string]any{"name": "客服专用", "kind": "chat", "baseUrl": mock.URL + "/v1", "apiKey": "k", "model": "service-chat", "enabled": true, "inputPricePerMillion": 2, "outputPricePerMillion": 4, "cacheReadPricePerMillion": 1, "cacheWritePricePerMillion": 3})
 	requestJSON(t, client, http.MethodPost, server.URL+"/api/bots/"+botID+"/services", map[string]any{"name": "接入小助手", "agentId": agentID, "chatProfileId": embID}, http.StatusBadRequest)
 	serviceID := create("bots/"+botID+"/services", map[string]any{"name": "接入小助手", "agentId": agentID, "chatProfileId": serviceProfileID, "decisionProfileId": chatID, "simpleProfileId": chatID})
 	otherBotID := createdID(t, requestJSON(t, client, http.MethodPost, server.URL+"/api/bots", map[string]any{"name": "另一个机器人", "appId": "another", "appSecret": botSecret, "enabled": true}, http.StatusCreated))
@@ -367,7 +368,7 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	if !strings.Contains(first, "vip 分组") || !strings.Contains(first, "BOB_SECRET") || !strings.Contains(first, "get_model_price") || !strings.Contains(first, "vip：异常") {
 		t.Fatalf("thread context / tools / live snapshot wrong: %s", first)
 	}
-	if !strings.Contains(string(calls[1]), `inputUsdPerMillionTokens\":2`) {
+	if !strings.Contains(string(calls[1]), `inputPerMillionTokens\":14`) {
 		t.Fatalf("tool result not passed back: %s", calls[1])
 	}
 	rows, _ := pool.Query(ctx, `SELECT m.content,t.msg_seq FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.reply_to_message_id='m3' AND m.event_type='AI_RESPONSE' ORDER BY t.msg_seq`)
@@ -499,6 +500,36 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	stats := dataMap(t, requestJSON(t, client, http.MethodGet, server.URL+"/api/learning/stats", nil, http.StatusOK))
 	if stats["publishedEntries"].(float64) < 4 {
 		t.Fatalf("stats: %v", stats)
+	}
+
+	msg := dataMap(t, detail)
+	count := msg["inputTokens"].(float64) / 10
+	cost, priced := msg["estimatedCost"].(float64)
+	if count < 4 || msg["cacheHitRate"] != 0.2 || msg["cachedInputTokens"] != 2*count || msg["cacheWriteTokens"] != count || !priced || math.Abs(cost-count*39/1e6) > 1e-12 {
+		t.Fatalf("incorrect message usage: inputs=%v cache=%v writes=%v cost=%v", msg["inputTokens"], msg["cachedInputTokens"], msg["cacheWriteTokens"], cost)
+	}
+	if !bytes.Contains(detail, []byte(`"name":"Alice"`)) || !bytes.Contains(detail, []byte(`"name":"Bob"`)) {
+		t.Fatal("missing context speaker")
+	}
+	feedback := dataSlice(t, requestJSON(t, client, http.MethodGet, server.URL+"/api/feedback?rating=wrong", nil, http.StatusOK))
+	id := object(t, feedback[0])["id"].(string)
+	if object(t, feedback[0])["read"] != false || stats["unreadNegativeFeedback"].(float64) < 1 {
+		t.Fatal("missing unread feedback")
+	}
+	for _, action := range []struct {
+		path string
+		body any
+	}{{"/feedback/" + id + "/read", nil}, {"/feedback/read", map[string]any{"ids": []string{id}}}, {"/feedback/read", map[string]any{"all": true}}} {
+		requestJSON(t, client, http.MethodPost, server.URL+"/api"+action.path, action.body, http.StatusOK)
+	}
+	stats = dataMap(t, requestJSON(t, client, http.MethodGet, server.URL+"/api/learning/stats", nil, http.StatusOK))
+	feedback = dataSlice(t, requestJSON(t, client, http.MethodGet, server.URL+"/api/feedback?rating=wrong", nil, http.StatusOK))
+	if object(t, feedback[0])["read"] != true || stats["unreadNegativeFeedback"] != float64(0) {
+		t.Fatal("read feedback or badge incorrect")
+	}
+	kb := dataMap(t, requestJSON(t, client, http.MethodGet, server.URL+"/api/knowledge-bases/"+kbID, nil, http.StatusOK))
+	if kb["entryCount"] != stats["publishedEntries"] {
+		t.Fatalf("KB count %v, stats %v", kb["entryCount"], stats["publishedEntries"])
 	}
 
 	// Evaluation run in dry-run mode.

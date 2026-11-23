@@ -57,7 +57,7 @@ var builtinTools = []builtinTool{
 	{spec: domain.ToolSpec{Name: "publish_html_page", Description: "内容较多或一两句难以解释时主动发布静态 HTML 网页，向用户发送返回的临时链接。只写可公开的信息。", Parameters: objSchema(map[string]any{"html": strProp("静态 HTML 正文及内联样式")}, "html")}},
 	{spec: domain.ToolSpec{Name: "render_html_image", Description: "把你编写的静态 HTML/CSS 排版成 PNG，直接作为本次 QQ 回复发送。可主动用图片强调信息、展示对比或表格。长内容优先发布网页。使用内联样式或 style，按 1000px 宽排版，不使用脚本和外部资源。", Parameters: objSchema(map[string]any{"html": strProp("完整 HTML 网页或片段")}, "html")}},
 	{spec: domain.ToolSpec{Name: "search_knowledge", Description: "在知识库中检索资料。当预先提供的知识库结果不足以回答、或用户换了话题时使用。", Parameters: objSchema(map[string]any{"query": strProp("要检索的完整问题")}, "query")}, needsKB: true},
-	{spec: domain.ToolSpec{Name: "get_model_price", Description: "查询分组实际价格，按提问语言给出人民币或美元报价。支持模糊模型名，如 4o、claude sonnet、deepseek。", Parameters: objSchema(map[string]any{"model": strProp("模型名称或关键词"), "group": strProp("分组名，可选，默认 default")}, "model")}, needsLive: true},
+	{spec: domain.ToolSpec{Name: "get_model_price", Description: "查询分组实际价格，按提问语言给出人民币或美元报价。支持模糊模型名，如 4o、claude sonnet、deepseek。", Parameters: objSchema(map[string]any{"model": strProp("模型名称或关键词"), "group": strProp("指定用户分组；省略时按模型展示可用分组的最低倍率报价，并说明适用条件")}, "model")}, needsLive: true},
 	{spec: domain.ToolSpec{Name: "get_service_status", Description: "按全站、模型或计费分组查询成功率（%）、请求数、首个 Token 延迟中位数（毫秒）和趋势。问状态时调用此工具，已配置状态页则自动发送截图。无数据时不要推断故障。", Parameters: objSchema(map[string]any{
 		"scope":       map[string]any{"type": "string", "enum": []string{"overall", "model", "group"}},
 		"name":        strProp("模型或分组名称，可模糊匹配"),
@@ -249,17 +249,23 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		if !rt.snapshotOK {
 			return "", fmt.Errorf("网站数据暂不可用")
 		}
-		models := rt.snapshot.FindModels(str("model"), 5)
+		models := rt.snapshot.FindModels(str("model"), len(rt.snapshot.Models))
+		if len(models) > 0 && strings.EqualFold(models[0].ModelName, str("model")) {
+			models = models[:1]
+		}
 		if len(models) == 0 {
 			return jsonString(map[string]any{"found": false, "message": "没有找到匹配的模型，请让用户确认模型名称", "groups": rt.snapshot.GroupList()}), nil
 		}
-		group := firstNonEmpty(str("group"), "default")
-		if _, ok := rt.snapshot.GroupRatio[group]; !ok {
-			return "", fmt.Errorf("分组 %s 缺少倍率，暂不能报价", group)
+		group := str("group")
+		if group != "" {
+			if _, ok := rt.snapshot.GroupRatio[group]; !ok {
+				return "", fmt.Errorf("分组 %s 缺少倍率，暂不能报价", group)
+			}
 		}
-		var quotes []newapi.PriceQuote
-		for _, m := range models {
-			quotes = append(quotes, rt.snapshot.Quote(m, str("group")))
+		quotes := rt.snapshot.CustomerQuotes(models, group)
+		quotes = quotes[:min(5, len(quotes))]
+		if len(quotes) == 0 {
+			return jsonString(map[string]any{"found": false, "message": "这些模型在所选分组没有可用报价", "groups": rt.snapshot.GroupList()}), nil
 		}
 		currency := "USD"
 		factor := 1.0
@@ -271,7 +277,7 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		for _, q := range quotes {
 			display = append(display, q.Display(factor))
 		}
-		return jsonString(map[string]any{"found": true, "displayCurrency": currency, "displayQuotes": display, "unit": "向用户报 displayQuotes 的分组实际价和 displayCurrency，已含分组倍率与汇率。quotes 为美元核对数据。Token 单价按百万计。阶梯公式 baseBillingExpr 中 p/c/cr/cc 分别为输入、输出、缓存读取、缓存写入，系数为分组倍率前单价；按原条件选档并应用服务或时段系数，结果再乘 groupRatio 一次。视频费用为对应分辨率生成秒数乘输出秒价，加输入视频秒数乘输入秒价。视频、普通 Token 和按次单价已含分组倍率。unknown 表示价格待同步或规则不明。", "quotes": quotes, "dataTime": rt.snapshot.FetchedAt, "possiblyStale": rt.snapshotStale, "note": rt.settings.LiveData.PriceNote}), nil
+		return jsonString(map[string]any{"found": true, "displayCurrency": currency, "displayQuotes": display, "unit": "比价和推荐只用 displayQuotes 中适用分组的最终价，并说明分组。未指定分组时列出各模型最低可用倍率对应的分组，用户需能使用该分组才能获得此价。Token 报价按输入单价、再按输出单价排序；按实际输入输出用量比较成本。不同计费单位不能直接比较。Token 单价按百万计。阶梯公式 baseBillingExpr 中 p/c/cr/cc 分别为输入、输出、缓存读取、缓存写入，系数为分组倍率前单价；按原条件选档并应用服务或时段系数，结果再乘 groupRatio 一次。视频费用为对应分辨率生成秒数乘输出秒价，加输入视频秒数乘输入秒价。视频、普通 Token 和按次单价已含分组倍率。unknown 表示价格待同步或规则不明。", "dataTime": rt.snapshot.FetchedAt, "possiblyStale": rt.snapshotStale, "note": rt.settings.LiveData.PriceNote}), nil
 	case "get_service_status":
 		g := str("granularity")
 		if g == "" {

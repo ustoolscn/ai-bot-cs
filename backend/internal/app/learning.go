@@ -294,23 +294,53 @@ func (a *App) createFeedback(c *gin.Context) {
 }
 
 func (a *App) listFeedback(c *gin.Context) {
-	queryList(c, a, `SELECT f.id::text,f.source,f.rating,f.comment,f.corrected_answer AS "correctedAnswer",f.created_at AS "createdAt",o.content AS answer,
+	queryList(c, a, `SELECT f.id::text,f.is_read AS "read",f.source,f.rating,f.comment,f.corrected_answer AS "correctedAnswer",f.created_at AS "createdAt",o.content AS answer,
 		COALESCE(i.content,'') AS question,i.id::text AS "messageId",c.name AS "conversationName"
 		FROM message_feedback f JOIN messages o ON o.id=f.message_id JOIN conversations c ON c.id=o.conversation_id
 		LEFT JOIN messages i ON i.conversation_id=o.conversation_id AND i.platform_message_id=o.reply_to_message_id AND i.direction='inbound'
 		WHERE ($1='' OR f.rating=$1) ORDER BY f.created_at DESC LIMIT 300`, c.Query("rating"))
 }
 
+func (a *App) markFeedbackRead(c *gin.Context) {
+	var in struct {
+		IDs []string
+		All bool
+	}
+	if id := c.Param("id"); id != "" {
+		in.IDs = []string{id}
+	} else if c.ShouldBindJSON(&in) != nil || in.All == (len(in.IDs) > 0) || len(in.IDs) > 1000 {
+		fail(c, 400, "invalid_request", "请指定反馈编号或 all")
+		return
+	}
+	for _, id := range in.IDs {
+		if parseUUID(id) != nil {
+			fail(c, 400, "invalid_ids", "反馈编号无效")
+			return
+		}
+	}
+	tag, err := a.db.Exec(c, "UPDATE message_feedback SET is_read=true WHERE NOT is_read AND ($1 OR id=ANY($2::uuid[]))", in.All, in.IDs)
+	if err != nil {
+		fail(c, 500, "database_error", "标记已读失败")
+		return
+	}
+	ok(c, gin.H{"updated": tag.RowsAffected()})
+}
+
 func (a *App) learningStats(c *gin.Context) {
-	var pending, entries, openGaps, feedback7d, bad7d, memories, openHandoffs int
-	_ = a.db.QueryRow(c, `SELECT (SELECT count(*) FROM knowledge_candidates WHERE status='pending'),
+	var pending, entries, openGaps, feedback7d, bad7d, unread, memories, openHandoffs int
+	err := a.db.QueryRow(c, `SELECT (SELECT count(*) FROM knowledge_candidates WHERE status='pending'),
 		(SELECT count(*) FROM knowledge_entries WHERE status='published'),
 		(SELECT count(*) FROM knowledge_gaps WHERE status='open'),
 		(SELECT count(*) FROM message_feedback WHERE created_at>now()-interval '7 days'),
 		(SELECT count(*) FROM message_feedback WHERE created_at>now()-interval '7 days' AND rating IN ('bad','wrong','unhelpful')),
-		(SELECT count(*) FROM user_memories WHERE status='active'),
-		(SELECT count(*) FROM handoffs WHERE status='open')`).Scan(&pending, &entries, &openGaps, &feedback7d, &bad7d, &memories, &openHandoffs)
-	ok(c, gin.H{"pendingCandidates": pending, "publishedEntries": entries, "openGaps": openGaps, "feedback7d": feedback7d, "negativeFeedback7d": bad7d, "activeMemories": memories, "openHandoffs": openHandoffs})
+		(SELECT count(*) FROM message_feedback WHERE NOT is_read AND rating IN ('bad','wrong','unhelpful')),
+ (SELECT count(*) FROM user_memories WHERE status='active'),
+		(SELECT count(*) FROM handoffs WHERE status='open')`).Scan(&pending, &entries, &openGaps, &feedback7d, &bad7d, &unread, &memories, &openHandoffs)
+	if err != nil {
+		fail(c, 500, "database_error", "读取学习统计失败")
+		return
+	}
+	ok(c, gin.H{"unreadNegativeFeedback": unread, "pendingCandidates": pending, "publishedEntries": entries, "openGaps": openGaps, "feedback7d": feedback7d, "negativeFeedback7d": bad7d, "activeMemories": memories, "openHandoffs": openHandoffs})
 }
 
 func (a *App) bulkDeleteLearning(c *gin.Context) {

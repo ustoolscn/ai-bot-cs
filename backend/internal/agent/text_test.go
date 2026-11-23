@@ -72,3 +72,26 @@ func TestBuildSystemPrompt(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitKeepsStructuredReplyUnits(t *testing.T) {
+	for _, atom := range []string{
+		"https://api.example.cn/v1.2?x=a!b&v=1",
+		"[多行？\n链接！](https://example.org/a_(b)?x=1)",
+		"[下载？点这里！](https://example.org/a_(b)?x=1)",
+		"```go\nfmt.Println(\"a!\")\n\n// done.\n```",
+		"~~~js\nfoo();\n~~~",
+		"1. 先登录。再下载！\n   最后打开。",
+		"- 配置好了？继续下一步。",
+	} {
+		parts := SplitReply("说明。\n"+atom+"\n结束。", 5, 10)
+		found := false
+		for _, part := range parts {
+			if strings.Contains(part, atom) {
+				found = true
+			}
+		}
+		if !found || len(parts) < 2 {
+			t.Errorf("%q split into %q", atom, parts)
+		}
+	}
+}

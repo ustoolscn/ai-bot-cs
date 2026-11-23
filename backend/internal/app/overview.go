@@ -58,11 +58,12 @@ func (a *App) overview(c *gin.Context) {
 		fail(c, 500, "database_error", "读取处理中任务失败")
 		return
 	}
-	err = a.db.QueryRow(c, `SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY q."averageMs" DESC),'[]') FROM (SELECT label,round(avg(ms))::bigint AS "averageMs",count(*) AS samples FROM (
- SELECT label,extract(epoch FROM finished_at-started_at)*1000 AS ms FROM message_stages WHERE finished_at>=now()-interval '24 hours'
- UNION ALL SELECT '等待处理',extract(epoch FROM locked_at-created_at)*1000 FROM inbox_tasks WHERE locked_at>=now()-interval '24 hours'
- UNION ALL SELECT delays.label,extract(epoch FROM delays.duration)*1000 FROM outbox_tasks t JOIN messages m ON m.id=t.message_id
- CROSS JOIN LATERAL (VALUES ('等待投递',t.locked_at-t.created_at),('QQ 投递',t.updated_at-t.locked_at)) AS delays(label,duration)
+	err = a.db.QueryRow(c, `SELECT coalesce(jsonb_agg(to_jsonb(q) ORDER BY q."startOffsetMs",q.label),'[]') FROM (SELECT label,avg(offset_ms)::float8 AS "startOffsetMs",round(avg(ms))::bigint AS "averageMs",count(*) AS samples FROM (
+ SELECT label,extract(epoch FROM s.started_at-m.created_at)*1000 AS offset_ms,extract(epoch FROM finished_at-started_at)*1000 AS ms FROM message_stages s JOIN messages m ON m.id=s.message_id WHERE finished_at>=now()-interval '24 hours'
+ UNION ALL SELECT '等待处理',extract(epoch FROM t.created_at-m.created_at)*1000,extract(epoch FROM locked_at-t.created_at)*1000 FROM inbox_tasks t JOIN messages m ON m.id=t.message_id WHERE locked_at>=now()-interval '24 hours'
+ UNION ALL SELECT delays.label,extract(epoch FROM delays.started-i.created_at)*1000,extract(epoch FROM delays.duration)*1000 FROM outbox_tasks t JOIN messages m ON m.id=t.message_id
+ JOIN messages i ON i.conversation_id=m.conversation_id AND i.platform_message_id=m.reply_to_message_id AND i.direction='inbound'
+ CROSS JOIN LATERAL (VALUES ('等待投递',t.created_at,t.locked_at-t.created_at),('QQ 投递',t.locked_at,t.updated_at-t.locked_at)) AS delays(label,started,duration)
  WHERE m.event_type='AI_RESPONSE' AND t.status IN ('sent','failed','expired') AND t.updated_at>=now()-interval '24 hours' AND t.locked_at IS NOT NULL
  ) timings GROUP BY label) q`).Scan(&stages)
 	if err != nil {

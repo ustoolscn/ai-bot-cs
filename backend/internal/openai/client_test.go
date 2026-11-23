@@ -194,3 +194,24 @@ func TestResponsesImageInput(t *testing.T) {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
 }
+
+func TestCacheTokenUsageAcrossAPIs(t *testing.T) {
+	for _, tc := range []struct {
+		raw                string
+		input, read, write int
+	}{
+		{`{"input_tokens":100,"input_tokens_details":{"cached_tokens":80,"cache_write_tokens":5}}`, 100, 80, 5},
+		{`{"prompt_tokens":100,"prompt_cache_hit_tokens":80,"cache_creation_input_tokens":5}`, 100, 80, 5},
+		{`{"input_tokens":15,"cache_read_input_tokens":80,"cache_creation_input_tokens":5}`, 100, 80, 5},
+		{`{"prompt_tokens":12}`, 12, 0, 0},
+	} {
+		var usage tokenUsage
+		if err := json.Unmarshal([]byte(tc.raw), &usage); err != nil {
+			t.Fatal(err)
+		}
+		r := usage.result()
+		if r.InputTokens != tc.input || r.CachedInputTokens != tc.read || r.CacheWriteTokens != tc.write {
+			t.Fatalf("%s => %+v", tc.raw, r)
+		}
+	}
+}

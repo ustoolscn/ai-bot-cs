@@ -131,7 +131,7 @@ func (a *App) processInbox(ctx context.Context) error {
 			"含图片附件":      len(imageParts) > 0,
 			"图片来自同一用户上一条未答的消息": priorImage,
 		})
-		err = a.auxJSON(ctx, judge, profileID, "", "reply_decision", replyDecisionPrompt, string(input), &decision, imageParts...)
+		err = a.auxJSON(ctx, judge, profileID, "", j.MessageID, "reply_decision", replyDecisionPrompt, string(input), &decision, imageParts...)
 		if err == nil && decision.Reply == nil {
 			err = fmt.Errorf("回复判断缺少 reply 字段")
 		}
@@ -192,7 +192,7 @@ func (a *App) processInbox(ctx context.Context) error {
 	// Understand: rewrite the question using recent context.
 	var steps []agentStep
 	query := strings.TrimSpace(j.Content)
-	if settings.RewriteQuery && query != "" && len(turns) > 0 {
+	if settings.RewriteQuery && len(rt.knowledgeBases) > 0 && len(turns) > 0 && needsRetrievalContext(originalQuestion) {
 		finish := a.startStage(ctx, j.MessageID, "问题改写")
 		rewritten, step := a.rewriteQuery(ctx, settings, profileID, runID, turns, query)
 		if step.moderated != nil {
@@ -312,6 +312,17 @@ func (a *App) processInbox(ctx context.Context) error {
 	a.recordEntryHits(ctx, rt.hits)
 
 	return nil
+}
+
+// Only spend a model round trip on a retrieval query that refers back to a turn.
+func needsRetrievalContext(question string) bool {
+	q := strings.ToLower(strings.TrimSpace(question))
+	for _, word := range []string{"这个", "那个", "这些", "那些", "刚才", "上面", "前面", "刚说", "它", "他呢", "那价格", "那怎么", "那如果", "那要", "what about", "how about", "that one", "this one", "it cost"} {
+		if strings.Contains(q, word) {
+			return true
+		}
+	}
+	return strings.HasSuffix(strings.TrimRight(q, "？?。！!"), "呢")
 }
 
 func rewrittenOrEmpty(query, original string) string {
@@ -444,7 +455,7 @@ func historyMessages(turns []agent.Turn, conversationType string) []domain.ChatM
 		case t.Name != "" && conversationType == "group":
 			content = t.Name + ": " + content
 		}
-		out = append(out, domain.ChatMessage{Role: "user", Content: content})
+		out = append(out, domain.ChatMessage{Role: "user", Name: t.Name, Content: content})
 	}
 	return out
 }
@@ -472,12 +483,12 @@ func (a *App) rewriteQuery(ctx context.Context, s agent.Settings, profileID, run
 		fmt.Fprintf(&b, "%s：%s\n", role, agent.TruncateRunes(t.Content, 300))
 	}
 	fmt.Fprintf(&b, "用户最新一句：%s", query)
-	rctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	started := time.Now()
 	res, err := cl.ChatWith(rctx, []domain.ChatMessage{{Role: "system", Content: agent.RewritePrompt}, {Role: "user", Content: b.String()}}, domain.ChatOptions{DisableWebSearch: true})
 	step.LatencyMs = time.Since(started).Milliseconds()
-	a.recordModelCall(ctx, runID, auxID, "rewrite", res, step.LatencyMs, err)
+	a.recordModelCall(ctx, runID, "", auxID, "rewrite", res, step.LatencyMs, err)
 	if err != nil {
 		if openai.IsHTTPStatus(err, 403) {
 			step.moderated = err
@@ -493,7 +504,7 @@ func (a *App) rewriteQuery(ctx context.Context, s agent.Settings, profileID, run
 	return out, step
 }
 
-func (a *App) recordModelCall(ctx context.Context, runID, profileID, kind string, res domain.ChatResult, latency int64, err error) {
+func (a *App) recordModelCall(ctx context.Context, runID, messageID, profileID, kind string, res domain.ChatResult, latency int64, err error) {
 	var run any
 	if runID != "" {
 		run = runID
@@ -502,7 +513,17 @@ func (a *App) recordModelCall(ctx context.Context, runID, profileID, kind string
 	if profileID != "" {
 		profile = profileID
 	}
-	_, _ = a.db.Exec(ctx, "INSERT INTO model_calls(agent_run_id,profile_id,kind,input_tokens,output_tokens,latency_ms,error) VALUES($1,$2,$3,$4,$5,$6,$7)", run, profile, kind, res.InputTokens, res.OutputTokens, latency, errorText(err))
+	_, recordErr := a.db.Exec(ctx, `INSERT INTO model_calls(agent_run_id,profile_id,kind,input_tokens,output_tokens,latency_ms,error,cached_input_tokens,cache_write_tokens,message_id,estimated_cost)
+	SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,coalesce(nullif($10,'')::uuid,(SELECT message_id FROM agent_runs WHERE id=$1)),(
+		SELECT CASE WHEN num_nonnulls(input_price,output_price,cache_read_price,cache_write_price)>0 THEN
+			(CASE WHEN $4::int-$8::int-$9::int=0 THEN 0 ELSE ($4-$8-$9)*input_price END +
+			 CASE WHEN $5::int=0 THEN 0 ELSE $5*output_price END +
+			 CASE WHEN $8=0 THEN 0 ELSE $8*cache_read_price END +
+			 CASE WHEN $9=0 THEN 0 ELSE $9*cache_write_price END)/1000000 END
+		FROM model_profiles WHERE id=$2)`, run, profile, kind, res.InputTokens, res.OutputTokens, latency, errorText(err), res.CachedInputTokens, res.CacheWriteTokens, messageID)
+	if recordErr != nil {
+		a.log.Error("record model usage", "kind", kind, "error", recordErr)
+	}
 }
 
 type agentInput struct {
@@ -565,7 +586,7 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 		messages = append(messages, domain.ChatMessage{Role: "system", Content: sp})
 	}
 	messages = append(messages, historyMessages(in.history, rt.conversationType)...)
-	messages = append(messages, domain.ChatMessage{Role: "user", Content: in.userContent, Parts: in.imageParts})
+	messages = append(messages, domain.ChatMessage{Role: "user", Name: firstNonEmpty(rt.senderName, rt.senderID), Content: in.userContent, Parts: in.imageParts})
 
 	out := agentOutput{}
 	opts := domain.ChatOptions{Tools: tools, MaxOutputTokens: s.MaxOutputTokens}
@@ -583,7 +604,7 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 		res, err := in.client.ChatWith(ctx, messages, callOpts)
 		latency := time.Since(started).Milliseconds()
 		finish(in.client.Model, err)
-		a.recordModelCall(ctx, rt.runID, in.profileID, "chat", res, latency, err)
+		a.recordModelCall(ctx, rt.runID, rt.messageID, in.profileID, "chat", res, latency, err)
 		ms := agentStep{Type: "model", Name: fmt.Sprintf("第 %d 次模型调用", step+1), Output: agent.TruncateRunes(res.Content, 500), LatencyMs: latency}
 		if err != nil {
 			ms.Error = err.Error()

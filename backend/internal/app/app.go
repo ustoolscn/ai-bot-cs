@@ -189,6 +189,8 @@ func (a *App) Router() http.Handler {
 	auth.POST("/messages/:id/reply", a.humanReply)
 	auth.POST("/messages/:id/feedback", a.createFeedback)
 	auth.GET("/feedback", a.listFeedback)
+	auth.POST("/feedback/read", a.markFeedbackRead)
+	auth.POST("/feedback/:id/read", a.markFeedbackRead)
 	auth.POST("/learning/:collection/bulk-delete", a.bulkDeleteLearning)
 	auth.GET("/learning/stats", a.learningStats)
 	auth.GET("/knowledge/candidates", a.listCandidates)
@@ -400,27 +402,39 @@ func (a *App) deleteBot(c *gin.Context) {
 }
 
 type modelInput struct {
-	Name            string         `json:"name"`
-	Kind            string         `json:"kind"`
-	BaseURL         string         `json:"baseUrl"`
-	APIKey          string         `json:"apiKey"`
-	Model           string         `json:"model"`
-	Dimension       *int           `json:"dimension"`
-	Enabled         *bool          `json:"enabled"`
-	IsDefault       bool           `json:"isDefault"`
-	WebSearchMode   string         `json:"webSearchMode"`
-	ReasoningEffort string         `json:"reasoningEffort"`
-	ExtraBody       map[string]any `json:"extraBody"`
+	InputPricePerMillion      json.RawMessage `json:"inputPricePerMillion"`
+	OutputPricePerMillion     json.RawMessage `json:"outputPricePerMillion"`
+	CacheReadPricePerMillion  json.RawMessage `json:"cacheReadPricePerMillion"`
+	CacheWritePricePerMillion json.RawMessage `json:"cacheWritePricePerMillion"`
+	Name                      string          `json:"name"`
+	Kind                      string          `json:"kind"`
+	BaseURL                   string          `json:"baseUrl"`
+	APIKey                    string          `json:"apiKey"`
+	Model                     string          `json:"model"`
+	Dimension                 *int            `json:"dimension"`
+	Enabled                   *bool           `json:"enabled"`
+	IsDefault                 bool            `json:"isDefault"`
+	WebSearchMode             string          `json:"webSearchMode"`
+	ReasoningEffort           string          `json:"reasoningEffort"`
+	ExtraBody                 map[string]any  `json:"extraBody"`
 }
 
 func (a *App) listModels(c *gin.Context) {
-	queryList(c, a, `SELECT id::text,name,kind,base_url AS "baseUrl",model,dimension,enabled,is_default AS "isDefault",api_key_enc<>'' AS "hasApiKey",web_search_mode AS "webSearchMode",reasoning_effort AS "reasoningEffort",extra_body AS "extraBody",created_at AS "createdAt" FROM model_profiles ORDER BY kind,name`)
+	queryList(c, a, `SELECT id::text,name,kind,base_url AS "baseUrl",model,dimension,enabled,is_default AS "isDefault",api_key_enc<>'' AS "hasApiKey",web_search_mode AS "webSearchMode",reasoning_effort AS "reasoningEffort",extra_body AS "extraBody",input_price AS "inputPricePerMillion",output_price AS "outputPricePerMillion",cache_read_price AS "cacheReadPricePerMillion",cache_write_price AS "cacheWritePricePerMillion",created_at AS "createdAt" FROM model_profiles ORDER BY kind,name`)
 }
 func (a *App) saveModel(c *gin.Context) {
 	var in modelInput
 	if c.ShouldBindJSON(&in) != nil || in.Name == "" || in.BaseURL == "" || in.Model == "" || (in.Kind != "chat" && in.Kind != "embedding") {
 		fail(c, 400, "invalid_request", "模型配置不完整")
 		return
+	}
+	rates := []json.RawMessage{in.InputPricePerMillion, in.OutputPricePerMillion, in.CacheReadPricePerMillion, in.CacheWritePricePerMillion}
+	for _, raw := range rates {
+		var price *float64
+		if raw != nil && (json.Unmarshal(raw, &price) != nil || (price != nil && *price < 0)) {
+			fail(c, 400, "invalid_price", "单价必须是非负数或 null")
+			return
+		}
 	}
 	if in.Kind == "chat" {
 		in.Dimension = nil
@@ -475,6 +489,15 @@ func (a *App) saveModel(c *gin.Context) {
 	} else {
 		_, err = tx.Exec(c, "UPDATE model_profiles SET name=$1,kind=$2,base_url=$3,model=$4,dimension=$5,enabled=$6,is_default=$7,web_search_mode=$8,reasoning_effort=$9,extra_body=$10,updated_at=now() WHERE id=$11", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ReasoningEffort, in.ExtraBody, id)
 	}
+	var savedRates [4]*float64
+	if err == nil {
+		err = tx.QueryRow(c, `UPDATE model_profiles SET
+			input_price=(coalesce($2::jsonb,to_jsonb(input_price)) #>> '{}')::float8,
+			output_price=(coalesce($3::jsonb,to_jsonb(output_price)) #>> '{}')::float8,
+			cache_read_price=(coalesce($4::jsonb,to_jsonb(cache_read_price)) #>> '{}')::float8,
+			cache_write_price=(coalesce($5::jsonb,to_jsonb(cache_write_price)) #>> '{}')::float8
+			WHERE id=$1 RETURNING input_price,output_price,cache_read_price,cache_write_price`, id, rates[0], rates[1], rates[2], rates[3]).Scan(&savedRates[0], &savedRates[1], &savedRates[2], &savedRates[3])
+	}
 	if err != nil {
 		fail(c, 500, "database_error", "保存模型失败")
 		return
@@ -483,7 +506,7 @@ func (a *App) saveModel(c *gin.Context) {
 		fail(c, 500, "database_error", "保存模型失败")
 		return
 	}
-	ok(c, gin.H{"id": id})
+	ok(c, gin.H{"id": id, "inputPricePerMillion": savedRates[0], "outputPricePerMillion": savedRates[1], "cacheReadPricePerMillion": savedRates[2], "cacheWritePricePerMillion": savedRates[3]})
 }
 func (a *App) deleteModel(c *gin.Context) {
 	_, err := a.db.Exec(c, "DELETE FROM model_profiles WHERE id=$1", c.Param("id"))
@@ -659,6 +682,14 @@ func (a *App) updateConversation(c *gin.Context) {
 	ok(c, gin.H{"id": c.Param("id")})
 }
 
+const messageUsageJoin = `LEFT JOIN LATERAL (
+	SELECT sum(input_tokens) AS inputs,sum(output_tokens) AS outputs,sum(cached_input_tokens) AS reads,sum(cache_write_tokens) AS writes,
+	CASE WHEN count(*)=count(estimated_cost) THEN sum(estimated_cost) END AS cost
+	FROM model_calls WHERE message_id=m.id) usage ON true`
+const messageUsageColumns = `coalesce(usage.inputs,0) AS "inputTokens",coalesce(usage.outputs,0) AS "outputTokens",
+	coalesce(usage.reads,0) AS "cachedInputTokens",coalesce(usage.writes,0) AS "cacheWriteTokens",
+	coalesce(usage.reads::float8/nullif(usage.inputs,0),0) AS "cacheHitRate",usage.cost AS "estimatedCost"`
+
 func (a *App) listMessages(c *gin.Context) {
 	limit := 50
 	if v, _ := strconv.Atoi(c.DefaultQuery("limit", "50")); v > 0 && v <= 200 {
@@ -667,7 +698,7 @@ func (a *App) listMessages(c *gin.Context) {
 	query := `SELECT m.id::text,m.content AS question,m.parts,m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",
 		m.platform_message_id AS "platformMessageId",c.name AS "conversationName",b.name AS "botName",
 		COALESCE((SELECT string_agg(x.content, E'\n\n' ORDER BY x.event_at) FROM messages x WHERE x.conversation_id=m.conversation_id AND x.direction='outbound' AND x.event_type IN ('AI_RESPONSE','HUMAN_REPLY') AND x.reply_to_message_id=m.platform_message_id),'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",COALESCE(ar.status,t.status,(SELECT status FROM group_reviews WHERE message_id=m.id)) AS status,
-		COALESCE(mp.name,mp.model,'') AS model,COALESCE(mc.input_tokens,0) AS "inputTokens",COALESCE(mc.output_tokens,0) AS "outputTokens",
+		COALESCE(mp.name,mp.model,'') AS model,` + messageUsageColumns + `,
 		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
 		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END AS "knowledgeHits",
 		COALESCE(ot.status,CASE WHEN om.id IS NULL THEN 'pending' ELSE om.status END,'pending') AS "deliveryStatus",
@@ -679,7 +710,8 @@ func (a *App) listMessages(c *gin.Context) {
 	JOIN conversations c ON c.id=m.conversation_id
 	JOIN bots b ON b.id=m.bot_id
 	LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true
-	LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY created_at DESC LIMIT 1) mc ON true
+	` + messageUsageJoin + `
+ LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY (kind='chat') DESC,created_at DESC LIMIT 1) mc ON true
 	LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
 	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND reply_to_message_id=m.platform_message_id ORDER BY created_at ASC LIMIT 1) om ON true
 	LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
@@ -705,7 +737,7 @@ func (a *App) getMessage(c *gin.Context) {
 	rows, err := a.db.Query(c, `SELECT message_timeline(m) AS timeline,m.id::text,m.content AS question,m.parts,m.sender_id AS "senderId",m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",m.raw_event AS "rawEvent",
 		m.platform_message_id AS "platformMessageId",c.name AS "conversationName",b.name AS "botName",
 		COALESCE((SELECT string_agg(x.content, E'\n\n' ORDER BY x.event_at) FROM messages x WHERE x.conversation_id=m.conversation_id AND x.direction='outbound' AND x.event_type IN ('AI_RESPONSE','HUMAN_REPLY') AND x.reply_to_message_id=m.platform_message_id),'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",COALESCE(ar.status,t.status,(SELECT status FROM group_reviews WHERE message_id=m.id)) AS status,
-		COALESCE(mp.name,mp.model,'') AS model,COALESCE(mc.input_tokens,0) AS "inputTokens",COALESCE(mc.output_tokens,0) AS "outputTokens",
+		COALESCE(mp.name,mp.model,'') AS model,`+messageUsageColumns+`,
 		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
 		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END AS "knowledgeHits",
 		COALESCE(ot.status,CASE WHEN om.id IS NULL THEN 'pending' ELSE om.status END,'pending') AS "deliveryStatus",
@@ -717,7 +749,8 @@ func (a *App) getMessage(c *gin.Context) {
 	JOIN conversations c ON c.id=m.conversation_id
 	JOIN bots b ON b.id=m.bot_id
 	LEFT JOIN LATERAL (SELECT * FROM agent_runs WHERE message_id=m.id ORDER BY started_at DESC LIMIT 1) ar ON true
-	LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY created_at DESC LIMIT 1) mc ON true
+	`+messageUsageJoin+`
+ LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY (kind='chat') DESC,created_at DESC LIMIT 1) mc ON true
 	LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
 	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND reply_to_message_id=m.platform_message_id ORDER BY created_at ASC LIMIT 1) om ON true
 	LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
@@ -735,12 +768,12 @@ func (a *App) getMessage(c *gin.Context) {
 	decorateMessageParts(msg)
 	runs, _ := a.db.Query(c, `SELECT r.id::text,r.status,r.context_messages AS "contextMessages",r.rewritten_query AS "rewrittenQuery",r.steps,r.evaluation,r.retrieved_chunks AS "retrievedChunks",
 		r.context_latency_ms AS "contextLatencyMs",r.retrieval_latency_ms AS "retrievalLatencyMs",r.error,r.started_at AS "startedAt",r.completed_at AS "completedAt",
-		COALESCE(json_agg(json_build_object('kind',mc.kind,'profileName',COALESCE(mp.name,mp.model,''),'model',COALESCE(mp.model,''),'inputTokens',mc.input_tokens,'outputTokens',mc.output_tokens,'latencyMs',mc.latency_ms,'error',mc.error) ORDER BY mc.created_at) FILTER(WHERE mc.id IS NOT NULL),'[]') AS calls
+		COALESCE(json_agg(json_build_object('kind',mc.kind,'profileName',COALESCE(mp.name,mp.model,''),'model',COALESCE(mp.model,''),'inputTokens',mc.input_tokens,'outputTokens',mc.output_tokens,'cachedInputTokens',mc.cached_input_tokens,'cacheWriteTokens',mc.cache_write_tokens,'cacheHitRate',coalesce(mc.cached_input_tokens::float8/nullif(mc.input_tokens,0),0),'estimatedCost',mc.estimated_cost,'latencyMs',mc.latency_ms,'error',mc.error) ORDER BY mc.created_at) FILTER(WHERE mc.id IS NOT NULL),'[]') AS calls
 	FROM agent_runs r LEFT JOIN model_calls mc ON mc.agent_run_id=r.id LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
 	WHERE r.message_id=$1 GROUP BY r.id ORDER BY r.started_at DESC`, c.Param("id"))
 	rd, _ := rowsJSON(runs)
 	msg["agentRuns"] = rd
-	fb, _ := a.db.Query(c, `SELECT f.id::text,f.source,f.rating,f.comment,f.corrected_answer AS "correctedAnswer",f.created_at AS "createdAt" FROM message_feedback f JOIN messages o ON o.id=f.message_id
+	fb, _ := a.db.Query(c, `SELECT f.id::text,f.is_read AS "read",f.source,f.rating,f.comment,f.corrected_answer AS "correctedAnswer",f.created_at AS "createdAt" FROM message_feedback f JOIN messages o ON o.id=f.message_id
 		JOIN messages i ON i.conversation_id=o.conversation_id AND i.platform_message_id=o.reply_to_message_id WHERE i.id=$1 ORDER BY f.created_at DESC`, c.Param("id"))
 	fd, _ := rowsJSON(fb)
 	msg["feedback"] = fd
@@ -756,7 +789,7 @@ func (a *App) getMessage(c *gin.Context) {
 }
 
 func (a *App) listKBs(c *gin.Context) {
-	queryList(c, a, `SELECT k.id::text,k.name,k.description,k.embedding_profile_id::text AS "embeddingProfileId",k.embedding_model AS "embeddingModel",COUNT(DISTINCT d.id) AS "documentCount",COUNT(ch.id) AS "chunkCount",k.created_at AS "createdAt" FROM knowledge_bases k LEFT JOIN knowledge_documents d ON d.knowledge_base_id=k.id LEFT JOIN knowledge_chunks ch ON ch.document_id=d.id GROUP BY k.id ORDER BY k.created_at DESC`)
+	queryList(c, a, `SELECT k.id::text,k.name,k.description,k.embedding_profile_id::text AS "embeddingProfileId",k.embedding_model AS "embeddingModel",(SELECT count(*) FROM knowledge_entries e WHERE e.knowledge_base_id=k.id AND e.status='published') AS "entryCount",COUNT(DISTINCT d.id) AS "documentCount",COUNT(ch.id) AS "chunkCount",k.created_at AS "createdAt" FROM knowledge_bases k LEFT JOIN knowledge_documents d ON d.knowledge_base_id=k.id LEFT JOIN knowledge_chunks ch ON ch.document_id=d.id GROUP BY k.id ORDER BY k.created_at DESC`)
 }
 func (a *App) createKB(c *gin.Context) {
 	var in struct {
@@ -781,7 +814,7 @@ func (a *App) createKB(c *gin.Context) {
 }
 func (a *App) getKB(c *gin.Context) {
 	rows, err := a.db.Query(c, `SELECT k.id::text,k.name,k.description,k.embedding_profile_id::text AS "embeddingProfileId",k.embedding_model AS "embeddingModel",
-		COALESCE(json_agg(json_build_object('id',d.id::text,'name',d.name,'status',d.status,'sizeBytes',d.size_bytes,'chunkCount',COALESCE(dc.chunk_count,0),'lastError',d.last_error,'createdAt',d.created_at,'updatedAt',d.updated_at) ORDER BY d.created_at DESC) FILTER(WHERE d.id IS NOT NULL),'[]') AS documents
+		count(d.id) AS "documentCount",(SELECT count(*) FROM knowledge_entries e WHERE e.knowledge_base_id=k.id AND e.status='published') AS "entryCount",COALESCE(json_agg(json_build_object('id',d.id::text,'name',d.name,'status',d.status,'sizeBytes',d.size_bytes,'chunkCount',COALESCE(dc.chunk_count,0),'lastError',d.last_error,'createdAt',d.created_at,'updatedAt',d.updated_at) ORDER BY d.created_at DESC) FILTER(WHERE d.id IS NOT NULL),'[]') AS documents
 	FROM knowledge_bases k LEFT JOIN knowledge_documents d ON d.knowledge_base_id=k.id
 	LEFT JOIN LATERAL (SELECT count(*) AS chunk_count FROM knowledge_chunks WHERE document_id=d.id) dc ON true
 	WHERE k.id=$1 GROUP BY k.id`, c.Param("id"))

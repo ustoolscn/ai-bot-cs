@@ -167,10 +167,7 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 		Choices []struct {
 			Message responseMsg `json:"message"`
 		} `json:"choices"`
-		Usage struct {
-			Prompt     int `json:"prompt_tokens"`
-			Completion int `json:"completion_tokens"`
-		} `json:"usage"`
+		Usage tokenUsage `json:"usage"`
 	}
 	err := c.do(ctx, "/chat/completions", req, &resp)
 	if err != nil && opts.MaxOutputTokens > 0 && IsHTTPStatus(err, 400) && strings.Contains(err.Error(), "max_tokens") {
@@ -197,7 +194,8 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 			return domain.ChatResult{}, fmt.Errorf("联网模型未返回检索来源")
 		}
 	}
-	result := domain.ChatResult{Content: msg.Content, InputTokens: resp.Usage.Prompt, OutputTokens: resp.Usage.Completion}
+	result := resp.Usage.result()
+	result.Content = msg.Content
 	for _, tc := range msg.ToolCalls {
 		if tc.Function.Name == "" {
 			continue
@@ -281,10 +279,7 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 				Text string `json:"text"`
 			} `json:"content"`
 		} `json:"output"`
-		Usage struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
+		Usage tokenUsage `json:"usage"`
 	}
 	if err := c.do(ctx, "/responses", payload, &resp); err != nil {
 		return domain.ChatResult{}, err
@@ -319,7 +314,9 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 	if content == "" && len(calls) == 0 {
 		return domain.ChatResult{}, fmt.Errorf("responses API returned no output_text")
 	}
-	return domain.ChatResult{Content: content, InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens, ToolCalls: calls}, nil
+	result := resp.Usage.result()
+	result.Content, result.ToolCalls = content, calls
+	return result, nil
 }
 
 func completionContent(message domain.ChatMessage) []map[string]any {
@@ -404,4 +401,37 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 		}
 	}
 	return out, nil
+}
+
+type cacheUsage struct {
+	Cached        int `json:"cached_tokens"`
+	Write         int `json:"cache_write_tokens"`
+	Creation      int `json:"cache_creation_tokens"`
+	CreationInput int `json:"cache_creation_input_tokens"`
+}
+
+type tokenUsage struct {
+	Prompt        *int       `json:"prompt_tokens"`
+	Completion    int        `json:"completion_tokens"`
+	Input         int        `json:"input_tokens"`
+	Output        int        `json:"output_tokens"`
+	PromptDetails cacheUsage `json:"prompt_tokens_details"`
+	InputDetails  cacheUsage `json:"input_tokens_details"`
+	CacheHit      int        `json:"prompt_cache_hit_tokens"`
+	CacheRead     int        `json:"cache_read_input_tokens"`
+	CacheWrite    int        `json:"cache_creation_input_tokens"`
+	WriteTokens   int        `json:"cache_write_tokens"`
+}
+
+func (u tokenUsage) result() domain.ChatResult {
+	input, output := u.Input, u.Output
+	if u.Prompt != nil {
+		input, output = *u.Prompt, u.Completion
+	} else if u.CacheRead+u.CacheWrite > 0 {
+		// Native Anthropic usage reports ordinary input separately from cache usage.
+		input += u.CacheRead + u.CacheWrite
+	}
+	read := min(input, max(u.CacheHit, u.CacheRead, u.PromptDetails.Cached, u.InputDetails.Cached))
+	write := min(input-read, max(u.CacheWrite, u.WriteTokens, u.InputDetails.CreationInput, u.PromptDetails.CreationInput, u.PromptDetails.Write, u.PromptDetails.Creation, u.InputDetails.Write, u.InputDetails.Creation))
+	return domain.ChatResult{InputTokens: input, OutputTokens: output, CachedInputTokens: read, CacheWriteTokens: write}
 }

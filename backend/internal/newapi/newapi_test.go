@@ -144,3 +144,20 @@ func TestServiceWindowSurvivesPartialSync(t *testing.T) {
 		t.Fatalf("group match: %+v, %v", result, err)
 	}
 }
+
+func TestRankUsesFinalAvailableGroupPrice(t *testing.T) {
+	s := Snapshot{GroupRatio: map[string]float64{"default": 1, "gpt": 0.1, "private": 0.01}, UsableGroups: map[string]string{"default": "默认", "gpt": "优惠"}}
+	models := []ModelPrice{{ModelName: "deepseek", ModelRatio: 1, CompletionRatio: 2, BillingMode: "per_token", EnableGroups: []string{"default"}}, {ModelName: "gpt", ModelRatio: 3, CompletionRatio: 2, BillingMode: "per_token", EnableGroups: []string{"all"}}}
+	q := s.CustomerQuotes(models, "")
+	if len(q) != 2 || q[0].Model != "gpt" || q[0].Group != "gpt" || *q[0].InputPerMillion != 0.6 {
+		t.Fatal(q)
+	}
+	q = s.CustomerQuotes(models, "default")
+	if len(q) != 2 || q[0].Model != "deepseek" {
+		t.Fatal(q)
+	}
+	q = s.CustomerQuotes(models, "gpt")
+	if len(q) != 1 || q[0].Model != "gpt" {
+		t.Fatal(q)
+	}
+}

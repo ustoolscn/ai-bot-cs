@@ -118,7 +118,7 @@ func (a *App) runJob(ctx context.Context, j agentJob) error {
 }
 
 // auxJSON runs the auxiliary model with a system prompt and decodes JSON output.
-func (a *App) auxJSON(ctx context.Context, s agent.Settings, fallbackProfile, runID, kind, system, user string, out any, images ...domain.ChatContentPart) error {
+func (a *App) auxJSON(ctx context.Context, s agent.Settings, fallbackProfile, runID, messageID, kind, system, user string, out any, images ...domain.ChatContentPart) error {
 	cl, pid, err := a.auxModel(ctx, s, fallbackProfile)
 	if err != nil {
 		return fmt.Errorf("辅助模型不可用: %w", err)
@@ -127,7 +127,7 @@ func (a *App) auxJSON(ctx context.Context, s agent.Settings, fallbackProfile, ru
 	defer cancel()
 	started := time.Now()
 	res, err := cl.ChatWith(cctx, []domain.ChatMessage{{Role: "system", Content: system}, {Role: "user", Content: user, Parts: images}}, domain.ChatOptions{DisableWebSearch: true})
-	a.recordModelCall(ctx, runID, pid, kind, res, time.Since(started).Milliseconds(), err)
+	a.recordModelCall(ctx, runID, messageID, pid, kind, res, time.Since(started).Milliseconds(), err)
 	if err != nil {
 		return err
 	}
@@ -147,7 +147,7 @@ func (a *App) auxText(ctx context.Context, s agent.Settings, fallbackProfile, ki
 	defer cancel()
 	started := time.Now()
 	res, err := cl.ChatWith(cctx, []domain.ChatMessage{{Role: "system", Content: system}, {Role: "user", Content: user}}, domain.ChatOptions{DisableWebSearch: true})
-	a.recordModelCall(ctx, "", pid, kind, res, time.Since(started).Milliseconds(), err)
+	a.recordModelCall(ctx, "", "", pid, kind, res, time.Since(started).Milliseconds(), err)
 	if err != nil {
 		return "", err
 	}
@@ -212,7 +212,7 @@ func (a *App) jobEvaluate(ctx context.Context, runID, messageID, profileID strin
 		fmt.Fprintf(&b, "\n本轮时间：%s\n已有用户档案：%s\n已有事件：%s", eventAt.Format(time.RFC3339), previousProfile, existing)
 	}
 	var ev evaluation
-	if err := a.auxJSON(ctx, s, profileID, runID, "evaluate", agent.EvaluationPrompt, b.String(), &ev); err != nil {
+	if err := a.auxJSON(ctx, s, profileID, runID, "", "evaluate", agent.EvaluationPrompt, b.String(), &ev); err != nil {
 		return err
 	}
 	evForAudit := ev
@@ -453,7 +453,7 @@ func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool
 	input := strings.Join(lines, "\n") + "\n" + label + "：" + agent.TruncateRunes(content, 1000)
 	var res staffMining
 
-	if err := a.auxJSON(ctx, s, profile, "", "staff_mining", agent.StaffMiningPrompt, input, &res); err != nil {
+	if err := a.auxJSON(ctx, s, profile, "", messageID, "staff_mining", agent.StaffMiningPrompt, input, &res); err != nil {
 		return err
 	}
 	if !res.Reusable || strings.TrimSpace(res.Question) == "" || strings.TrimSpace(res.Answer) == "" {

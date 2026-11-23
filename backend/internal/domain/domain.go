@@ -51,6 +51,7 @@ type ChatContentPart struct {
 }
 
 type ChatMessage struct {
+	Name       string            `json:"name,omitempty"`
 	Role       string            `json:"role"`
 	Content    string            `json:"content"`
 	Parts      []ChatContentPart `json:"parts,omitempty"`
@@ -58,9 +59,10 @@ type ChatMessage struct {
 	ToolCallID string            `json:"toolCallId,omitempty"`
 }
 type ChatResult struct {
-	Content                   string
-	InputTokens, OutputTokens int
-	ToolCalls                 []ToolCall
+	Content                             string
+	InputTokens, OutputTokens           int
+	CachedInputTokens, CacheWriteTokens int
+	ToolCalls                           []ToolCall
 }
 
 // ToolCall is a function call requested by the model.

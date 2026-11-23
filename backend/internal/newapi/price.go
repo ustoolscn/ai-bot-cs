@@ -196,7 +196,7 @@ func round(v float64) float64 { return math.Round(v*1e12) / 1e12 }
 
 // Display exposes the final customer prices in the selected currency.
 func (q PriceQuote) Display(exchange float64) map[string]any {
-	out := map[string]any{"model": q.Model, "group": q.Group, "billing": q.Billing}
+	out := map[string]any{"model": q.Model, "group": q.Group, "groupRatio": q.GroupRatio, "billing": q.Billing}
 	if q.Note != "" {
 		out["note"] = q.Note
 	}
@@ -216,5 +216,50 @@ func (q PriceQuote) Display(exchange float64) map[string]any {
 		out["baseBillingExpr"] = q.BillingExpr
 		out["applyToExpressionResult"] = q.GroupRatio * exchange
 	}
+	return out
+}
+
+// CustomerQuotes selects only available group/model combinations with a known
+// multiplier. When no group is specified each quote names its cheapest group.
+func (s Snapshot) CustomerQuotes(models []ModelPrice, group string) []PriceQuote {
+	var out []PriceQuote
+	for _, m := range models {
+		best := ""
+		for g, r := range s.GroupRatio {
+			if group != "" && g != group {
+				continue
+			}
+			if len(m.EnableGroups) > 0 && !contains(m.EnableGroups, g) && !contains(m.EnableGroups, "all") {
+				continue
+			}
+			if len(s.UsableGroups) > 0 {
+				if _, ok := s.UsableGroups[g]; !ok {
+					continue
+				}
+			}
+			if best == "" || r < s.GroupRatio[best] || (r == s.GroupRatio[best] && g < best) {
+				best = g
+			}
+		}
+		if best != "" {
+			out = append(out, s.Quote(m, best))
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Billing != b.Billing {
+			return a.Billing < b.Billing
+		}
+		if a.PerCall != nil && b.PerCall != nil {
+			return *a.PerCall < *b.PerCall
+		}
+		if a.InputPerMillion != nil && b.InputPerMillion != nil {
+			if *a.InputPerMillion == *b.InputPerMillion {
+				return *a.OutputPerMillion < *b.OutputPerMillion
+			}
+			return *a.InputPerMillion < *b.InputPerMillion
+		}
+		return a.Model < b.Model
+	})
 	return out
 }

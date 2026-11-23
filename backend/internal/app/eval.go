@@ -161,7 +161,7 @@ func (a *App) jobEvalRun(ctx context.Context, runID string) error {
 		if out.err == nil {
 			var jr judgeResult
 			input := fmt.Sprintf("问题：%s\n期望要点：%s\n实际回答：%s", cs.q, firstNonEmpty(cs.e, "（未提供，按常识判断是否合理）"), answer)
-			if err := a.auxJSON(ctx, settings, profileID, "", "judge", agent.JudgePrompt, input, &jr); err == nil {
+			if err := a.auxJSON(ctx, settings, profileID, "", "", "judge", agent.JudgePrompt, input, &jr); err == nil {
 				score, verdict = jr.Score, jr.Verdict
 				scoreSum += jr.Score
 				scored++

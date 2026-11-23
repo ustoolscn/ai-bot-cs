@@ -192,6 +192,10 @@ func TestAuxiliaryModerationRecovery(t *testing.T) {
 			switch stage {
 			case "rewrite", "decision":
 				if stage == "rewrite" {
+					_, err := pool.Exec(ctx, "UPDATE messages SET content='那价格多少' WHERE id=$1", mid)
+					check(err)
+					_, err = pool.Exec(ctx, `WITH kb AS (INSERT INTO knowledge_bases(name) VALUES('rewrite fixture') RETURNING id) INSERT INTO conversation_knowledge_bases SELECT $1,id FROM kb`, cid)
+					check(err)
 					_, err = pool.Exec(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,content,event_at) VALUES('qq',$1,$2,'inbound','earlier question',now()-interval '1 minute')`, bot, cid)
 					check(err)
 				}
