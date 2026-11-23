@@ -1,5 +1,5 @@
 import { markRaw, type Component } from 'vue'
-import { ChatDotRound, ChatLineSquare, Collection, Connection, Cpu, DataAnalysis, Headset, MagicStick, CircleClose, Odometer, Reading, Setting } from '@element-plus/icons-vue'
+import { ChatDotRound, ChatLineSquare, Collection, Connection, Cpu, DataAnalysis, Headset, MagicStick, CircleClose, Clock, Odometer, Reading, Setting } from '@element-plus/icons-vue'
 
 export interface NavItem { path: string; label: string; description: string; icon: Component; badge?: 'handoffs' | 'candidates' }
 export interface NavGroup { title: string; items: NavItem[] }
@@ -9,6 +9,7 @@ const icon = (value: Component) => markRaw(value)
 export const navGroups: NavGroup[] = [
   { title: '工作台', items: [
     { path: '/overview', label: '今日概览', description: '待办事项、核心指标和服务健康', icon: icon(Odometer) },
+    { path: '/schedules', label: '定时任务', description: '设置发送时间、内容和目标群，测试发送并查看结果', icon: icon(Clock) },
     { path: '/handoffs', label: '人工台', description: '转人工的用户，在这里直接回复', icon: icon(Headset), badge: 'handoffs' },
     { path: '/learning', label: '知识审核', description: '候选知识、FAQ、知识缺口、反馈和用户记忆', icon: icon(Reading), badge: 'candidates' },
   ] },

@@ -177,6 +177,7 @@ func (a *App) Router() http.Handler {
 	auth.POST("/messages/:id/reply", a.humanReply)
 	auth.POST("/messages/:id/feedback", a.createFeedback)
 	auth.GET("/feedback", a.listFeedback)
+	auth.POST("/learning/:collection/bulk-delete", a.bulkDeleteLearning)
 	auth.GET("/learning/stats", a.learningStats)
 	auth.GET("/knowledge/candidates", a.listCandidates)
 	auth.POST("/knowledge/candidates/:id/approve", a.approveCandidateAPI)

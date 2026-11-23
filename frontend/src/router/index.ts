@@ -7,6 +7,7 @@ const router = createRouter({
     { path: '/', component: () => import('@/layouts/MainLayout.vue'), children: [
       { path: '', redirect: '/overview' },
       { path: 'overview', name: 'overview', component: () => import('@/views/DashboardView.vue') },
+      { path: 'schedules', name: 'schedules', component: () => import('@/views/SchedulesView.vue') },
       { path: 'bots', name: 'bots', component: () => import('@/views/BotsView.vue') },
       { path: 'conversations', name: 'conversations', component: () => import('@/views/ConversationsView.vue') },
       { path: 'blacklist', name: 'blacklist', component: () => import('@/views/BlacklistView.vue') },

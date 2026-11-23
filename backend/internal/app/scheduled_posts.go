@@ -9,90 +9,70 @@ import (
 	"time"
 
 	"ai-bot/backend/internal/domain"
-	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
-func (a *App) scheduledPostRoutes(r *gin.RouterGroup) {
-	group := r.Group("/conversations/:id/schedules")
-	group.GET("", func(c *gin.Context) {
-		queryList(c, a, `SELECT s.id::text,to_char(s.send_time,'HH24:MI') AS "sendTime",s.instruction,s.source,s.format,s.enabled,
-          COALESCE(s.service_id::text,'') AS "serviceId",COALESCE(o.status,j.status,'') AS status,COALESCE(o.last_error,j.last_error,'') AS error
-          FROM scheduled_posts s LEFT JOIN agent_jobs j ON j.id=s.last_job_id LEFT JOIN outbox_tasks o ON o.message_id=s.last_message_id
-          WHERE s.conversation_id=$1 ORDER BY s.send_time,s.id`, c.Param("id"))
-	})
-	group.POST("", a.saveSchedule)
-	group.PUT("/:item", a.saveSchedule)
-	group.DELETE("/:item", func(c *gin.Context) {
-		tag, err := a.db.Exec(c, "DELETE FROM scheduled_posts WHERE conversation_id=$1 AND id=$2", c.Param("id"), c.Param("item"))
-		if err != nil {
-			fail(c, 500, "database_error", "删除失败")
-			return
-		}
-		if tag.RowsAffected() == 0 {
-			fail(c, 404, "not_found", "任务不存在")
-			return
-		}
-		ok(c, gin.H{"deleted": true})
-	})
-}
-
-func (a *App) saveSchedule(c *gin.Context) {
-	var in struct {
-		SendTime, Instruction, Source, Format, ServiceID string
-		Enabled                                          bool
+// The parent row is locked by the caller. Each run snapshots its eligible recipients.
+func createScheduleRun(ctx context.Context, tx pgx.Tx, id, source string, now time.Time, groups []string, testID string) (int, error) {
+	test := testID != ""
+	runID := testID
+	if !test {
+		runID = uuid.NewString()
 	}
-	if c.ShouldBindJSON(&in) != nil {
-		fail(c, 400, "invalid_request", "任务格式有误")
-		return
-	}
-	in.Instruction = strings.TrimSpace(in.Instruction)
-	at, err := time.Parse("15:04", in.SendTime)
-	if err != nil || at.Format("15:04") != in.SendTime || in.Instruction == "" || len([]rune(in.Instruction)) > 4000 ||
-		(in.Source != "web" && in.Source != "group" && in.Source != "instruction") || (in.Format != "text" && in.Format != "image") || (in.ServiceID != "" && parseUUID(in.ServiceID) != nil) {
-		fail(c, 400, "invalid_request", "请填写有效的时间、内容指令、数据来源和发送格式")
-		return
-	}
-	args := []any{c.Param("id"), in.SendTime, in.Instruction, in.Source, in.Format, nullString(in.ServiceID), in.Enabled}
-	valid := `SELECT c.id FROM conversations c WHERE c.id=$1 AND c.type='group'
-        AND ($6::uuid IS NULL OR EXISTS(SELECT 1 FROM bot_services b WHERE b.id=$6 AND b.bot_id=c.bot_id))`
-	query := `INSERT INTO scheduled_posts(conversation_id,send_time,instruction,source,format,service_id,enabled)
-        SELECT id,$2::text::time,$3,$4,$5,$6,$7 FROM (` + valid + `) g RETURNING id::text`
-	if id := c.Param("item"); id != "" {
-		query = `UPDATE scheduled_posts SET send_time=$2::text::time,instruction=$3,source=$4,format=$5,service_id=$6,enabled=$7,
-          updated_at=now(),last_job_id=NULL,last_message_id=NULL WHERE conversation_id IN (` + valid + `) AND id=$8 RETURNING id::text`
-		args = append(args, id)
-	}
-	var id string
-	err = a.db.QueryRow(c, query, args...).Scan(&id)
+	var inserted string
+	err := tx.QueryRow(ctx, `INSERT INTO schedule_runs(id,schedule_id,revision,run_date,deadline,is_test)
+ SELECT $1,id,revision,($3::timestamptz AT TIME ZONE 'Asia/Shanghai')::date,
+ CASE WHEN $4 THEN $3::timestamptz+interval '1 hour' ELSE
+ (((($3::timestamptz AT TIME ZONE 'Asia/Shanghai')::date+send_time) AT TIME ZONE 'Asia/Shanghai')+interval '1 hour') END,$4 FROM scheduled_posts WHERE id=$2
+ ON CONFLICT DO NOTHING RETURNING id::text`, runID, id, now, test).Scan(&inserted)
 	if errors.Is(err, pgx.ErrNoRows) {
-		fail(c, 400, "invalid_target", "请检查群、客服及任务是否存在")
-		return
+		return 0, nil
 	}
 	if err != nil {
-		fail(c, 500, "database_error", "保存任务失败")
-		return
+		return 0, err
 	}
-	ok(c, gin.H{"id": id})
+	tag, err := tx.Exec(ctx, `INSERT INTO schedule_deliveries(run_id,conversation_id,job_id)
+ SELECT $1,conversation_id,CASE WHEN $4='group' THEN gen_random_uuid() ELSE $1::uuid END FROM schedule_recipients
+ WHERE schedule_id=$2 AND ($3::uuid[] IS NULL OR conversation_id=ANY($3))`, runID, id, groups, source)
+	if err != nil {
+		return 0, err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO agent_jobs(id,kind,payload) SELECT DISTINCT job_id,'scheduled_post','{}'::jsonb FROM schedule_deliveries WHERE run_id=$1`, runID)
+	return int(tag.RowsAffected()), err
 }
 
 func (a *App) queueScheduledPosts(ctx context.Context, now time.Time) error {
-	// Generation has a bounded timeout. Recover a claim abandoned by a stopped worker.
-	if _, err := a.db.Exec(ctx, `UPDATE agent_jobs SET status='pending',locked_at=NULL
-      WHERE kind='scheduled_post' AND status='processing' AND locked_at<now()-interval '5 minutes'`); err != nil {
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
 		return err
 	}
-	_, err := a.db.Exec(ctx, `WITH clock AS (SELECT $1::timestamptz AT TIME ZONE 'Asia/Shanghai' AS local_now),
-      due AS (
-        UPDATE scheduled_posts s SET last_run_date=k.local_now::date,last_job_id=gen_random_uuid(),last_message_id=NULL
-        FROM conversations c JOIN bots b ON b.id=c.bot_id CROSS JOIN clock k
-        WHERE c.id=s.conversation_id AND s.enabled AND c.enabled AND b.enabled AND c.type='group'
-          AND s.last_run_date IS DISTINCT FROM k.local_now::date
-          AND k.local_now BETWEEN k.local_now::date+s.send_time AND k.local_now::date+s.send_time+interval '1 hour'
-          AND s.updated_at AT TIME ZONE 'Asia/Shanghai' <= k.local_now::date+s.send_time
-        RETURNING s.last_job_id
-      ) INSERT INTO agent_jobs(id,kind,payload) SELECT last_job_id,'scheduled_post','{}'::jsonb FROM due`, now)
-	return err
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `UPDATE agent_jobs SET status='pending',locked_at=NULL WHERE kind='scheduled_post' AND status='processing' AND locked_at<now()-interval '5 minutes'`); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `WITH clock AS (SELECT $1::timestamptz AT TIME ZONE 'Asia/Shanghai' AS t)
+ SELECT s.id::text,s.source FROM scheduled_posts s,clock WHERE enabled AND last_run_date IS DISTINCT FROM t::date
+ AND t BETWEEN t::date+send_time AND t::date+send_time+interval '1 hour'
+ AND updated_at AT TIME ZONE 'Asia/Shanghai' <= t::date+send_time AND EXISTS(SELECT FROM schedule_recipients WHERE schedule_id=s.id)
+ ORDER BY s.id FOR UPDATE OF s SKIP LOCKED`, now)
+	if err != nil {
+		return err
+	}
+	type due struct{ ID, Source string }
+	tasks, err := pgx.CollectRows(rows, pgx.RowToStructByPos[due])
+	if err != nil {
+		return err
+	}
+	for _, t := range tasks {
+		if _, err = createScheduleRun(ctx, tx, t.ID, t.Source, now, nil, ""); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, "UPDATE scheduled_posts SET last_run_date=($2::timestamptz AT TIME ZONE 'Asia/Shanghai')::date WHERE id=$1", t.ID, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
@@ -101,13 +81,15 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 	var cid, profile, persona, style, role, source, format, instruction string
 	var day, deadline time.Time
 	err := a.db.QueryRow(ctx, `SELECT c.id::text,COALESCE(svc.chat_profile_id::text,
-        CASE WHEN s.service_id IS NULL THEN cfg.chat_profile_id::text END,''),COALESCE(svc.name,''),COALESCE(p.prompt,''),COALESCE(ag.instructions,''),
-        s.source,s.format,s.instruction,s.last_run_date,((s.last_run_date+s.send_time) AT TIME ZONE 'Asia/Shanghai')+interval '1 hour'
-      FROM scheduled_posts s JOIN conversations c ON c.id=s.conversation_id JOIN bots b ON b.id=c.bot_id
-      JOIN conversation_support_config cfg ON cfg.id=c.id
-      LEFT JOIN bot_services svc ON svc.id=COALESCE(s.service_id,c.service_id) AND svc.bot_id=c.bot_id
+        CASE WHEN dest.service_id IS NULL THEN cfg.chat_profile_id::text END,''),COALESCE(svc.name,''),COALESCE(p.prompt,''),COALESCE(ag.instructions,''),
+        s.source,s.format,s.instruction,r.run_date,r.deadline
+ FROM schedule_deliveries d JOIN schedule_runs r ON r.id=d.run_id JOIN scheduled_posts s ON s.id=r.schedule_id AND s.revision=r.revision
+ JOIN schedule_recipients dest ON dest.schedule_id=s.id AND dest.conversation_id=d.conversation_id JOIN conversations c ON c.id=d.conversation_id
+ JOIN conversation_support_config cfg ON cfg.id=c.id
+      LEFT JOIN bot_services svc ON svc.id=COALESCE(dest.service_id,c.service_id) AND svc.bot_id=c.bot_id
       LEFT JOIN support_agents ag ON ag.id=svc.agent_id LEFT JOIN personality_presets p ON p.id=ag.personality_id
-      WHERE s.last_job_id=$1 AND s.last_message_id IS NULL AND s.enabled AND c.enabled AND b.enabled`, jobID).
+      LEFT JOIN model_profiles mp ON mp.id=coalesce(svc.chat_profile_id,cfg.chat_profile_id)
+ WHERE d.job_id=$1 AND d.message_id IS NULL AND (s.enabled OR r.is_test) ORDER BY (s.source='web' AND mp.web_search_mode<>'disabled') DESC NULLS LAST,c.id LIMIT 1`, jobID).
 		Scan(&cid, &profile, &persona, &style, &role, &source, &format, &instruction, &day, &deadline)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
@@ -172,13 +154,15 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 	raw, _ := json.Marshal(parts)
 	// Recheck that this exact occurrence is still active after model/render latency.
 	_, err = a.db.Exec(ctx, `WITH target AS (
-       SELECT s.id,c.bot_id,c.id AS cid FROM scheduled_posts s JOIN conversations c ON c.id=s.conversation_id JOIN bots b ON b.id=c.bot_id
-       WHERE s.last_job_id=$1 AND s.enabled AND c.enabled AND b.enabled AND s.last_message_id IS NULL AND now()<$4 FOR UPDATE OF s
+       SELECT d.run_id,d.conversation_id AS cid,dest.bot_id,gen_random_uuid() AS mid FROM schedule_deliveries d JOIN schedule_runs r ON r.id=d.run_id
+ JOIN scheduled_posts s ON s.id=r.schedule_id AND s.revision=r.revision JOIN schedule_recipients dest ON dest.schedule_id=s.id AND dest.conversation_id=d.conversation_id
+ WHERE d.job_id=$1 AND d.message_id IS NULL AND (s.enabled OR r.is_test) AND now()<$4 FOR UPDATE OF s,d
     ), msg AS (
-       INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,content,parts,status,reply_deadline)
-       SELECT 'qq',bot_id,cid,'outbound','SCHEDULED_POST',$2,$3::jsonb,'pending',$4 FROM target RETURNING id
+       INSERT INTO messages(id,channel,bot_id,conversation_id,direction,event_type,content,parts,status,reply_deadline)
+       SELECT mid,'qq',bot_id,cid,'outbound','SCHEDULED_POST',$2,$3::jsonb,'pending',$4 FROM target RETURNING id
     ), marked AS (
-       UPDATE scheduled_posts s SET last_message_id=m.id FROM msg m,target t WHERE s.id=t.id RETURNING m.id
+       UPDATE schedule_deliveries d SET message_id=m.id FROM msg m JOIN target t ON t.mid=m.id
+       WHERE d.run_id=t.run_id AND d.conversation_id=t.cid RETURNING m.id
     ) INSERT INTO outbox_tasks(message_id,msg_seq) SELECT id,1 FROM marked`, jobID, text, string(raw), deadline)
 	return err
 }

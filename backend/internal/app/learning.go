@@ -312,3 +312,30 @@ func (a *App) learningStats(c *gin.Context) {
 		(SELECT count(*) FROM handoffs WHERE status='open')`).Scan(&pending, &entries, &openGaps, &feedback7d, &bad7d, &memories, &openHandoffs)
 	ok(c, gin.H{"pendingCandidates": pending, "publishedEntries": entries, "openGaps": openGaps, "feedback7d": feedback7d, "negativeFeedback7d": bad7d, "activeMemories": memories, "openHandoffs": openHandoffs})
 }
+
+func (a *App) bulkDeleteLearning(c *gin.Context) {
+	tables := map[string]string{"candidates": "knowledge_candidates", "entries": "knowledge_entries", "gaps": "knowledge_gaps", "feedback": "message_feedback", "memories": "user_memories"}
+	table, valid := tables[c.Param("collection")]
+	if !valid {
+		fail(c, 404, "not_found", "未知的知识审核列表")
+		return
+	}
+	var in struct{ IDs []string }
+	if c.ShouldBindJSON(&in) != nil || len(in.IDs) == 0 || len(in.IDs) > 1000 {
+		fail(c, 400, "invalid_ids", "请勾选 1 到 1000 条记录")
+		return
+	}
+	for _, id := range in.IDs {
+		if parseUUID(id) != nil {
+			fail(c, 400, "invalid_ids", "记录编号无效")
+			return
+		}
+	}
+	// Table names come exclusively from the allowlist. PostgreSQL applies FK cleanup atomically.
+	tag, err := a.db.Exec(c, "DELETE FROM "+table+" WHERE id=ANY($1::uuid[])", in.IDs)
+	if err != nil {
+		fail(c, 500, "delete_failed", "删除失败")
+		return
+	}
+	ok(c, gin.H{"deleted": tag.RowsAffected()})
+}

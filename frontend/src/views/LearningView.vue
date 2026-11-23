@@ -1,6 +1,7 @@
 <template>
   <div class="content-page">
     <PageHeader title="知识审核" description="官方客服的回答、管理员的纠错、机器人没答上的问题，都会先到这里。审核通过后成为 FAQ，机器人就能用上。">
+      <el-button type="danger" plain :disabled="!selectedIds.length || loading" :loading="deleting" @click="deleteSelected">批量删除{{ selectedIds.length ? '（'+selectedIds.length+'）' : '' }}</el-button>
       <el-button :icon="Refresh" @click="reload">刷新</el-button>
     </PageHeader>
     <el-tabs v-model="tab" @tab-change="onTabChange">
@@ -8,7 +9,8 @@
         <template #label>待审核<span class="count-pill" :class="{ hot: stats?.pendingCandidates }">{{ stats?.pendingCandidates ?? 0 }}</span></template>
         <div class="toolbar"><el-segmented v-model="candidateStatus" :options="candidateStatusOptions" @change="loadTab" /><el-tag v-if="candidateConversation" closable round @close="clearConversationFilter">只看群：{{ candidateConversationName || candidateConversation }}</el-tag></div>
         <section class="table-panel">
-          <el-table v-loading="loading" :data="candidates" :empty-text="candidateStatus === 'pending' ? '没有待审核的知识。在“群与会话 → 成员”里标记官方客服后，他们在群里的回答会自动出现在这里。' : '暂无记录'">
+          <el-table row-key="id" :key="JSON.stringify([tab,candidateStatus,candidateConversation])" v-loading="loading" :data="candidates" @selection-change="(rows: {id:string}[]) => selectRows('candidates',rows)" :empty-text="candidateStatus === 'pending' ? '没有待审核的知识。在“群与会话 → 成员”里标记官方客服后，他们在群里的回答会自动出现在这里。' : '暂无记录'">
+            <el-table-column type="selection" reserve-selection width="48" />
             <el-table-column label="问题 / 答案" min-width="380"><template #default="{ row }"><div class="qa"><strong>{{ row.question }}</strong><span>{{ row.answer }}</span><small v-if="row.aliases?.length">相似问：{{ row.aliases.join('；') }}</small></div></template></el-table-column>
             <el-table-column label="来源" width="130"><template #default="{ row }"><div class="stacked-cell"><el-tag effect="plain" size="small">{{ sourceText[row.source] || row.source }}</el-tag><span>{{ row.knowledgeBaseName || '默认知识库' }}</span></div></template></el-table-column>
             <el-table-column label="可信度" width="90"><template #default="{ row }"><span :class="row.confidence >= 0.85 ? 'trend-good' : row.confidence < 0.6 ? 'danger-text' : ''">{{ Math.round(row.confidence * 100) }}%</span></template></el-table-column>
@@ -28,7 +30,8 @@
           <el-button type="primary" :icon="Plus" @click="editEntry()">新建条目</el-button>
         </div>
         <section class="table-panel">
-          <el-table v-loading="loading" :data="entries" empty-text="暂无条目">
+          <el-table row-key="id" :key="JSON.stringify([tab,entryQuery,entryKB,entryStatus])" v-loading="loading" :data="entries" @selection-change="(rows: {id:string}[]) => selectRows('entries',rows)" empty-text="暂无条目">
+            <el-table-column type="selection" reserve-selection width="48" />
             <el-table-column label="问题 / 答案" min-width="380"><template #default="{ row }"><div class="qa"><strong>{{ row.question }}</strong><span>{{ row.answer }}</span></div></template></el-table-column>
             <el-table-column prop="knowledgeBaseName" label="知识库" width="120" />
             <el-table-column label="来源" width="100"><template #default="{ row }">{{ sourceText[row.source] || row.source }}</template></el-table-column>
@@ -42,7 +45,8 @@
       <el-tab-pane name="gaps">
         <template #label>没答上的问题<span class="count-pill" :class="{ hot: stats?.openGaps }">{{ stats?.openGaps ?? 0 }}</span></template>
         <section class="table-panel">
-          <el-table v-loading="loading" :data="gaps" empty-text="没有新的缺口。机器人因为缺少资料没答上的问题，会自动归类到这里，补上答案即可。">
+          <el-table row-key="id" :key="JSON.stringify([tab])" v-loading="loading" :data="gaps" @selection-change="(rows: {id:string}[]) => selectRows('gaps',rows)" empty-text="没有新的缺口。机器人因为缺少资料没答上的问题，会自动归类到这里，补上答案即可。">
+            <el-table-column type="selection" reserve-selection width="48" />
             <el-table-column prop="question" label="用户问了但没答上的问题" min-width="360" />
             <el-table-column prop="occurrences" label="出现次数" width="100" sortable />
             <el-table-column label="最近出现" width="150"><template #default="{ row }">{{ formatTime(row.lastSeenAt) }}</template></el-table-column>
@@ -55,7 +59,8 @@
         <template #label>反馈<span v-if="stats" class="count-pill" :class="{ hot: stats.negativeFeedback7d }" title="最近 7 天差评数">{{ stats.negativeFeedback7d }}</span></template>
         <div class="toolbar"><el-select v-model="feedbackRating" clearable placeholder="全部评价" @change="loadTab"><el-option v-for="(v, k) in ratingText" :key="k" :label="v" :value="k" /></el-select></div>
         <section class="table-panel">
-          <el-table v-loading="loading" :data="feedback" empty-text="暂无反馈">
+          <el-table row-key="id" :key="JSON.stringify([tab,feedbackRating])" v-loading="loading" :data="feedback" @selection-change="(rows: {id:string}[]) => selectRows('feedback',rows)" empty-text="暂无反馈">
+            <el-table-column type="selection" reserve-selection width="48" />
             <el-table-column label="问题 / 回答" min-width="380"><template #default="{ row }"><div class="qa"><strong>{{ row.question || '—' }}</strong><span>{{ row.answer }}</span><small v-if="row.correctedAnswer">纠正：{{ row.correctedAnswer }}</small></div></template></el-table-column>
             <el-table-column label="评价" width="90"><template #default="{ row }"><el-tag size="small" :type="['good', 'helpful'].includes(row.rating) ? 'success' : 'danger'">{{ ratingText[row.rating] || row.rating }}</el-tag></template></el-table-column>
             <el-table-column label="来源" width="100"><template #default="{ row }">{{ feedbackSourceText[row.source] || row.source }}</template></el-table-column>
@@ -69,7 +74,8 @@
         <template #label>用户记忆<span class="count-pill">{{ stats?.activeMemories ?? 0 }}</span></template>
         <div class="toolbar"><el-input v-model="memoryQuery" placeholder="搜索记忆内容、昵称" :prefix-icon="Search" clearable @change="loadTab" /><el-input v-model="memoryUser" placeholder="用户 ID" clearable @change="loadTab" /></div>
         <section class="table-panel">
-          <el-table v-loading="loading" :data="memories" empty-text="暂无记忆">
+          <el-table row-key="id" :key="JSON.stringify([tab,memoryQuery,memoryUser])" v-loading="loading" :data="memories" @selection-change="(rows: {id:string}[]) => selectRows('memories',rows)" empty-text="暂无记忆">
+            <el-table-column type="selection" reserve-selection width="48" />
             <el-table-column label="用户" width="170"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.displayName || '—' }}</strong><span>{{ row.userId }}</span></div></template></el-table-column>
             <el-table-column label="记忆" min-width="320"><template #default="{ row }"><el-icon v-if="row.pinned" class="pin"><StarFilled /></el-icon>{{ row.content }}</template></el-table-column>
             <el-table-column label="类型" width="80"><template #default="{ row }">{{ kindText[row.kind] || row.kind }}</template></el-table-column>
@@ -116,6 +122,7 @@ import { Plus, Refresh, Search, StarFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import { api } from '@/api'
+import { request } from '@/api/client'
 import { agentApi, feedbackSourceText, formatTime, ratingText, sourceText, type Candidate, type Entry, type Feedback, type Gap, type LearningStats, type Memory } from '@/api/agent'
 import type { KnowledgeBase } from '@/types'
 
@@ -148,6 +155,27 @@ const memories = ref<Memory[]>([])
 const memoryQuery = ref('')
 const memoryUser = ref('')
 
+const selectedIds=ref<string[]>([])
+const deleting=ref(false)
+const names:Record<string,string>={candidates:'待审核记录',entries:'FAQ 条目',gaps:'知识缺口',feedback:'反馈',memories:'用户记忆'}
+function selectRows(kind:string,rows:{id:string}[]){if(kind===tab.value){
+ const visible = new Set(({candidates,entries,gaps,feedback,memories}[kind as 'candidates'|'entries'|'gaps'|'feedback'|'memories']).value.map(row=>row.id))
+ selectedIds.value=rows.map(row=>row.id).filter(id=>visible.has(id))
+ }}
+watch([tab,candidateStatus,candidateConversation,entryQuery,entryKB,entryStatus,feedbackRating,memoryQuery,memoryUser],()=>{selectedIds.value=[]},{flush:'sync'})
+async function deleteSelected(){
+  const kind=tab.value, ids=[...selectedIds.value]
+  if (!ids.length || deleting.value) return
+  try {await ElMessageBox.confirm('确认永久删除选中的 '+ids.length+' 条'+names[kind]+'？','批量删除',{type:'warning',confirmButtonText:'删除',cancelButtonText:'取消'})} catch {return}
+  deleting.value=true
+  try{
+    const result=await request<{deleted:number}>({url:'/learning/'+kind+'/bulk-delete',method:'POST',data:{ids}})
+    selectedIds.value=[]
+    ElMessage.success('已删除 '+result.deleted+' 条记录')
+    await reload()
+  }catch(e){ElMessage.error(e instanceof Error?e.message:'批量删除失败')}
+  finally{deleting.value=false}
+}
 function onTabChange() { router.replace({ query: tab.value === 'candidates' ? {} : { tab: tab.value } }); loadTab() }
 watch(() => route.query.tab, (value) => { const next = tabs.includes(String(value)) ? String(value) : 'candidates'; if (next !== tab.value) { tab.value = next; loadTab() } })
 

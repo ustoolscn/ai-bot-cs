@@ -331,7 +331,7 @@ func (a *App) processOutbox(ctx context.Context) error {
 	}
 	if j.EventType == "SCHEDULED_POST" || j.EventType == "DAILY_REPORT" {
 		var enabled bool
-		if err = a.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM scheduled_posts s JOIN conversations c ON c.id=s.conversation_id JOIN bots b ON b.id=c.bot_id WHERE s.last_message_id=$1 AND s.enabled AND c.enabled AND b.enabled)", j.MessageID).Scan(&enabled); err != nil {
+		if err = a.db.QueryRow(ctx, "SELECT EXISTS(SELECT FROM schedule_deliveries d JOIN schedule_runs r ON r.id=d.run_id JOIN scheduled_posts s ON s.id=r.schedule_id AND s.revision=r.revision JOIN schedule_recipients dest ON dest.schedule_id=s.id AND dest.conversation_id=d.conversation_id WHERE d.message_id=$1 AND (s.enabled OR r.is_test))", j.MessageID).Scan(&enabled); err != nil {
 			return a.retryOutbox(ctx, j, err)
 		}
 		if !enabled {
