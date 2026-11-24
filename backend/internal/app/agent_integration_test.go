@@ -130,6 +130,10 @@ func (m *agentMock) handleChat(w http.ResponseWriter, body []byte) {
 				aliceAskedAboutVIP = true
 			}
 		}
+		if input.Current == "今天北京天气怎么样" {
+			reply(`{"reply":true,"needsWebSearch":true}`, nil)
+			return
+		}
 		if (strings.Contains(input.Current, "那价格多少") && aliceAskedAboutVIP && input.BotName == "小花" && input.Persona == "接入小助手" && input.Style == "使用更新后的表达习惯") || strings.Contains(input.Current, "发成网页截图") || strings.Contains(input.Current, "我要人工") {
 			reply(`{"reply":true}`, nil)
 		} else {
@@ -174,6 +178,8 @@ func (m *agentMock) handleChat(w http.ResponseWriter, body []byte) {
 		}
 	}
 	switch {
+	case strings.Contains(lastUser, "今天北京天气怎么样") && bytes.Contains(body, []byte("内置联网搜索")) && bytes.Contains(body, []byte("deepseek_web_search")) && !bytes.Contains(body, []byte(`"type":"function"`)):
+		io.WriteString(w, `{"choices":[{"message":{"content":"北京晴。","annotations":[{"type":"url_citation","url_citation":{"url":"https://weather.example/beijing","title":"天气"}}]}}]}`)
 	case strings.Contains(lastUser, "发成网页截图"):
 		reply("", []map[string]any{{"id": "shot", "type": "function", "function": map[string]any{"name": "render_html_image", "arguments": `{"html":"<h1>说明图</h1><p>第一步</p>"}`}}})
 	case hasTool && strings.Contains(lastUser, "人工"):
@@ -650,6 +656,31 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 			return status == tc.status && sent == (tc.id == "named-call"), err
 		})
 	}
+	if _, err = pool.Exec(ctx, `UPDATE model_profiles SET provider='deepseek',web_search_mode='deepseek' WHERE id=$1`, serviceProfileID); err != nil {
+		t.Fatal(err)
+	}
+	postQQWebhook(t, client, hook, botSecret, groupEventBody(t, "weather-event", "GROUP_MESSAGE_CREATE", "weather-question", "caller", "群友", "今天北京天气怎么样"))
+	eventually(t, 10*time.Second, "group receives verified search answer", func() (bool, error) {
+		var sent bool
+		err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT FROM messages WHERE reply_to_message_id='weather-question' AND status='sent' AND content LIKE '%https://weather.example/beijing%')`).Scan(&sent)
+		return sent, err
+	})
+	// A reply can span multiple QQ messages. A replay must leave their count unchanged.
+	var segmentsBeforeReplay int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM messages WHERE reply_to_message_id='weather-question' AND event_type='AI_RESPONSE'`).Scan(&segmentsBeforeReplay); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE inbox_tasks SET status='pending',next_attempt_at=now()
+        WHERE message_id=(SELECT id FROM messages WHERE platform_message_id='weather-question')`); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 10*time.Second, "already answered replay skipped", func() (bool, error) {
+		var skipped bool
+		err := pool.QueryRow(ctx, `SELECT t.status='skipped' AND
+            (SELECT count(*) FROM messages r WHERE r.reply_to_message_id=m.platform_message_id AND r.event_type='AI_RESPONSE')=$1
+            FROM inbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.platform_message_id='weather-question'`, segmentsBeforeReplay).Scan(&skipped)
+		return skipped, err
+	})
 }
 
 func nilIfNoRows(err error) error {

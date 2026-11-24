@@ -92,6 +92,18 @@ func addCitations(r *domain.ChatResult, annotations []citation, metadata map[str
 	}
 }
 
+func (c *Client) HasWebSearch() bool {
+	switch c.WebSearchMode {
+	case "disabled":
+		return false
+	case "custom":
+		return len(c.ExtraBody) > 0
+	case "qwen", "openai", "deepseek", "zhipu", "responses":
+		return true
+	}
+	return c.UseResponses
+}
+
 func (c *Client) searchTool() map[string]any {
 	switch c.WebSearchMode {
 	case "deepseek":

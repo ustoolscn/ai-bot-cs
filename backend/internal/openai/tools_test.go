@@ -67,3 +67,62 @@ func TestCompletionsToolCallsAndMaxTokensFallback(t *testing.T) {
 		t.Fatalf("res=%+v err=%v calls=%d", res, err, calls)
 	}
 }
+
+func TestDeepSeekGroupHistoryOnWire(t *testing.T) {
+	for _, model := range []string{"deepseek-flash", "compatible-chat"} {
+		t.Run(model, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Messages []struct {
+						Role      string
+						Content   any
+						Calls     []json.RawMessage `json:"tool_calls"`
+						ID        string            `json:"tool_call_id"`
+						Reasoning string            `json:"reasoning_content"`
+					}
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Error(err)
+					return
+				}
+				var roles []string
+				for _, msg := range req.Messages {
+					roles = append(roles, msg.Role)
+				}
+				if model == "deepseek-flash" {
+					if strings.Join(roles, ",") != "system,user,assistant,tool" {
+						t.Errorf("roles %v", roles)
+						return
+					}
+					data, _ := json.Marshal(req.Messages[1].Content)
+					for _, fragment := range []string{"机器人：旧回答1", "机器人：旧回答2", "用户：甲", "当前消息", "新问题", "image_url"} {
+						if !strings.Contains(string(data), fragment) {
+							t.Errorf("missing %s in %s", fragment, data)
+						}
+					}
+					if len(req.Messages[2].Calls) != 1 || req.Messages[2].Reasoning != "reason" || req.Messages[3].ID != "id" {
+						t.Errorf("lost tool round: %+v", req.Messages)
+					}
+				} else if strings.Join(roles, ",") != "system,system,assistant,assistant,user,user,assistant,tool" {
+					t.Errorf("compatible roles %v", roles)
+				}
+				io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+			}))
+			defer srv.Close()
+			c := New(srv.URL, "", model, time.Second)
+			msgs := []domain.ChatMessage{
+				{Role: "system", Content: "one"},
+				{Role: "system", Content: "two"},
+				{Role: "assistant", Content: "旧回答1"},
+				{Role: "assistant", Content: "旧回答2"},
+				{Role: "user", Content: "甲"},
+				{Role: "user", Content: "新问题", Parts: []domain.ChatContentPart{{Type: "image", URL: "https://example.org/a.png"}}},
+				{Role: "assistant", CompletionState: domain.CompletionState{Reasoning: json.RawMessage(`"reason"`)}, ToolCalls: []domain.ToolCall{{ID: "id", Name: "lookup", Arguments: "{}"}}},
+				{Role: "tool", ToolCallID: "id", Content: "ok"},
+			}
+			if _, err := c.Chat(context.Background(), msgs); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

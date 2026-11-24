@@ -15,13 +15,13 @@ import (
 )
 
 type Client struct {
-	BaseURL, APIKey, Model string
-	Dimensions             int
-	ExtraBody              map[string]any
-	WebSearchMode          string
-	UseResponses           bool
-	ReasoningEffort        string
-	HTTP                   *http.Client
+	BaseURL, APIKey, Model  string
+	Dimensions              int
+	ExtraBody               map[string]any
+	Provider, WebSearchMode string
+	UseResponses            bool
+	ReasoningEffort         string
+	HTTP                    *http.Client
 }
 
 type HTTPError struct {
@@ -90,7 +90,47 @@ func (c *Client) ChatWith(ctx context.Context, messages []domain.ChatMessage, op
 	if c.UseResponses {
 		return c.responsesChat(ctx, messages, opts)
 	}
+	if c.Provider == "deepseek" || c.WebSearchMode == "deepseek" || strings.HasPrefix(strings.ToLower(c.Model), "deepseek") || strings.HasPrefix(c.BaseURL+"/", "https://api.deepseek.com/") {
+		messages = deepSeekMessages(messages)
+	}
 	return c.completionsChat(ctx, messages, opts)
+}
+
+// Group history can begin mid-reply and contains independent speakers. Encode
+// it as a labelled transcript in the current user turn. Keep this turn's
+// assistant calls, reasoning and tool results as native protocol messages.
+func deepSeekMessages(messages []domain.ChatMessage) []domain.ChatMessage {
+	current := -1
+	for i, m := range messages {
+		if m.Role == "user" {
+			current = i
+		}
+	}
+	if current < 0 {
+		return messages
+	}
+	var instructions []string
+	var history []string
+	for _, m := range messages[:current] {
+		switch m.Role {
+		case "system", "developer":
+			instructions = append(instructions, m.Content)
+		case "assistant":
+			history = append(history, "机器人："+m.Content)
+		case "user":
+			history = append(history, "用户："+m.Content)
+		}
+	}
+	out := make([]domain.ChatMessage, 0, len(messages))
+	if len(instructions) > 0 {
+		out = append(out, domain.ChatMessage{Role: "system", Content: strings.Join(instructions, "\n\n")})
+	}
+	user := messages[current]
+	if len(history) > 0 {
+		user.Content = "近期聊天记录（仅作背景）：\n" + strings.Join(history, "\n") + "\n\n当前消息：\n" + user.Content
+	}
+	out = append(out, user)
+	return append(out, messages[current+1:]...)
 }
 
 func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMessage, opts domain.ChatOptions) (domain.ChatResult, error) {
@@ -165,7 +205,7 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 	if opts.RequireWebSearch && nativeTool == nil {
 		if req["enable_search"] == true {
 			req["search_options"] = map[string]any{"forced_search": true, "enable_source": true}
-		} else if req["web_search_options"] == nil {
+		} else if req["web_search_options"] == nil && c.WebSearchMode != "custom" {
 			return domain.ChatResult{}, fmt.Errorf("请为此客服配置支持联网检索的对话模型")
 		}
 	}
@@ -196,7 +236,7 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 	result.SearchQueries = []string{}
 	result.Sources = []domain.SearchSource{}
 	metadata := map[string]searchSource{}
-	if nativeTool != nil && len(msg.ToolCalls) > 0 {
+	if len(msg.ToolCalls) > 0 {
 		result.CompletionState = domain.CompletionState{Reasoning: msg.Reasoning, ServerToolCalls: msg.ServerToolCalls}
 	}
 	var steps []serverStep

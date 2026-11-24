@@ -19,18 +19,19 @@ type SkillPrompt struct {
 
 // PromptInput gathers everything that goes into the system prompt.
 type PromptInput struct {
-	Settings         Settings
-	ConversationType string
-	BusinessPrompt   string // per-conversation system prompt
-	SenderName       string
-	SenderIsStaff    bool
-	Now              time.Time
-	Summary          string
-	Memories         []Memory
-	Knowledge        string
-	LiveSnapshot     string
-	Skills           []SkillPrompt
-	ToolsAvailable   bool
+	Settings           Settings
+	ConversationType   string
+	BusinessPrompt     string // per-conversation system prompt
+	SenderName         string
+	SenderIsStaff      bool
+	Now                time.Time
+	Summary            string
+	Memories           []Memory
+	Knowledge          string
+	LiveSnapshot       string
+	Skills             []SkillPrompt
+	ToolsAvailable     bool
+	WebSearchAvailable bool
 }
 
 // BuildSystemPrompt assembles the system messages in priority order.
@@ -49,7 +50,7 @@ func BuildSystemPrompt(in PromptInput) []string {
 	}
 	fmt.Fprintf(&b, "\n\n当前场景：QQ%s。回复尽量控制在 %d 字以内。", scene, limit)
 	if in.ConversationType == "group" {
-		b.WriteString("群里有多人发言，只回应当前提问的这位用户。")
+		b.WriteString("群里有多人发言，仅回答当前消息的意图。历史用于理解指代或明确的追问；当前用户换了话题或在反馈之前的回答时，回应新话题或反馈，不重答历史问题。")
 	}
 	if !in.Now.IsZero() {
 		fmt.Fprintf(&b, "\n当前时间：%s。", in.Now.Format("2006-01-02 15:04"))
@@ -107,6 +108,9 @@ func BuildSystemPrompt(in PromptInput) []string {
 
 	if in.Knowledge != "" {
 		out = append(out, "知识库检索结果（仅在相关时使用；只挑与问题直接相关的一两点回答，不要复述整段资料）：\n"+in.Knowledge)
+	}
+	if in.WebSearchAvailable {
+		out = append(out, "本轮已开启模型的内置联网搜索。涉及最新新闻、天气、公开公告等时效信息，或用户要求上网核实时，先联网查询，再根据检索结果回答并提供来源。未查到时说明具体情况。")
 	}
 	if in.ToolsAvailable {
 		out = append(out, "你可以调用工具获取实时数据或执行操作。复杂说明主动优先用临时网页并发回完整链接，需要突出重点时可生成图片。分组或服务状态必须调用状态工具，并按客服配置附状态图。推荐模型或比较性价比前，逐一查询适合任务的候选模型，按适用分组的最终输入、输出单价和预期用量比较。报价必须说明分组，实际美元价格=基础价×分组倍率，工具中已乘倍率的数字不能重复乘。英文提问报美元，中文提问按1美元=7元人民币换算。需要时先调用工具，拿到结果后再用自己的话简短回答。")

@@ -576,9 +576,9 @@ func (a *App) loadModelDetails(ctx context.Context, id string) (*openai.Client, 
 func (a *App) readModelProfile(ctx context.Context, id string, includeDisabled bool) (*openai.Client, string, string, *int, error) {
 	var base, keyEnc, model, kind, webSearchMode, reasoningEffort string
 	var dimension *int
-	var proxy string
+	var proxy, provider string
 	var extraBodyRaw []byte
-	err := a.db.QueryRow(ctx, "SELECT base_url,api_key_enc,model,kind,dimension,web_search_mode,reasoning_effort,extra_body,COALESCE((SELECT address FROM model_proxies WHERE id=proxy_id),'') FROM model_profiles WHERE id=$1 AND (enabled OR $2)", id, includeDisabled).Scan(&base, &keyEnc, &model, &kind, &dimension, &webSearchMode, &reasoningEffort, &extraBodyRaw, &proxy)
+	err := a.db.QueryRow(ctx, "SELECT base_url,api_key_enc,model,kind,dimension,web_search_mode,reasoning_effort,extra_body,provider,COALESCE((SELECT address FROM model_proxies WHERE id=proxy_id),'') FROM model_profiles WHERE id=$1 AND (enabled OR $2)", id, includeDisabled).Scan(&base, &keyEnc, &model, &kind, &dimension, &webSearchMode, &reasoningEffort, &extraBodyRaw, &provider, &proxy)
 	if err != nil {
 		return nil, "", "", nil, err
 	}
@@ -595,6 +595,7 @@ func (a *App) readModelProfile(ctx context.Context, id string, includeDisabled b
 	if err != nil {
 		return nil, "", "", nil, err
 	}
+	client.Provider = provider
 	client.WebSearchMode = webSearchMode
 	client.ReasoningEffort = reasoningEffort
 	if len(extraBodyRaw) > 0 {

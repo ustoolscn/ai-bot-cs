@@ -52,6 +52,12 @@ func TestDecisionHistoryVisibilityAndWindow(t *testing.T) {
 	if err := db.QueryRow(ctx, `SELECT id::text FROM messages WHERE content='还是不行'`).Scan(&j.MessageID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(ctx, `UPDATE messages SET platform_message_id='question' WHERE content='业务问题'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE messages SET reply_to_message_id='question' WHERE event_type='AI_RESPONSE' AND status='sent'`); err != nil {
+		t.Fatal(err)
+	}
 	got, err := a.decisionHistory(ctx, j, "alice")
 	if err != nil {
 		t.Fatal(err)
@@ -62,8 +68,15 @@ func TestDecisionHistoryVisibilityAndWindow(t *testing.T) {
 		t.Fatalf("unexpected history: %+v", got)
 	}
 	for i, turn := range got {
-		if turn.Content != want[i] || turn.Role != roles[i] || turn.SameSender != (i == 0) {
+		if turn.Content != want[i] || turn.Role != roles[i] || turn.Answered != (i == 0) || turn.SameSender != (i == 0) {
 			t.Fatalf("turn %d: %+v", i, turn)
+		}
+	}
+	for _, limit := range []int{0, 1} {
+		j.ContextLimit = limit
+		recent, err := a.decisionHistory(ctx, j, "alice")
+		if err != nil || len(recent) != len(want) {
+			t.Fatalf("routing context at limit %d: %+v, %v", limit, recent, err)
 		}
 	}
 	j.ContextLimit = 2

@@ -54,11 +54,16 @@ func (a *App) processInbox(ctx context.Context) error {
 
 	var senderID, senderName, botName string
 	var eventAt time.Time
-	var isStaff bool
-	err = a.db.QueryRow(ctx, `SELECT m.sender_id,m.sender_name,m.event_at,COALESCE(cm.is_staff,false),b.name FROM messages m JOIN bots b ON b.id=m.bot_id LEFT JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id WHERE m.id=$1`, j.MessageID).Scan(&senderID, &senderName, &eventAt, &isStaff, &botName)
+	var isStaff, alreadyReplied bool
+	err = a.db.QueryRow(ctx, `SELECT m.sender_id,m.sender_name,m.event_at,COALESCE(cm.is_staff,false),b.name,`+alreadyAnsweredSQL+` FROM messages m JOIN bots b ON b.id=m.bot_id LEFT JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id WHERE m.id=$1`, j.MessageID).Scan(&senderID, &senderName, &eventAt, &isStaff, &botName, &alreadyReplied)
 	if err != nil {
 		finishCheck("", err)
 		return a.retryInbox(ctx, j, err)
+	}
+
+	if alreadyReplied {
+		finishCheck("当前消息已有客服答复", nil)
+		return a.finishInbox(ctx, j.TaskID, "skipped", nil)
 	}
 
 	// A user handed off to a human is left to the human while the pause lasts.
@@ -144,6 +149,7 @@ func (a *App) processInbox(ctx context.Context) error {
 			return a.retryInbox(ctx, j, err)
 		}
 	}
+	requireWebSearch := false
 	skipKB := len(imageParts) == 0 && socialOnly(j.Content)
 	if j.ConversationType == "group" && (j.TriggerMode == "smart" || j.TriggerMode == "always") {
 		judge := settings
@@ -151,8 +157,9 @@ func (a *App) processInbox(ctx context.Context) error {
 			judge.AuxChatProfileID = settings.DecisionProfileID
 		}
 		var decision struct {
-			Reply      *bool `json:"reply"`
-			SocialOnly bool  `json:"socialOnly"`
+			NeedsWebSearch bool  `json:"needsWebSearch"`
+			Reply          *bool `json:"reply"`
+			SocialOnly     bool  `json:"socialOnly"`
 		}
 		finish := a.startStage(ctx, j.MessageID, "判断是否回复")
 		recent, err := a.decisionHistory(ctx, j, senderID)
@@ -163,8 +170,9 @@ func (a *App) processInbox(ctx context.Context) error {
 		// Only override a negative judgment for an unambiguous call in the user's own text.
 		// Quotes, mentions of others and other QQ elements stay with the contextual judge.
 		calledByName := j.Content == strings.TrimSpace(originalQuestion) && directNameCall(originalQuestion, recent, settings.PersonaName, botName)
+		personaName := firstNonEmpty(strings.TrimSpace(settings.PersonaName), botName, agent.DefaultSettings().PersonaName)
 		input, _ := json.Marshal(map[string]any{
-			"客服称呼":       settings.PersonaName,
+			"客服称呼":       personaName,
 			"QQ机器人名称":    botName,
 			"人设性格":       settings.StylePrompt,
 			"命中直接点名短句":   calledByName,
@@ -190,7 +198,8 @@ func (a *App) processInbox(ctx context.Context) error {
 		if decision.Reply != nil && !*decision.Reply {
 			decisionText = "无需回复"
 		}
-		finish(decisionText, err)
+		finish(fmt.Sprintf("%s，客服 %s，性格 %d 字，近期群聊 %d 条", decisionText, personaName, len([]rune(settings.StylePrompt)), len(recent)), err)
+		requireWebSearch = decision.NeedsWebSearch
 		if openai.IsHTTPStatus(err, 403) {
 			return a.excludeModeratedMessage(ctx, j, err)
 		}
@@ -296,7 +305,7 @@ func (a *App) processInbox(ctx context.Context) error {
 		userContent = "请分析用户发送的图片并回答。"
 	}
 	in := agentInput{rt: rt, client: client, profileID: profileID, businessPrompt: strings.TrimSpace(instructions+"\n"+j.SystemPrompt) + a.staffStylePrompt(ctx, j.ConversationID), senderIsStaff: isStaff,
-		summary: summary, memories: memories, knowledge: kbContext, history: turns, userContent: userContent, imageParts: imageParts, deadline: j.Deadline}
+		summary: summary, memories: memories, knowledge: kbContext, history: turns, requireWebSearch: requireWebSearch, userContent: userContent, imageParts: imageParts, deadline: j.Deadline}
 	out := a.runAgent(ctx, in)
 	steps = append(steps, out.steps...)
 	contextJSON, _ := json.Marshal(out.messages)
@@ -327,10 +336,10 @@ func (a *App) processInbox(ctx context.Context) error {
 	// A background job may have isolated this message during generation.
 	// Check under the same lock used to quarantine its existing AI replies.
 	var visible bool
-	if err = tx.QueryRow(ctx, `SELECT `+visibleContextSQL+` FROM messages m WHERE m.id=$1`, j.MessageID).Scan(&visible); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT `+visibleContextSQL+`, `+alreadyAnsweredSQL+` FROM messages m WHERE m.id=$1`, j.MessageID).Scan(&visible, &alreadyReplied); err != nil {
 		return a.retryInbox(ctx, j, err)
 	}
-	if !visible {
+	if !visible || alreadyReplied {
 		_, err = tx.Exec(ctx, `WITH closed AS (UPDATE agent_runs SET status='skipped',completed_at=now() WHERE id=$2)
             UPDATE inbox_tasks SET status='skipped',updated_at=now() WHERE id=$1`, j.TaskID, runID)
 		if err != nil {
@@ -412,6 +421,18 @@ func (a *App) processInbox(ctx context.Context) error {
 	return nil
 }
 
+// Mention-only conversations bypass the routing judge. Recognize direct lookup
+// requests there too; for less explicit questions the native tool remains available.
+func explicitlyRequestsWebSearch(text string) bool {
+	q := strings.ToLower(strings.TrimSpace(text))
+	for _, prefix := range []string{"请联网查", "帮我联网查", "联网查", "请上网查", "帮我上网查", "上网查", "search the web for", "look online for"} {
+		if strings.HasPrefix(q, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // Only spend a model round trip on a retrieval query that refers back to a turn.
 func needsRetrievalContext(question string) bool {
 	q := strings.ToLower(strings.TrimSpace(question))
@@ -481,9 +502,12 @@ func (a *App) loadHistory(ctx context.Context, conversationID, currentMessageID 
 	}
 	rows, err := a.db.Query(ctx, `SELECT m.id::text,m.direction,m.sender_id,m.sender_name,m.content,m.parts,m.event_type,COALESCE(m.platform_message_id,''),COALESCE(m.reply_to_message_id,''),COALESCE(cm.is_staff,false),m.event_at
 		FROM messages m LEFT JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id
-		WHERE m.conversation_id=$1 AND `+visibleContextSQL+` AND m.id<>$2 AND (m.reply_batch IS NULL OR m.reply_batch IS DISTINCT FROM (SELECT reply_batch FROM messages WHERE id=$2)) AND m.event_at<=$3 AND m.event_type NOT IN ('PROCESSING_ACK')
+        LEFT JOIN messages cur ON cur.id=$2
+        WHERE m.conversation_id=$1 AND `+visibleContextSQL+` AND (m.reply_batch IS NULL OR m.reply_batch IS DISTINCT FROM cur.reply_batch)
+        AND (cur.id IS NULL OR (m.event_at,m.created_at,m.id)<(cur.event_at,cur.created_at,cur.id))
+        AND (m.direction='inbound' OR m.status='sent') AND m.event_at<=$3 AND m.event_type NOT IN ('PROCESSING_ACK')
 		AND (m.content<>'' OR m.parts::text LIKE '%"image"%')
-		ORDER BY m.event_at DESC LIMIT $4`, conversationID, currentMessageID, before, fetch)
+		ORDER BY m.event_at DESC,m.created_at DESC,m.id DESC LIMIT $4`, conversationID, currentMessageID, before, fetch)
 	if err != nil {
 		a.log.Warn("load history failed", "error", err)
 		return nil, time.Time{}, 0
@@ -619,18 +643,19 @@ func (a *App) recordModelCall(ctx context.Context, runID, messageID, profileID, 
 }
 
 type agentInput struct {
-	rt             *turnRuntime
-	client         *openai.Client
-	profileID      string
-	businessPrompt string
-	senderIsStaff  bool
-	summary        string
-	memories       []agent.Memory
-	knowledge      string
-	history        []agent.Turn
-	userContent    string
-	imageParts     []domain.ChatContentPart
-	deadline       *time.Time
+	rt               *turnRuntime
+	client           *openai.Client
+	profileID        string
+	businessPrompt   string
+	senderIsStaff    bool
+	requireWebSearch bool
+	summary          string
+	memories         []agent.Memory
+	knowledge        string
+	history          []agent.Turn
+	userContent      string
+	imageParts       []domain.ChatContentPart
+	deadline         *time.Time
 }
 
 type agentOutput struct {
@@ -649,7 +674,8 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 	s := rt.settings
 	var tools []domain.ToolSpec
 	custom := map[string]customTool{}
-	if s.ToolsEnabled {
+	requireSearch := in.client.HasWebSearch() && (in.requireWebSearch || explicitlyRequestsWebSearch(rt.question))
+	if s.ToolsEnabled && !requireSearch {
 		tools, custom = a.availableTools(ctx, rt)
 	}
 	var skills []agent.SkillPrompt
@@ -683,7 +709,10 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 	}
 	systems := agent.BuildSystemPrompt(agent.PromptInput{Settings: s, ConversationType: rt.conversationType, BusinessPrompt: in.businessPrompt,
 		SenderName: rt.senderName, SenderIsStaff: in.senderIsStaff, Now: time.Now().In(chinaLocation), Summary: in.summary, Memories: in.memories,
-		Knowledge: in.knowledge, LiveSnapshot: live, Skills: skills, ToolsAvailable: len(tools) > 0})
+		Knowledge: in.knowledge, LiveSnapshot: live, Skills: skills, ToolsAvailable: len(tools) > 0, WebSearchAvailable: in.client.HasWebSearch()})
+	if requireSearch {
+		systems = append(systems, "当前消息需要公开实时信息。本轮请使用已开启的联网搜索，依据实际检索结果回答当前问题。")
+	}
 	messages := make([]domain.ChatMessage, 0, len(systems)+len(in.history)+1)
 	for _, sp := range systems {
 		messages = append(messages, domain.ChatMessage{Role: "system", Content: sp})
@@ -692,7 +721,7 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 	messages = append(messages, domain.ChatMessage{Role: "user", Name: firstNonEmpty(rt.senderName, rt.senderID), Content: in.userContent, Parts: in.imageParts})
 
 	out := agentOutput{}
-	opts := domain.ChatOptions{Tools: tools, MaxOutputTokens: s.MaxOutputTokens}
+	opts := domain.ChatOptions{RequireWebSearch: requireSearch, Tools: tools, MaxOutputTokens: s.MaxOutputTokens}
 	for step := 0; ; step++ {
 		final := len(opts.Tools) == 0 || step >= s.MaxToolSteps
 		if in.deadline != nil && time.Until(*in.deadline) < 45*time.Second {
@@ -706,7 +735,11 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 		finish := a.startStage(ctx, rt.messageID, fmt.Sprintf("模型生成 · 第 %d 轮", step+1))
 		res, err := in.client.ChatWith(ctx, messages, callOpts)
 		latency := time.Since(started).Milliseconds()
-		finish(in.client.Model, err)
+		detail := in.client.Model
+		if res.Searched {
+			detail += fmt.Sprintf("，已联网检索，%d 个来源", len(res.Sources))
+		}
+		finish(detail, err)
 		a.recordModelCall(ctx, rt.runID, rt.messageID, in.profileID, "chat", res, latency, err)
 		ms := agentStep{Type: "model", Name: fmt.Sprintf("第 %d 次模型调用", step+1), Output: agent.TruncateRunes(res.Content, 500), LatencyMs: latency}
 		if err != nil {
@@ -719,6 +752,9 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 		out.steps = append(out.steps, ms)
 		if final || len(res.ToolCalls) == 0 {
 			out.content = res.Content
+			if res.Searched && len(res.Sources) > 0 && !strings.Contains(out.content, res.Sources[0].URL) && strings.TrimSpace(out.content) != "" {
+				out.content = strings.TrimSpace(out.content) + "\n来源：" + res.Sources[0].URL
+			}
 			if rt.publishedURL != "" && !strings.Contains(out.content, rt.publishedURL) {
 				out.content = strings.TrimSpace(out.content + "\n" + rt.publishedURL)
 			}
