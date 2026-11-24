@@ -35,7 +35,7 @@
           <el-form-item label=" "><el-checkbox v-model="editing.enabled">启用</el-checkbox></el-form-item>
         </div>
       </el-form>
-      <template #footer><el-button @click="dialog = false">取消</el-button><el-button type="primary" @click="save">保存</el-button></template>
+      <template #footer><el-button @click="dialog = false">取消</el-button><el-button type="primary" @click="save">保存工具</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="testDialog" title="测试工具" width="600px">

@@ -5,11 +5,11 @@
       <el-button type="primary" :icon="Plus" @click="edit()">新建技能</el-button>
     </div>
     <el-table v-loading="loading" :data="skills" empty-text="暂无技能">
-      <el-table-column prop="name" label="技能" width="140" />
+      <el-table-column prop="name" label="技能" min-width="140" />
       <el-table-column prop="description" label="何时使用" min-width="260" />
       <el-table-column label="用到的工具" min-width="180"><template #default="{ row }"><el-tag v-for="t in row.tools" :key="t" size="small" effect="plain" class="tag">{{ t }}</el-tag></template></el-table-column>
       <el-table-column label="启用" width="80"><template #default="{ row }"><el-switch v-model="row.enabled" @change="quickSave(row)" /></template></el-table-column>
-      <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="edit(row)">编辑</el-button><el-button link type="danger" @click="remove(row)">删除</el-button></template></el-table-column>
+      <el-table-column label="操作" width="112" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="edit(row)">编辑</el-button><el-button link type="danger" @click="remove(row)">删除</el-button></template></el-table-column>
     </el-table>
     <el-dialog v-model="dialog" :title="editing.id ? '编辑技能' : '新建技能'" width="640px">
       <el-form label-position="top">
@@ -22,7 +22,7 @@
         <el-form-item label="排序"><el-input-number v-model="editing.sortOrder" /></el-form-item>
         <el-form-item><el-checkbox v-model="editing.enabled">启用</el-checkbox></el-form-item>
       </el-form>
-      <template #footer><el-button @click="dialog = false">取消</el-button><el-button type="primary" @click="save">保存</el-button></template>
+      <template #footer><el-button @click="dialog = false">取消</el-button><el-button type="primary" @click="save">保存技能</el-button></template>
     </el-dialog>
   </section>
 </template>

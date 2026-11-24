@@ -1,6 +1,6 @@
 <template>
   <div class="content-page">
-    <PageHeader title="通用设置">
+    <PageHeader title="通用设置" description="所有 AI 客服共用的回复规则。单个客服的人设、模型和工具在“机器人与客服”里设置。">
       <el-button :icon="Refresh" @click="reload">重新加载</el-button>
     </PageHeader>
 

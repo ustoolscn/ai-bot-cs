@@ -1,12 +1,12 @@
 <template>
-  <div class="page-header">
-    <div>
-      <button v-if="back" type="button" class="page-back" @click="goBack"><el-icon><ArrowLeft /></el-icon>{{ back.label }}</button>
+  <header class="page-header">
+    <button v-if="back" type="button" class="page-back" @click="goBack"><el-icon><ArrowLeft /></el-icon>{{ back.label }}</button>
+    <div class="page-header-row">
       <h1>{{ title }}</h1>
-      <p v-if="description">{{ description }}</p>
+      <div v-if="$slots.default" class="page-actions"><slot /></div>
     </div>
-    <div v-if="$slots.default" class="page-actions"><slot /></div>
-  </div>
+    <p v-if="description">{{ description }}</p>
+  </header>
 </template>
 <script setup lang="ts">
 import { ArrowLeft } from '@element-plus/icons-vue'

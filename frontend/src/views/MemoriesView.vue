@@ -1,6 +1,6 @@
 <template>
   <div class="content-page page-fill">
-    <PageHeader title="用户记忆">
+    <PageHeader title="用户记忆" description="机器人从对话里记住的用户信息，回复时会带上相关的几条。先选群聊或私聊，再选一位用户。">
       <el-button :icon="Refresh" @click="reload">刷新</el-button>
     </PageHeader>
         <div class="toolbar">
@@ -26,18 +26,17 @@
           <el-input v-model="profileDraft" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" placeholder="还没有档案。对话后会自动总结，也可以直接填写。" />
         </section>
         <section class="table-panel">
-          <el-table row-key="id" height="100%" :key="JSON.stringify([memoryGroup,memoryUser,memoryQuery])" v-loading="loading" :data="memories" @selection-change="(rows: {id:string}[]) => selectRows(rows)" :empty-text="!directory.length ? '暂无用户记忆' : !memoryGroup ? '请选择群聊或私聊' : !memoryUser ? '请选择该会话中的用户' : '暂无匹配的记忆'">
+          <el-table row-key="id" height="100%" :key="JSON.stringify([memoryGroup,memoryUser,memoryQuery])" v-loading="loading" :data="memories" @selection-change="(rows: {id:string}[]) => selectRows(rows)">
+            <template #empty><EmptyState :mood="memoryUser ? 'sleepy' : 'thinking'" :title="!directory.length ? '还没有用户记忆' : !memoryGroup ? '先选一个群聊或私聊' : !memoryUser ? '再选一位用户' : '没有匹配的记忆'" :description="!directory.length ? '机器人和用户聊过之后，会自动记下关键信息。' : !memoryGroup ? '在上方选择要查看的会话。' : !memoryUser ? '选择后显示这位用户的全部记忆和档案。' : '换个关键词试试。'" /></template>
             <el-table-column type="selection" reserve-selection width="48" />
-            <el-table-column label="用户" width="170"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.displayName || '—' }}</strong><span>{{ row.userId }}</span></div></template></el-table-column>
-            <el-table-column label="记忆" min-width="320"><template #default="{ row }"><span v-if="row.pinned" class="pill busy" style="margin-right: 6px">常驻</span>{{ row.content }}</template></el-table-column>
-            <el-table-column label="类型" width="80"><template #default="{ row }">{{ kindText[row.kind] || row.kind }}</template></el-table-column>
-            <el-table-column label="记忆向量" width="105">
+            <el-table-column label="用户" width="150"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.displayName || '—' }}</strong><span>{{ row.userId }}</span></div></template></el-table-column>
+            <el-table-column label="记忆" min-width="300"><template #default="{ row }"><span v-if="row.pinned" class="pill busy pinned">常驻</span>{{ row.content }}</template></el-table-column>
+            <el-table-column label="类型 / 来源" width="110"><template #default="{ row }"><div class="stacked-cell"><strong>{{ kindText[row.kind] || row.kind }}</strong><span>{{ memorySourceText[row.source] || row.source }}</span></div></template></el-table-column>
+            <el-table-column label="向量" width="88">
               <template #default="{ row }"><span :class="{ faint: row.hasEmbedding !== true }">{{ row.hasEmbedding === true ? '已生成' : row.hasEmbedding === false ? '未生成' : '—' }}</span></template>
             </el-table-column>
-            <el-table-column label="发生时间" width="150"><template #default="{ row }">{{ formatTime(row.eventAt || row.updatedAt) }}</template></el-table-column>
-            <el-table-column label="来源" width="80"><template #default="{ row }">{{ memorySourceText[row.source] || row.source }}</template></el-table-column>
-            <el-table-column label="更新" width="150"><template #default="{ row }">{{ formatTime(row.updatedAt) }}</template></el-table-column>
-            <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="editMemory(row)">编辑</el-button><el-button link type="danger" @click="removeMemory(row)">删除</el-button></template></el-table-column>
+            <el-table-column label="发生 / 更新" width="150"><template #default="{ row }"><div class="stacked-cell"><strong>{{ formatTime(row.eventAt || row.updatedAt) }}</strong><span>更新于 {{ formatTime(row.updatedAt) }}</span></div></template></el-table-column>
+            <el-table-column label="操作" width="112" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="editMemory(row)">编辑</el-button><el-button link type="danger" @click="removeMemory(row)">删除</el-button></template></el-table-column>
           </el-table>
         </section>
     <el-dialog v-model="memoryDialog" title="编辑记忆" width="520px">
@@ -57,6 +56,7 @@ import { useAdminEvents } from '@/composables/useAdminEvents'
 import { onMounted, reactive, ref, computed, watch } from 'vue'
 import { Search, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import EmptyState from '@/components/EmptyState.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import { agentApi, formatTime, type Memory, type MemoryMember, type UserProfile } from '@/api/agent'
 const kindText: Record<string, string> = { fact: '事实', preference: '偏好', issue: '问题', profile: '资料' }
@@ -165,9 +165,11 @@ useAdminEvents(['user_profiles'], () => { if (profileDraft.value === profileSave
 </script>
 
 <style scoped>
-.profile-panel { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; padding: 14px 16px; flex: none; }
-.profile-panel header { display: flex; align-items: center; gap: 10px; }
-.profile-panel h2 { font-size: 14px; font-weight: 600; }
+.profile-panel { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; padding: 16px 20px; flex: none; }
+.pinned { margin-right: 6px; }
+.profile-panel header { display: flex; align-items: center; gap: 10px; min-height: 28px; }
+.profile-panel header .el-button + .el-button { margin-left: 0; }
+.profile-panel h2 { font-size: 15px; font-weight: 600; }
 .profile-panel .muted { font-size: 12px; font-variant-numeric: tabular-nums; }
 .token-meter { position: relative; height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
 .token-meter i { position: absolute; inset: 0; background: var(--primary); transform-origin: left; transition: transform .4s var(--ease), background .2s var(--ease); }

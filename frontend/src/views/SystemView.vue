@@ -1,61 +1,69 @@
 <template>
   <div class="content-page">
-    <PageHeader title="系统状态"><el-button :icon="Refresh" :loading="loading" @click="load">刷新状态</el-button></PageHeader>
+    <PageHeader title="系统状态" description="后端服务和任务队列的实时状态，以及公网地址、模型代理、全局参数和管理员密码。"><el-button :icon="Refresh" :loading="loading" @click="load">刷新状态</el-button></PageHeader>
     <div class="system-grid">
-      <section class="settings-panel">
-        <h2>服务状态</h2>
-        <div class="service-list"><div v-for="service in services" :key="service.name"><span class="entity-icon small"><el-icon><component :is="service.icon" /></el-icon></span><span><strong>{{ service.name }}</strong><small>{{ service.detail }}</small></span><StatusBadge :status="connection.lost ? 'warning' : service.status" :text="connection.lost ? '未连接' : undefined" /></div></div>
+      <section class="panel sys-card">
+        <div class="panel-head"><div><h2>服务状态</h2><p>机器人收发消息依赖的三项服务。</p></div></div>
+        <div class="panel-body grow">
+          <div class="service-list"><div v-for="service in services" :key="service.name"><span class="entity-icon small"><el-icon><component :is="service.icon" /></el-icon></span><span><strong>{{ service.name }}</strong><small>{{ service.detail }}</small></span><StatusBadge :status="connection.lost ? 'warning' : service.status" :text="connection.lost ? '未连接' : undefined" /></div></div>
+        </div>
       </section>
-      <section class="settings-panel">
-        <div class="panel-title"><h2>任务队列</h2><span><el-button size="small" :disabled="!overview.queues.failed" @click="dismissFailed">忽略失败任务</el-button><el-button size="small" :disabled="!overview.queues.failed" @click="retryFailed">重试失败任务</el-button></span></div>
-        <div class="queue-metrics" style="grid-template-columns: repeat(2, 1fr)"><div><span>待处理消息</span><strong>{{ overview.queues.inbox }}</strong></div><div><span>待发送回复</span><strong>{{ overview.queues.outbox }}</strong></div><div><span>待索引文档</span><strong>{{ overview.queues.knowledge }}</strong></div><div><span>失败任务</span><strong :class="{ 'danger-text': overview.queues.failed }">{{ overview.queues.failed }}</strong></div></div>
-        
+      <section class="panel sys-card">
+        <div class="panel-head"><div><h2>任务队列</h2><p>正在排队的消息、回复和文档索引。</p></div></div>
+        <div class="panel-body grow">
+          <div class="queue-metrics"><div><span>待处理消息</span><strong><CountUp :value="overview.queues.inbox" /></strong></div><div><span>待发送回复</span><strong><CountUp :value="overview.queues.outbox" /></strong></div><div><span>待索引文档</span><strong><CountUp :value="overview.queues.knowledge" /></strong></div><div><span>失败任务</span><strong :class="{ 'danger-text': overview.queues.failed }"><CountUp :value="overview.queues.failed" /></strong></div></div>
+        </div>
+        <div class="panel-foot"><span class="note">{{ overview.queues.failed ? '失败任务可以重试，或忽略后不再计入' : '没有失败任务' }}</span><el-button :disabled="!overview.queues.failed" @click="dismissFailed">忽略失败任务</el-button><el-button :disabled="!overview.queues.failed" @click="retryFailed">重试失败任务</el-button></div>
       </section>
-      <section class="settings-panel">
-        <h2>公网地址</h2>
-        <el-form label-position="top" @submit.prevent>
+
+      <section class="panel sys-card">
+        <div class="panel-head"><div><h2>公网地址</h2><p>QQ 开放平台回调和临时网页都用这个地址。</p></div></div>
+        <el-form label-position="top" class="panel-body grow" @submit.prevent>
           <el-form-item label="基础地址"><el-input v-model="settings.publicBaseUrl" placeholder="https://bot.example.com" :disabled="!settingsLoaded" class="mono-input" /></el-form-item>
           <dl class="addr-list">
             <div><dt>机器人回调</dt><dd class="mono">{{ base || '—' }}/callbacks/qq/&lt;机器人 ID&gt;</dd></div>
             <div><dt>临时网页</dt><dd class="mono">{{ base || '—' }}/p/&lt;网页 ID&gt;</dd></div>
           </dl>
-          <el-button type="primary" :loading="savingBase" :disabled="!settingsLoaded || !baseDirty" @click="saveBase">保存公网地址</el-button>
         </el-form>
+        <div class="panel-foot"><el-button type="primary" :loading="savingBase" :disabled="!settingsLoaded || !baseDirty" @click="saveBase">保存公网地址</el-button></div>
       </section>
-      <section class="settings-panel">
-        <div class="panel-title"><div class="panel-title-text"><h2>模型代理</h2><p class="panel-sub">海外模型直连访问不了时，在这里添加代理，再到“模型”里为它选择。</p></div><el-button size="small" :icon="Plus" @click="openProxy()">添加代理</el-button></div>
-        <div v-if="proxies.length" class="proxy-list">
-          <div v-for="p in proxies" :key="p.id" class="proxy-row">
-            <span class="proxy-name"><strong>{{ p.name }}</strong><small class="proxy-meta"><span class="mono proxy-address" :title="p.address">{{ p.address }}</span><span v-if="p.username || p.hasPassword" class="proxy-auth">{{ p.username ? `用户 ${p.username}` : '无用户名' }}{{ p.hasPassword ? ' · 已设密码' : '' }}</span></small></span>
-            <span class="proxy-result" :title="proxyTests[p.id]?.error || ''"><StatusBadge v-if="proxyTests[p.id]" v-bind="proxyBadge(p.id)" /></span>
-            <span class="proxy-actions">
-              <el-button size="small" :loading="proxyTests[p.id]?.testing" @click="testProxy(p)">测试连通</el-button>
-              <el-button size="small" link type="primary" @click="openProxy(p)">编辑</el-button>
-              <el-button size="small" link type="danger" @click="removeProxy(p)">删除</el-button>
-            </span>
+      <section class="panel sys-card">
+        <div class="panel-head"><div><h2>模型代理</h2><p>海外模型直连访问不了时，在这里添加代理，再到“模型”里为它选择。</p></div><el-button :icon="Plus" @click="openProxy()">添加代理</el-button></div>
+        <div class="panel-body grow">
+          <div v-if="proxies.length" class="proxy-list">
+            <div v-for="p in proxies" :key="p.id" class="proxy-row">
+              <span class="proxy-name"><strong>{{ p.name }}</strong><small class="proxy-meta"><span class="mono proxy-address" :title="p.address">{{ p.address }}</span><span v-if="p.username || p.hasPassword" class="proxy-auth">{{ p.username ? `用户 ${p.username}` : '无用户名' }}{{ p.hasPassword ? ' · 已设密码' : '' }}</span></small></span>
+              <span class="proxy-result" :title="proxyTests[p.id]?.error || ''"><StatusBadge v-if="proxyTests[p.id]" v-bind="proxyBadge(p.id)" /></span>
+              <span class="proxy-actions">
+                <el-button size="small" :loading="proxyTests[p.id]?.testing" @click="testProxy(p)">测试连通</el-button>
+                <el-button size="small" link type="primary" @click="openProxy(p)">编辑</el-button>
+                <el-button size="small" link type="danger" @click="removeProxy(p)">删除</el-button>
+              </span>
+            </div>
           </div>
+          <EmptyState v-else compact :title="proxiesLoaded ? '还没有代理' : '代理列表读取失败'" :description="proxiesLoaded ? '所有模型都直连访问。' : '点右上角“刷新状态”重试。'" />
         </div>
-        <p v-else class="muted proxy-empty">{{ proxiesLoaded ? '还没有代理。所有模型都直连访问。' : '代理列表读取失败，点右上角“刷新状态”重试。' }}</p>
       </section>
-      <section class="settings-panel">
-        <h2>全局参数</h2>
 
-        <el-form label-position="top">
+      <section class="panel sys-card">
+        <div class="panel-head"><div><h2>全局参数</h2><p>对所有机器人生效，保存后立即生效。</p></div></div>
+        <el-form label-position="top" class="panel-body grow">
           <el-form-item label="新会话默认带上几条消息"><el-input-number v-model="settings.defaultContextLimit" :min="1" :max="100" :disabled="!settingsLoaded" /><small class="form-tip">包含当前问题；只影响之后新出现的会话，已有会话在“群与会话”里单独调整。</small></el-form-item>
-          <el-form-item label="AI 请求超时"><el-input-number v-model="settings.aiRequestTimeoutSeconds" :min="10" :max="600" :disabled="!settingsLoaded" /><span class="unit-label">秒</span><small class="form-tip" style="width: 100%">保存后立即生效。</small></el-form-item>
-          <el-form-item label="消息记录保留"><el-input-number v-model="settings.messageRetentionDays" :min="1" :max="3650" :disabled="!settingsLoaded" /><span class="unit-label">天</span><small class="form-tip" style="width: 100%">超过天数的消息约 1 分钟内自动清理。</small></el-form-item>
-          <div style="display: flex; align-items: center; gap: 12px"><el-button type="primary" :loading="saving" :disabled="!settingsLoaded || saving" @click="saveSettings">保存全局参数</el-button><small class="muted">{{ settingsLoaded ? (settings.updatedAt ? '最近更新：' + formatUpdatedAt(settings.updatedAt) : '') : '参数读取失败，暂时不能修改' }}</small></div>
+          <el-form-item label="AI 请求超时"><el-input-number v-model="settings.aiRequestTimeoutSeconds" :min="10" :max="600" :disabled="!settingsLoaded" /><span class="unit-label">秒</span></el-form-item>
+          <el-form-item label="消息记录保留" class="last-item"><el-input-number v-model="settings.messageRetentionDays" :min="1" :max="3650" :disabled="!settingsLoaded" /><span class="unit-label">天</span><small class="form-tip">超过天数的消息约 1 分钟内自动清理。</small></el-form-item>
         </el-form>
+        <div class="panel-foot"><span class="note">{{ settingsLoaded ? (settings.updatedAt ? '最近更新：' + formatUpdatedAt(settings.updatedAt) : '') : '参数读取失败，暂时不能修改' }}</span><el-button type="primary" :loading="saving" :disabled="!settingsLoaded || saving" @click="saveSettings">保存全局参数</el-button></div>
       </section>
-      <section class="settings-panel">
-        <h2>管理员密码</h2>
-        <p class="muted" style="font-size: 12px; margin: -6px 0 12px">修改后，其他已登录的地方会被退出。</p>
-        <el-form label-position="top">
+      <section class="panel sys-card">
+        <div class="panel-head"><div><h2>管理员密码</h2><p>修改后，其他已登录的地方会被退出。</p></div></div>
+        <el-form label-position="top" class="panel-body grow">
           <el-form-item label="当前密码"><el-input v-model="password.current" type="password" show-password autocomplete="current-password" /></el-form-item>
-          <el-form-item label="新密码"><el-input v-model="password.next" type="password" show-password autocomplete="new-password" placeholder="至少 8 位" /></el-form-item>
-          <el-form-item label="再输入一次新密码"><el-input v-model="password.confirm" type="password" show-password autocomplete="new-password" /></el-form-item>
-          <el-button :disabled="!password.current || !password.next" @click="changePassword">更新密码</el-button>
+          <div class="form-grid">
+            <el-form-item label="新密码" class="last-item"><el-input v-model="password.next" type="password" show-password autocomplete="new-password" placeholder="至少 8 位" /></el-form-item>
+            <el-form-item label="再输入一次新密码" class="last-item"><el-input v-model="password.confirm" type="password" show-password autocomplete="new-password" /></el-form-item>
+          </div>
         </el-form>
+        <div class="panel-foot"><el-button :disabled="!password.current || !password.next" @click="changePassword">更新密码</el-button></div>
       </section>
     </div>
     <el-dialog v-model="proxyDialog" :title="proxyForm.id ? '编辑代理' : '添加代理'" width="480px">
@@ -85,6 +93,8 @@ import { Connection, Coin, FolderOpened, Plus, Refresh } from '@element-plus/ico
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ApiError } from '@/api/client'
 import { api } from '@/api'
+import CountUp from '@/components/fx/CountUp.vue'
+import EmptyState from '@/components/EmptyState.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import type { ModelProxy, ProxyTestResult, SystemOverview, SystemSettings } from '@/types'
@@ -169,7 +179,13 @@ useAdminEvents(['system_settings'], async () => {
 </script>
 
 <style scoped>
-.addr-list { display: grid; gap: 6px; margin: 0 0 14px; font-size: 13px; }
+.system-grid { align-items: stretch; }
+.sys-card { display: flex; flex-direction: column; min-width: 0; }
+.sys-card .grow { flex: 1; }
+.sys-card .queue-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 0; }
+.last-item { margin-bottom: 0; }
+.panel-foot .el-button + .el-button { margin-left: 0; }
+.addr-list { display: grid; gap: 6px; margin: 0; font-size: 13px; }
 .addr-list div { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 8px; }
 .addr-list dt { color: var(--muted); }
 .addr-list dd { margin: 0; overflow-wrap: anywhere; color: var(--text-2); }

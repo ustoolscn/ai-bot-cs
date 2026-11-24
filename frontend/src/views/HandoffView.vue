@@ -1,5 +1,5 @@
 <template>
-  <div class="content-page wide">
+  <div class="content-page wide page-fill">
     <PageHeader title="人工台" description="接单后可以连续回复，结单或双方一段时间没说话后机器人才恢复。手机 QQ 里发“#工单号 接单 / 回复内容 / 结单”同样有效。">
       <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
     </PageHeader>
@@ -199,6 +199,7 @@ useAdminEvents(['handoffs','messages','outbox_tasks'], () => load(true))
 .claimer { color: var(--primary-text); font-weight: 500; }
 .composer-actions { flex-wrap: wrap; }
 .composer-actions .muted { flex: 1 1 160px; min-width: 0; }
+.head-actions .el-button + .el-button { margin-left: 0; }
 .head-actions { flex-shrink: 0; display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.composer-gate { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-top: 1px solid var(--line); color: var(--text-2); font-size: 13px; }
+.composer-gate { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; min-height: 60px; padding: 10px 20px; border-top: 1px solid var(--line); background: var(--surface); color: var(--text-2); font-size: 13px; animation: rise var(--dur-slow) var(--ease); }
 </style>

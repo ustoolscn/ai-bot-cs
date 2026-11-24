@@ -18,15 +18,15 @@ defineProps<{ nodes: Array<{ label: string; count: number; tone?: string }> }>()
 </script>
 
 <style scoped>
-.queue-flow { display: flex; align-items: center; gap: 0; }
-.node { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 76px; padding: 10px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); transition: border-color .3s var(--ease), background .3s var(--ease); }
-.node strong { font-size: 20px; font-weight: 600; line-height: 1.2; }
+.queue-flow { display: flex; align-items: center; gap: 0; height: 100%; }
+.node { display: flex; flex: 1 1 0; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-width: 64px; min-height: 76px; padding: 10px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); transition: border-color .3s var(--ease), background .3s var(--ease); }
+.node strong { font-size: 22px; font-weight: 600; line-height: 1.2; }
 .node > span { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .node.busy { border-color: var(--primary-soft, #bcd5f5); background: var(--primary-light); }
 .node.busy strong { color: var(--primary-text); }
 .node.danger.busy { border-color: #f0c4c4; background: var(--danger-light); }
 .node.danger.busy strong { color: var(--danger); }
-.pipe { position: relative; flex: 1; min-width: 16px; height: 2px; background: var(--line); overflow: hidden; }
+.pipe { position: relative; flex: 0 1 28px; min-width: 12px; height: 2px; background: var(--line); overflow: hidden; }
 .pipe.moving { background: transparent; }
 .pipe.moving i { position: absolute; inset: 0 0 0 -12px; background: repeating-linear-gradient(90deg, var(--primary) 0 6px, transparent 6px 12px); animation: march .6s linear infinite; }
 @keyframes march { from { transform: translateX(-12px); } to { transform: translateX(0); } }

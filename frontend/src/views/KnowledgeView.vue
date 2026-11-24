@@ -26,20 +26,20 @@
       </aside>
 
       <!-- 共用：没答上的问题 -->
-      <section v-if="sharedView === 'gaps'" class="knowledge-detail panel-surface">
+      <section v-if="sharedView === 'gaps'" key="gaps" class="knowledge-detail panel-surface">
         <div class="knowledge-detail-head"><div><h2>没答上的问题</h2><p>机器人因为缺少资料没答上的问题会自动归到这里。补充答案时选一个知识库存进去。</p></div></div>
         <div class="toolbar kb-toolbar"><span class="spacer" /><el-button type="danger" plain :style="{ visibility: selectedIds.length ? 'visible' : 'hidden' }" :loading="deleting" @click="deleteSelected('gaps', '没答上的问题')">删除选中的 {{ selectedIds.length }} 条</el-button></div>
         <el-table row-key="id" v-loading="loading" :data="gaps" empty-text="没有新的问题" @selection-change="selectRows">
           <el-table-column type="selection" width="48" />
-          <el-table-column prop="question" label="用户问了但没答上的问题" min-width="360" />
-          <el-table-column prop="occurrences" label="出现次数" width="110" sortable align="right" />
-          <el-table-column label="最近出现" width="150"><template #default="{ row }">{{ formatTime(row.lastSeenAt) }}</template></el-table-column>
+          <el-table-column prop="question" label="用户问了但没答上的问题" min-width="260" />
+          <el-table-column prop="occurrences" label="出现次数" width="104" sortable align="right" />
+          <el-table-column label="最近出现" width="140"><template #default="{ row }">{{ formatTime(row.lastSeenAt) }}</template></el-table-column>
           <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="answerGap(row)">补充答案</el-button><el-button link @click="ignoreGap(row)">忽略</el-button></template></el-table-column>
         </el-table>
       </section>
 
       <!-- 共用：回答反馈 -->
-      <section v-else-if="sharedView === 'feedback'" class="knowledge-detail panel-surface">
+      <section v-else-if="sharedView === 'feedback'" key="feedback" class="knowledge-detail panel-surface">
         <div class="knowledge-detail-head"><div><h2>回答反馈</h2><p>差评可以在消息记录里纠正答案，纠正后的答案会进入对应知识库的待审核。</p></div></div>
         <div class="toolbar kb-toolbar">
           <el-segmented v-model="feedbackView" :options="[{ label: '全部', value: 'all' }, { label: '未读', value: 'unread' }]" />
@@ -51,17 +51,16 @@
         </div>
         <el-table row-key="id" v-loading="loading" :data="shownFeedback" :row-class-name="({ row }: { row: Feedback }) => row.read ? '' : 'is-unread'" :empty-text="feedbackView === 'unread' ? '没有未读反馈' : '暂无反馈'" @selection-change="selectRows">
           <el-table-column type="selection" width="48" />
-          <el-table-column width="76"><template #default="{ row }"><button v-if="!row.read" type="button" class="unread-dot" title="点击标为已读" @click.stop="markRead({ ids: [row.id] })"><i />未读</button><span v-else class="faint">已读</span></template></el-table-column>
-          <el-table-column label="问题 / 回答" min-width="360"><template #default="{ row }"><div class="qa"><strong>{{ row.question || '—' }}</strong><span>{{ row.answer }}</span><small v-if="row.correctedAnswer">纠正：{{ row.correctedAnswer }}</small></div></template></el-table-column>
-          <el-table-column label="评价" width="90"><template #default="{ row }"><el-tag size="small" :type="['good', 'helpful'].includes(row.rating) ? 'success' : 'danger'">{{ ratingText[row.rating] || row.rating }}</el-tag></template></el-table-column>
-          <el-table-column label="来源" width="100"><template #default="{ row }">{{ feedbackSourceText[row.source] || row.source }}</template></el-table-column>
-          <el-table-column prop="conversationName" label="会话" width="140" />
-          <el-table-column label="时间" width="150"><template #default="{ row }">{{ formatTime(row.createdAt) }}</template></el-table-column>
+          <el-table-column width="72"><template #default="{ row }"><button v-if="!row.read" type="button" class="unread-dot" title="点击标为已读" @click.stop="markRead({ ids: [row.id] })"><i />未读</button><span v-else class="faint">已读</span></template></el-table-column>
+          <el-table-column label="问题 / 回答" min-width="240"><template #default="{ row }"><div class="qa"><strong>{{ row.question || '—' }}</strong><span>{{ row.answer }}</span><small v-if="row.correctedAnswer">纠正：{{ row.correctedAnswer }}</small></div></template></el-table-column>
+          <el-table-column label="评价" width="80"><template #default="{ row }"><el-tag size="small" :type="['good', 'helpful'].includes(row.rating) ? 'success' : 'danger'">{{ ratingText[row.rating] || row.rating }}</el-tag></template></el-table-column>
+          <el-table-column label="会话 / 来源" width="140"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.conversationName || '—' }}</strong><span>{{ feedbackSourceText[row.source] || row.source }}</span></div></template></el-table-column>
+          <el-table-column label="时间" width="140"><template #default="{ row }">{{ formatTime(row.createdAt) }}</template></el-table-column>
         </el-table>
       </section>
 
       <!-- 选中的知识库 -->
-      <section v-else-if="current" class="knowledge-detail panel-surface">
+      <section v-else-if="current" :key="current.id" class="knowledge-detail panel-surface">
         <div class="knowledge-detail-head">
           <div><span class="scope-tag">{{ scopeText(current.scope) }}知识库</span><h2>{{ current.name }}</h2><p>{{ current.description || '没有说明' }}</p></div>
           <div><el-button :icon="Search" @click="testVisible = true">检索测试</el-button></div>
@@ -91,11 +90,10 @@
               </div>
               <el-table row-key="id" v-loading="loading" :data="entries" @selection-change="selectRows">
                 <el-table-column type="selection" width="48" />
-                <el-table-column label="问题 / 答案" min-width="380"><template #default="{ row }"><div class="qa"><strong>{{ row.question }}</strong><span>{{ row.answer }}</span><small v-if="row.aliases?.length">相似问：{{ row.aliases.join('；') }}</small></div></template></el-table-column>
-                <el-table-column label="来源" width="100"><template #default="{ row }">{{ sourceText[row.source] || row.source }}</template></el-table-column>
-                <el-table-column label="命中 / 好评 / 差评" width="140" align="right"><template #default="{ row }"><span class="num">{{ row.hitCount }} / {{ row.helpfulCount }} / <span :class="{ 'danger-text': row.unhelpfulCount > row.helpfulCount }">{{ row.unhelpfulCount }}</span></span></template></el-table-column>
-                <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag size="small" :type="row.status === 'published' ? (row.indexStatus === 'ready' ? 'success' : row.indexStatus === 'failed' ? 'danger' : 'warning') : row.status === 'review' ? 'danger' : 'info'">{{ entryStatusText(row) }}</el-tag></template></el-table-column>
-                <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="editEntry(row)">编辑</el-button><el-button link type="danger" @click="removeEntry(row)">删除</el-button></template></el-table-column>
+                <el-table-column label="问题 / 答案" min-width="220"><template #default="{ row }"><div class="qa"><strong>{{ row.question }}</strong><span>{{ row.answer }}</span><small v-if="row.aliases?.length">相似问：{{ row.aliases.join('；') }}</small></div></template></el-table-column>
+                <el-table-column label="命中 / 好评 / 差评" width="132" align="right"><template #default="{ row }"><span class="num">{{ row.hitCount }} / {{ row.helpfulCount }} / <span :class="{ 'danger-text': row.unhelpfulCount > row.helpfulCount }">{{ row.unhelpfulCount }}</span></span></template></el-table-column>
+                <el-table-column label="状态 / 来源" width="110"><template #default="{ row }"><div class="stacked-cell"><span class="tag-line"><el-tag size="small" :type="row.status === 'published' ? (row.indexStatus === 'ready' ? 'success' : row.indexStatus === 'failed' ? 'danger' : 'warning') : row.status === 'review' ? 'danger' : 'info'">{{ entryStatusText(row) }}</el-tag></span><span>{{ sourceText[row.source] || row.source }}</span></div></template></el-table-column>
+                <el-table-column label="操作" width="112" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="editEntry(row)">编辑</el-button><el-button link type="danger" @click="removeEntry(row)">删除</el-button></template></el-table-column>
                 <template #empty><div class="table-empty"><el-icon><ChatLineSquare /></el-icon><strong>这个知识库还没有问答</strong><span>点“新建问答”手动添加，或通过待审核的知识补充</span></div></template>
               </el-table>
             </template>
@@ -112,11 +110,10 @@
               </div>
               <el-table row-key="id" v-loading="loading" :data="kbCandidates" @selection-change="selectRows">
                 <el-table-column type="selection" width="48" />
-                <el-table-column label="问题 / 答案" min-width="380"><template #default="{ row }"><div class="qa"><strong>{{ row.question }}</strong><span>{{ row.answer }}</span><small v-if="row.aliases?.length">相似问：{{ row.aliases.join('；') }}</small></div></template></el-table-column>
-                <el-table-column label="来源" width="110"><template #default="{ row }">{{ sourceText[row.source] || row.source }}</template></el-table-column>
-                <el-table-column label="可信度" width="90" align="right"><template #default="{ row }"><span class="num" :class="row.confidence >= 0.85 ? 'trend-good' : row.confidence < 0.6 ? 'danger-text' : ''">{{ Math.round(row.confidence * 100) }}%</span></template></el-table-column>
-                <el-table-column label="时间" width="150"><template #default="{ row }">{{ formatTime(row.createdAt) }}</template></el-table-column>
-                <el-table-column label="操作" width="210" fixed="right"><template #default="{ row }"><template v-if="row.status === 'pending'"><el-button link type="primary" @click="quickApprove(row)">通过</el-button><el-button link type="primary" @click="review(row)">修改后通过</el-button><el-button link type="danger" @click="reject(row)">驳回</el-button></template><span v-else class="pill" :class="row.status === 'approved' ? 'good' : 'idle'">{{ row.status === 'approved' ? '已通过' : '已驳回' }}</span></template></el-table-column>
+                <el-table-column label="问题 / 答案" min-width="220"><template #default="{ row }"><div class="qa"><strong>{{ row.question }}</strong><span>{{ row.answer }}</span><small v-if="row.aliases?.length">相似问：{{ row.aliases.join('；') }}</small></div></template></el-table-column>
+                <el-table-column label="来源 / 时间" width="140"><template #default="{ row }"><div class="stacked-cell"><strong>{{ sourceText[row.source] || row.source }}</strong><span>{{ formatTime(row.createdAt) }}</span></div></template></el-table-column>
+                <el-table-column label="可信度" width="80" align="right"><template #default="{ row }"><span class="num" :class="row.confidence >= 0.85 ? 'trend-good' : row.confidence < 0.6 ? 'danger-text' : ''">{{ Math.round(row.confidence * 100) }}%</span></template></el-table-column>
+                <el-table-column label="操作" width="184" fixed="right"><template #default="{ row }"><template v-if="row.status === 'pending'"><el-button link type="primary" @click="quickApprove(row)">通过</el-button><el-button link type="primary" @click="review(row)">修改后通过</el-button><el-button link type="danger" @click="reject(row)">驳回</el-button></template><span v-else class="pill" :class="row.status === 'approved' ? 'good' : 'idle'">{{ row.status === 'approved' ? '已通过' : '已驳回' }}</span></template></el-table-column>
                 <template #empty><div class="table-empty"><el-icon><Finished /></el-icon><strong>{{ candidateStatus === 'pending' ? '没有待审核的知识' : '暂无记录' }}</strong><span v-if="candidateStatus === 'pending'">在“群与会话 → 成员”里标记官方客服后，他们在群里的回答会出现在这里</span></div></template>
               </el-table>
             </template>
@@ -381,12 +378,15 @@ useAdminEvents(['knowledge_bases', 'knowledge_documents', 'knowledge_entries', '
 
 <style scoped>
 .list-empty { padding: 8px 10px; font-size: 13px; }
-.list-divider { margin: 12px 0 4px; padding: 12px 10px 0; border-top: 1px solid var(--line); color: var(--faint); font-size: 12px; }
-.knowledge-list-item .count-pill { margin-left: 0; }
+.list-divider { margin: 8px 0 4px; padding: 12px 10px 4px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12px; }
+.knowledge-list-item .count-pill { margin-left: 0; animation: pop-in var(--dur) var(--ease); }
 .kb-model { font-size: 14px; }
-.kb-tabs { padding: 4px 20px 20px; }
+.kb-tabs { padding: 0 20px 20px; }
 .kb-tabs :deep(.el-tabs__header) { margin-bottom: 12px; }
 .kb-toolbar { margin-bottom: 12px; }
+.kb-toolbar > .el-input { width: 220px; }
+.kb-toolbar > .el-select { width: 132px; }
+.tag-line { overflow: visible !important; }
 .knowledge-detail > .kb-toolbar { padding: 0 20px; }
 .knowledge-detail > .el-table { border-top: 1px solid var(--line); }
 .kb-hint { font-size: 13px; }

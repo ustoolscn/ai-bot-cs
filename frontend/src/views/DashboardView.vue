@@ -14,12 +14,14 @@
     <div class="dash-top">
       <section class="panel dash-card">
         <header><h2>任务状态</h2><span class="head-actions"><el-button v-if="activeAlerts.length" text type="danger" @click="$router.push('/system')">{{ activeAlerts.length }} 条告警</el-button><el-button v-if="overview.queues.failed" text :loading="dismissing" @click="dismissFailed">忽略失败</el-button></span></header>
-        <QueueFlow :nodes="queueNodes" />
+        <div class="top-body"><QueueFlow :nodes="queueNodes" /></div>
       </section>
 
       <section class="panel dash-card">
         <header><h2>处理消息</h2><span class="muted">24 小时</span></header>
+        <div class="top-body">
         <div class="big-num"><CountUp :value="overview.messages24h" /><span>条</span></div>
+        <div class="meters">
         <div class="meter-row">
           <span>成功回复</span>
           <span class="meter"><i :style="{ transform: `scaleX(${(overview.successRate ?? 0) / 100})` }" /></span>
@@ -30,10 +32,13 @@
           <span class="meter"><i class="is-time" :style="{ transform: `scaleX(${Math.min(1, avgTotal / 8000)})` }" /></span>
           <strong>{{ avgTotal ? (avgTotal / 1000).toFixed(2) + ' 秒' : '—' }}</strong>
         </div>
+        </div>
+        </div>
       </section>
 
       <section class="panel dash-card">
         <header><h2>知识库</h2><el-button text type="primary" @click="$router.push('/knowledge')">管理</el-button></header>
+        <div class="top-body">
         <div class="kb-nums">
           <div><strong><CountUp :value="overview.knowledge.total" /></strong><span>篇文档</span></div>
           <div><strong><CountUp :value="overview.knowledge.entries ?? stats?.publishedEntries" /></strong><span>条知识问答</span></div>
@@ -44,13 +49,14 @@
           <span class="meter" :class="{ indexing: overview.knowledge.indexing }"><i :style="{ transform: `scaleX(${overview.knowledge.progress / 100})` }" /></span>
           <strong><CountUp :value="overview.knowledge.progress" suffix="%" /></strong>
         </div>
+        </div>
       </section>
     </div>
 
     <CostPanel ref="costPanel" class="dash-cost" />
 
     <div class="dash-bottom">
-      <section class="panel dash-card">
+      <section class="panel dash-card bottom-card">
         <header>
           <h2>各环节用时</h2>
           <el-select v-model="traceScope" aria-label="选择消息" size="small" style="width: 220px">
@@ -62,8 +68,9 @@
         <p class="total-line">{{ traceScope === 'average' ? '平均总用时' : '总用时' }} <strong>{{ shownTotal == null ? '—' : (shownTotal / 1000).toFixed(2) + ' 秒' }}</strong></p>
       </section>
 
-      <section class="panel dash-card">
+      <section class="panel dash-card bottom-card">
         <header><h2>最新动态</h2><el-button text type="primary" @click="$router.push('/messages')">全部消息</el-button></header>
+        <div class="live-scroll">
         <TransitionGroup name="live" tag="ul" class="live-list">
           <li v-for="task in overview.active" :key="'a' + task.id" class="live-item is-active">
             <LiveDot active tone="primary" />
@@ -83,6 +90,7 @@
           </li>
         </TransitionGroup>
         <EmptyState v-if="!overview.active.length && !recent.length" compact title="还没有消息" description="机器人被 @ 或收到私聊后会出现在这里。" />
+        </div>
       </section>
     </div>
   </div>
@@ -143,7 +151,7 @@ const queueNodes = computed(() => [
   { label: '失败', count: overview.value.queues.failed, tone: 'danger' },
 ])
 const activeIds = computed(() => new Set(overview.value.active.map(task => task.id)))
-const recent = computed(() => overview.value.pipelines.filter(row => !activeIds.value.has(row.id)).slice(0, 8))
+const recent = computed(() => overview.value.pipelines.filter(row => !activeIds.value.has(row.id)).slice(0, 20))
 
 const rowTotal = (row: PipelineRow) => row.timeline ? row.timeline.totalMs ?? 0 : row.totalMs
 function rowTone(row: PipelineRow) {
@@ -203,43 +211,50 @@ useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_c
 <style scoped>
 .greeting-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .live-line { display: flex; align-items: center; gap: 8px; }
-.todo-chip { display: inline-flex; align-items: baseline; gap: 4px; height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-2); font-size: 13px; cursor: pointer; transition: background .12s var(--ease); line-height: 30px; }
-.todo-chip:hover { background: var(--surface-2); }
+.todo-chip { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-2); font-size: 13px; cursor: pointer; transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease); animation: pop-in var(--dur-slow) var(--ease) backwards; }
+.todo-chip:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.todo-chip:active { transform: scale(.97); }
 .todo-chip strong { font-size: 15px; font-variant-numeric: tabular-nums; }
 .todo-chip.is-hot strong { color: var(--danger); }
 .todo-chip.is-info strong { color: var(--primary-text); }
 .todo-chip.is-warn strong { color: var(--warning); }
 
-.dash-top { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
-.dash-bottom { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; align-items: start; }
-.dash-card { display: flex; flex-direction: column; gap: 14px; padding: 16px 20px; }
-.dash-card > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; }
-.dash-card h2 { font-size: 15px; font-weight: 600; }
-.head-actions { display: flex; gap: 4px; }
+.dash-top { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.dash-bottom { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; height: 400px; }
+.dash-card { display: flex; flex-direction: column; gap: 16px; padding: 16px 20px 20px; min-width: 0; }
+.dash-card > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 32px; flex: none; }
+.dash-card h2 { font-size: 15px; font-weight: 600; white-space: nowrap; }
+.head-actions { display: flex; align-items: center; gap: 12px; }
+.head-actions .el-button { height: 28px; padding: 0 6px; }
 .head-actions .el-button + .el-button { margin-left: 0; }
 .dash-cost { margin-top: 16px; }
 .dash-card header .muted { font-size: 12px; }
+.top-body { display: flex; flex: 1; flex-direction: column; justify-content: space-between; gap: 12px; }
 
 .big-num { display: flex; align-items: baseline; gap: 4px; }
-.big-num .count-up { font-size: 28px; font-weight: 600; line-height: 1.1; }
+.big-num .count-up { font-size: 28px; font-weight: 600; line-height: 1.15; }
 .big-num span:last-child { color: var(--muted); font-size: 13px; }
+.meters { display: flex; flex-direction: column; gap: 8px; }
 .meter-row { display: grid; grid-template-columns: 56px minmax(0, 1fr) 64px; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
 .meter-row strong { text-align: right; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .meter { position: relative; height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
 .meter i { position: absolute; inset: 0; border-radius: 3px; background: var(--success); transform-origin: left; transition: transform .8s var(--ease); }
 .meter i.is-time { background: var(--primary); }
-.meter.indexing i { background: linear-gradient(90deg, var(--primary) 0 40%, #7fb0ee 50%, var(--primary) 60% 100%); background-size: 250% 100%; animation: flow 1.4s linear infinite; }
+.meter.indexing i { background: linear-gradient(90deg, var(--primary) 0 40%, #7fb8f2 50%, var(--primary) 60% 100%); background-size: 250% 100%; animation: flow 1.4s linear infinite; }
 .kb-nums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.kb-nums div { display: flex; flex-direction: column; }
-.kb-nums strong { font-size: 22px; font-weight: 600; line-height: 1.2; }
+.kb-nums div { display: flex; flex-direction: column; min-width: 0; }
+.kb-nums strong { font-size: 24px; font-weight: 600; line-height: 1.2; }
 .kb-nums strong.warn { color: var(--warning); }
-.kb-nums div > span { color: var(--muted); font-size: 12px; }
+.kb-nums div > span { color: var(--muted); font-size: 12px; white-space: nowrap; }
 
-.total-line { margin: 0; text-align: right; color: var(--muted); font-size: 13px; }
-.total-line strong { color: var(--text); font-size: 15px; font-variant-numeric: tabular-nums; }
+.bottom-card { min-height: 0; }
+.bottom-card :deep(.stage-bars) { flex: 1; align-content: start; gap: 10px; }
+.total-line { margin: 0; padding-top: 12px; border-top: 1px solid var(--line); text-align: right; color: var(--muted); font-size: 13px; }
+.total-line strong { margin-left: 4px; color: var(--text); font-size: 15px; font-variant-numeric: tabular-nums; }
 
-.live-list { position: relative; margin: 0 -20px -16px; padding: 0; list-style: none; }
-.live-item { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 20px; border-top: 1px solid var(--line); cursor: pointer; transition: background .15s var(--ease); }
+.live-scroll { position: relative; flex: 1; min-height: 0; margin: 0 -20px -20px; overflow-y: auto; border-top: 1px solid var(--line); }
+.live-list { position: relative; margin: 0; padding: 0; list-style: none; }
+.live-item { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 56px; padding: 8px 20px; border-bottom: 1px solid var(--line); cursor: pointer; transition: background var(--dur-fast) var(--ease); }
 .live-item:hover { background: var(--surface-2); }
 .live-item.selected { background: var(--primary-light); }
 .live-item.is-active { grid-template-columns: 10px minmax(0, 1fr); background: var(--primary-light); cursor: default; }
@@ -257,7 +272,6 @@ useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_c
 .live-leave-to { opacity: 0; }
 .live-leave-active { position: absolute; left: 0; right: 0; }
 
-@keyframes flow { from { background-position: 100% 0; } to { background-position: -150% 0; } }
-@media (max-width: 1100px) { .dash-top { grid-template-columns: 1fr 1fr; } .dash-top > :first-child { grid-column: 1 / -1; } .dash-bottom { grid-template-columns: 1fr; } }
-@media (max-width: 640px) { .dash-top { grid-template-columns: 1fr; } .greeting { flex-direction: column; align-items: flex-start; } }
+@media (max-width: 1100px) { .dash-top { grid-template-columns: 1fr 1fr; } .dash-top > :first-child { grid-column: 1 / -1; } .dash-bottom { grid-template-columns: 1fr; height: auto; } .live-scroll { max-height: 360px; } }
+@media (max-width: 640px) { .dash-top { grid-template-columns: 1fr; } .greeting { flex-direction: column; align-items: flex-start; } .greeting-actions { justify-content: flex-start; } }
 </style>

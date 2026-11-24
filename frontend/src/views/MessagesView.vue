@@ -8,21 +8,21 @@
       <el-input v-model="search" placeholder="搜索问题、回复、发送者或消息 ID" :prefix-icon="Search" clearable />
       <el-segmented v-model="status" :options="[{ label: '全部', value: 'all' }, { label: '成功', value: 'success' }, { label: '转人工', value: 'handoff' }, { label: '无需回复', value: 'skipped' }, { label: '已合并', value: 'merged' }, { label: '失败', value: 'failed' }]" />
       <span class="spacer" />
-      <span class="muted" style="font-size: 13px">{{ filtered.length }} 条</span>
+      <span class="muted">{{ filtered.length }} 条</span>
     </div>
     <section class="table-panel">
-      <el-table v-loading="loading" class="clickable-rows" :data="filtered" height="100%" @row-click="open">
+      <el-table v-loading="loading" class="clickable-rows" :data="filtered" row-key="id" height="100%" highlight-current-row @row-click="open">
         <template #empty>
           <EmptyState v-if="loadError" mood="thinking" title="消息记录加载失败" :description="loadError"><el-button @click="load">重新加载</el-button></EmptyState>
           <EmptyState v-else title="还没有消息" description="机器人在群里被 @ 或收到私聊后，消息会出现在这里。" />
         </template>
-        <el-table-column label="时间" width="168"><template #default="{ row }"><span class="num" style="white-space: nowrap">{{ row.time }}</span></template></el-table-column>
+        <el-table-column label="时间" width="112"><template #default="{ row }"><div class="stacked-cell num"><strong>{{ String(row.time).split(' ')[1] || row.time }}</strong><span>{{ String(row.time).split(' ')[0] }}</span></div></template></el-table-column>
         <el-table-column label="消息" min-width="260"><template #default="{ row }"><div class="message-preview"><strong>{{ row.question }}</strong><span>{{ row.attachments?.length ? `包含 ${row.attachments.length} 个附件 · ` : '' }}{{ row.answer || '未生成回复' }}</span></div></template></el-table-column>
         <el-table-column label="机器人 / 会话" min-width="150"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.botName }}</strong><span>{{ row.conversationName }}</span></div></template></el-table-column>
         <el-table-column label="发送者" width="110"><template #default="{ row }"><div class="sender-cell"><span class="truncate" :title="row.sender">{{ row.sender }}</span><i v-if="row.senderBlockedIds?.length" class="sender-blocked" title="已拉黑" /></div></template></el-table-column>
         <el-table-column label="模型" width="130"><template #default="{ row }"><div class="stacked-cell"><strong class="truncate">{{ row.model || '—' }}</strong><span>{{ row.tokens }} tokens</span></div></template></el-table-column>
-        <el-table-column label="知识命中" width="90" align="right"><template #default="{ row }"><span class="num">{{ row.knowledgeHits }}</span></template></el-table-column>
-        <el-table-column label="耗时" width="90" align="right"><template #default="{ row }"><span class="num">{{ formatDuration(row.latency) }}</span></template></el-table-column>
+        <el-table-column label="知识命中" width="84" align="right"><template #default="{ row }"><span class="num">{{ row.knowledgeHits }}</span></template></el-table-column>
+        <el-table-column label="耗时" width="80" align="right"><template #default="{ row }"><span class="num">{{ formatDuration(row.latency) }}</span></template></el-table-column>
         <el-table-column label="结论" width="132"><template #default="{ row }"><StatusBadge v-bind="messageVerdict(row)" /></template></el-table-column>
       </el-table>
     </section>
@@ -263,8 +263,14 @@ useAdminEvents(['messages','message_retractions','agent_runs','model_calls','too
 <style scoped>
 .md-merged { margin: 0; color: var(--muted); font-size: 13px; }
 .md { display: flex; flex-direction: column; gap: 24px; }
+.md > * { animation: rise var(--dur-slow) var(--ease) backwards; }
+.md > :nth-child(2) { animation-delay: 40ms; }
+.md > :nth-child(3) { animation-delay: 80ms; }
+.md > :nth-child(n+4) { animation-delay: 120ms; }
+.md-bubble { animation: row-in var(--dur-slow) var(--ease) backwards; }
+.md-bubble + .md-bubble { animation-delay: 80ms; }
 .md-head { display: flex; flex-direction: column; gap: 12px; }
-.md-who { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.md-who { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 28px; }
 .md-who strong { font-size: 16px; font-weight: 600; }
 .md-who .md-where { flex: 1; min-width: 0; overflow: hidden; color: var(--muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .md-block-state { display: inline-flex; flex-shrink: 0; align-items: center; gap: 8px; }
@@ -285,7 +291,7 @@ useAdminEvents(['messages','message_retractions','agent_runs','model_calls','too
 .md-section h3 small { margin-left: 6px; color: var(--muted); font-size: 12px; font-weight: 400; }
 
 .md-chat { display: flex; flex-direction: column; gap: 8px; }
-.md-bubble { max-width: 88%; padding: 10px 14px; border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--line); }
+.md-bubble { max-width: 88%; padding: 10px 14px; border-radius: var(--radius-md); background: var(--surface-2); border: 1px solid var(--line); }
 .md-bubble small { display: block; margin-bottom: 2px; color: var(--muted); font-size: 12px; }
 .md-bubble p { margin: 0; font-size: 14px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .md-bubble.is-bot { align-self: flex-end; background: var(--primary-light); border-color: var(--primary-soft); }

@@ -20,7 +20,7 @@
         <ComposePanel v-else-if="section === 'send'" :row="conversation" />
       </div>
     </div>
-    <div v-else-if="loading" v-loading="true" style="height: 320px" />
+    <div v-else-if="loading" class="detail-layout"><div class="skeleton" style="height: 220px" /><div class="skeleton" style="height: 420px; border-radius: var(--radius)" /></div>
     <section v-else class="panel"><EmptyState title="找不到这个会话" description="它可能已被删除，或者机器人已经退出了这个群。"><el-button @click="$router.push('/conversations')">返回群与会话</el-button></EmptyState></section>
   </div>
 </template>

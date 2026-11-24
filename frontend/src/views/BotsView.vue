@@ -1,20 +1,27 @@
 <template>
   <div class="content-page">
-    <PageHeader title="机器人与客服"><el-button :icon="Refresh" @click="load">刷新状态</el-button><el-button type="primary" :icon="Plus" @click="openCreate">添加机器人</el-button></PageHeader>
+    <PageHeader title="机器人与客服" description="每个 QQ 机器人接入一次，再给它配置一个或多个 AI 客服。点一行进入它的 AI 客服。"><el-button :icon="Refresh" @click="load">刷新状态</el-button><el-button type="primary" :icon="Plus" @click="openCreate">添加机器人</el-button></PageHeader>
     <div class="stat-strip"><div><span>机器人</span><strong>{{ bots.length }}</strong></div><div><span>在线</span><strong>{{ bots.filter(b => b.status === 'online').length }}</strong></div><div><span>最近 24 小时消息</span><strong>{{ todayMessages }}</strong></div><div><span>成功回复率</span><strong>{{ averageSuccessRate }}</strong></div></div>
     <div v-if="bots.length" class="entity-list">
-      <div v-for="bot in bots" :key="bot.id" class="entity-row">
-        <div class="entity-name"><span class="entity-icon"><el-icon><Connection /></el-icon></span><div><strong>{{ bot.name }} <StatusBadge :status="bot.enabled ? bot.status : 'offline'" :text="bot.enabled ? undefined : '已停用'" /></strong><small>AppID {{ bot.appId }}</small></div></div>
+      <div v-for="bot in bots" :key="bot.id" class="entity-row clickable" @click="$router.push({ name: 'bot-services', params: { id: bot.id } })">
+        <div class="entity-name"><span class="entity-icon"><el-icon><Connection /></el-icon></span><div><strong><span>{{ bot.name }}</span><StatusBadge :status="bot.enabled ? bot.status : 'offline'" :text="bot.enabled ? undefined : '已停用'" /></strong><small>AppID {{ bot.appId }}</small></div></div>
         <div class="entity-facts">
           <div><span>最近收到消息</span><strong>{{ bot.lastEventAt || '—' }}</strong></div>
-          <div><span>回调地址</span><strong v-if="isAbsolute(bot.callbackUrl)" class="mono" :title="bot.callbackUrl">{{ bot.callbackUrl }}</strong><el-button v-else link type="warning" @click="$router.push('/system')">先配置公网地址</el-button></div>
+          <div class="wide-fact"><span>回调地址</span><strong v-if="isAbsolute(bot.callbackUrl)" class="mono" :title="bot.callbackUrl">{{ bot.callbackUrl }}</strong><el-button v-else link type="warning" @click.stop="$router.push('/system')">先配置公网地址</el-button></div>
         </div>
-        <div class="entity-actions">
+        <div class="entity-actions" @click.stop>
           <el-tooltip :content="bot.enabled ? '停用后不再回复任何消息' : '启用机器人'"><el-switch v-model="bot.enabled" :aria-label="'启用 ' + bot.name" @change="toggle(bot)" /></el-tooltip>
-          <el-button :icon="CopyDocument" :disabled="!isAbsolute(bot.callbackUrl)" @click="copy(bot.callbackUrl)">复制回调</el-button>
           <el-button @click="edit(bot)">接入配置</el-button>
-          <el-button :icon="Headset" @click="openOperators(bot)">人工客服</el-button>
-          <el-button type="primary" plain @click="$router.push({ name: 'bot-services', params: { id: bot.id } })">AI 客服</el-button>
+          <el-dropdown trigger="click" placement="bottom-end" @command="(cmd: string) => cmd === 'copy' ? copy(bot.callbackUrl) : openOperators(bot)">
+            <el-button :icon="MoreFilled" :aria-label="bot.name + ' 的更多操作'" />
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="copy" :icon="CopyDocument" :disabled="!isAbsolute(bot.callbackUrl)">复制回调地址</el-dropdown-item>
+                <el-dropdown-item command="operators" :icon="Headset">绑定人工客服</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <el-icon class="row-chevron"><ArrowRight /></el-icon>
         </div>
       </div>
     </div>
@@ -47,7 +54,7 @@
 <script setup lang="ts">
 import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Connection, CopyDocument, Delete, Headset, Plus, Refresh } from '@element-plus/icons-vue'
+import { Connection, CopyDocument, Delete, Headset, Plus, Refresh, MoreFilled, ArrowRight } from '@element-plus/icons-vue'
 import EmptyState from '@/components/EmptyState.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
@@ -96,7 +103,12 @@ useAdminEvents(['bots','messages','system_alerts'], load)
 </script>
 
 <style scoped>
-.dialog-foot { display: flex; align-items: center; gap: 8px; }
+.entity-row.clickable { cursor: pointer; }
+.entity-row .entity-facts { grid-template-columns: minmax(110px, .7fr) minmax(0, 1.6fr); }
+.entity-actions .el-button { min-width: 32px; }
+.entity-actions .el-switch { margin-right: 4px; }
+.entity-actions .row-chevron { margin-left: 4px; }
+.dialog-foot { display: flex; align-items: center; gap: 8px; width: 100%; }
 .dialog-foot .el-button + .el-button { margin-left: 0; }
 .op-steps { display: grid; gap: 6px; margin: 0 0 20px; padding-left: 20px; color: var(--text-2); font-size: 13px; line-height: 1.6; }
 .op-steps code { padding: 1px 5px; border-radius: 4px; background: var(--surface-3); font: 12px var(--font-mono); color: var(--text); }

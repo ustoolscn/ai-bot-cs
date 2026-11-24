@@ -35,7 +35,7 @@
         <button class="icon-button" aria-label="打开导航" @click="mobileOpen = true"><el-icon><Menu /></el-icon></button>
         <BrandLogo />
       </header>
-      <main class="route-view"><router-view /></main>
+      <main class="route-view"><router-view v-slot="{ Component, route: current }"><Transition name="page" mode="out-in"><component :is="Component" :key="current.matched[1]?.path || current.path" /></Transition></router-view></main>
     </div>
 
     <el-dialog v-model="searchVisible" width="560px" class="search-dialog" align-center :show-close="false" @opened="focusSearch">
@@ -46,7 +46,7 @@
           <span><strong>{{ result.label }}</strong><small>{{ result.description }}</small></span>
           <span class="group-label">{{ result.group }}</span>
         </button>
-        <div v-if="!filteredResults.length" class="search-empty">没有找到相关页面</div>
+        <div v-if="!filteredResults.length" class="search-empty">没有找到相关页面，换个词试试</div>
       </div>
     </el-dialog>
   </div>

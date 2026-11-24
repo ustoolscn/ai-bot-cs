@@ -10,7 +10,7 @@
         <el-option label="全部回复方式" value="all" /><el-option label="被 @ 时回复" value="mention_only" /><el-option label="AI 判断后回复" value="smart" /><el-option label="已停用" value="disabled" />
       </el-select>
       <span class="spacer" />
-      <span class="muted" style="font-size: 13px">{{ filtered.length }} 个会话</span>
+      <span class="muted">{{ filtered.length }} 个会话</span>
     </div>
     <section class="table-panel">
       <el-table v-loading="loading" :data="filtered" row-key="id" class="clickable-rows" height="100%" @row-click="open">
@@ -34,12 +34,12 @@
         <el-table-column label="知识库" min-width="180"><template #default="{ row }"><span :class="{ faint: !row.knowledgeBaseNames.length }">{{ row.knowledgeBaseNames.join('、') || '未绑定' }}</span></template></el-table-column>
         <el-table-column label="成员" width="90" align="right"><template #default="{ row }"><span class="num">{{ row.memberCount }}</span></template></el-table-column>
         <el-table-column label="消息" width="100" align="right"><template #default="{ row }"><span class="num">{{ row.messageCount.toLocaleString() }}</span></template></el-table-column>
-        <el-table-column prop="lastActiveAt" label="最近活跃" width="150" />
-        <el-table-column width="88" fixed="right" align="right">
+        <el-table-column prop="lastActiveAt" label="最近活跃" width="130" />
+        <el-table-column width="96" align="right">
           <template #default="{ row }">
             <div class="row-tail">
               <el-tooltip content="删除这个会话" placement="top"><button type="button" class="row-delete" :aria-label="'删除 ' + row.name" @click.stop="remove(row)"><el-icon><Delete /></el-icon></button></el-tooltip>
-              <el-icon class="faint"><ArrowRight /></el-icon>
+              <el-icon class="row-chevron"><ArrowRight /></el-icon>
             </div>
           </template>
         </el-table-column>
@@ -95,8 +95,8 @@ useAdminEvents(['conversations', 'messages', 'conversation_members', 'bots', 'kn
 
 <style scoped>
 .row-tail { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; }
-.row-delete { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--faint); cursor: pointer; opacity: 0; transition: opacity .12s var(--ease), background .12s var(--ease), color .12s var(--ease); }
-.el-table__row:hover .row-delete, .row-delete:focus-visible { opacity: 1; }
+.row-delete { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--faint); cursor: pointer; opacity: 0; transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), transform var(--dur) var(--ease); transform: translateX(4px); }
+.el-table__row:hover .row-delete, .row-delete:focus-visible { opacity: 1; transform: none; }
 .row-delete:hover { background: var(--danger-light); color: var(--danger); }
 @media (hover: none) { .row-delete { opacity: 1; } }
 </style>

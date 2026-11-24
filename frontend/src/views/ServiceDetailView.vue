@@ -9,7 +9,7 @@
 
       <div class="settings-sections">
         <section id="basic" class="settings-section">
-          <header><h2>基本信息</h2></header>
+          <header><h2>基本信息</h2><p>名称、职责，以及这个客服用到的模型。</p></header>
           <div class="settings-card">
             <el-form label-position="top">
               <el-form-item label="客服名称"><el-input v-model="form.name" maxlength="20" style="max-width: 320px" /></el-form-item>
@@ -27,7 +27,7 @@
         </section>
 
         <section id="persona" class="settings-section">
-          <header><h2>人设与风格</h2></header>
+          <header><h2>人设与风格</h2><p>说话风格会写进每次回复的提示词；示例对话帮模型学会语气。</p></header>
           <div class="settings-card">
             <el-input v-model="form.settings.stylePrompt" type="textarea" :autosize="{ minRows: 8, maxRows: 18 }" aria-label="说话风格" />
           </div>
@@ -43,7 +43,7 @@
         </section>
 
         <section id="timing" class="settings-section">
-          <header><h2>连续消息合并</h2></header>
+          <header><h2>连续消息合并</h2><p>用户连发几条时，等说完再合在一起回复。</p></header>
           <div class="settings-card">
             <div class="setting-row"><div><strong>等对方说完</strong><span>最后一条之后这么久没有新消息，才把几段合起来回复</span></div><span><el-input-number v-model="form.settings.replyQuietSeconds" :min="1" :max="form.settings.replyMaxWaitSeconds" /><span class="unit-label">秒</span></span></div>
             <div class="setting-row"><div><strong>最多等待</strong><span>从第一条算起，到时间就回复</span></div><span><el-input-number v-model="form.settings.replyMaxWaitSeconds" :min="form.settings.replyQuietSeconds" :max="120" /><span class="unit-label">秒</span></span></div>
@@ -51,7 +51,7 @@
         </section>
 
         <section id="live" class="settings-section">
-          <header><h2>网站实时数据</h2></header>
+          <header><h2>网站实时数据</h2><p>接入这个客服负责的网站，回答价格、分组和服务状态。</p></header>
           <div class="settings-card">
             <div class="setting-row"><div><strong>启用</strong></div><el-switch v-model="live.enabled" /></div>
             <template v-if="live.enabled">
@@ -60,7 +60,7 @@
                 <StatusStylePicker v-model="statusStyle" /></div>
               <div v-if="statusStyle === 'page'" class="setting-row"><div><strong>状态页地址</strong><span>截取这个网页发给用户</span></div><el-input v-model="live.statusPageUrl" placeholder="https://" /></div>
               <div class="setting-row"><div><strong>系统访问令牌</strong><span>只有价格页需要登录时才填</span></div>
-                <div>
+                <div class="token-field">
                   <el-input v-model="accessToken" type="password" show-password :placeholder="live.hasAccessToken && !clearToken ? '已保存，留空不修改' : '可不填'" />
                   <el-button v-if="live.hasAccessToken && !clearToken" link type="danger" @click="clearToken = true; accessToken = ''">清除令牌</el-button>
                 </div>
@@ -76,7 +76,7 @@
         </section>
 
         <section id="knowledge" class="settings-section">
-          <header><h2>知识库</h2></header>
+          <header><h2>知识库</h2><p>回答前检索哪些知识库。</p></header>
           <div class="settings-card">
             <div class="setting-row"><div><strong>跟随群里绑定的知识库</strong></div><el-switch :model-value="form.settings.knowledgeBaseIds === null" @update:model-value="(v: string | number | boolean) => form!.settings.knowledgeBaseIds = v ? null : []" /></div>
             <div v-if="form.settings.knowledgeBaseIds !== null" class="setting-row stack">
@@ -86,7 +86,7 @@
         </section>
 
         <section id="skills" class="settings-section">
-          <header><h2>技能与工具</h2></header>
+          <header><h2>技能与工具</h2><p>回复时可以调用的工具和技能。</p></header>
           <div class="settings-card">
             <div class="setting-row"><div><strong>允许调用工具</strong></div><el-switch v-model="form.settings.toolsEnabled" /></div>
             <template v-if="form.settings.toolsEnabled">
@@ -108,7 +108,7 @@
         </section>
 
         <section id="learning" class="settings-section">
-          <header><h2>学习与转人工</h2></header>
+          <header><h2>学习与转人工</h2><p>自动质检、从官方客服学习，以及转人工后机器人安静多久。</p></header>
           <div class="settings-card">
             <div class="setting-row"><div><strong>每轮自动质检</strong></div><el-switch v-model="form.settings.evaluationEnabled" /></div>
             <div class="setting-row"><div><strong>从官方客服的回答里学习</strong></div><el-switch v-model="form.settings.staffMiningEnabled" /></div>
@@ -132,7 +132,7 @@
       </div>
     </div>
     <section v-else-if="loadError" class="panel"><EmptyState mood="thinking" title="加载失败" :description="loadError"><el-button @click="load()">重新加载</el-button></EmptyState></section>
-    <div v-else v-loading="true" style="height: 300px" />
+    <div v-else class="settings-layout"><div class="skeleton" style="height: 240px" /><div class="skeleton" style="height: 520px; border-radius: var(--radius)" /></div>
   </div>
 </template>
 
@@ -293,4 +293,6 @@ onBeforeUnmount(() => { observer?.disconnect(); window.removeEventListener('befo
 .settings-card h3 { margin-bottom: 12px; font-size: 14px; font-weight: 600; }
 .pick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px 16px; }
 .pick-name { font-size: 13px; }
+.token-field { display: flex; align-items: center; gap: 12px; }
+.token-field .el-input { width: 280px; }
 </style>

@@ -6,13 +6,11 @@
       <el-button :icon="Refresh" @click="retry">重新索引失败文档</el-button>
       <el-upload :show-file-list="false" :before-upload="upload"><el-button type="primary" :icon="Upload">上传文档</el-button></el-upload>
     </div>
-    <el-table :data="base.documentList">
-      <el-table-column label="文件名" min-width="220"><template #default="{ row }"><div class="cell-primary"><span class="file-type">{{ row.type }}</span><span><strong>{{ row.name }}</strong><small>{{ row.size }}</small></span></div></template></el-table-column>
-      <el-table-column label="分块" width="80" align="right"><template #default="{ row }"><span class="num">{{ row.chunks }}</span></template></el-table-column>
-      <el-table-column label="状态" width="110"><template #default="{ row }"><StatusBadge :status="row.status" /></template></el-table-column>
-      <el-table-column label="失败原因" min-width="140"><template #default="{ row }"><div v-if="row.lastError" class="document-error"><span>{{ row.lastError }}</span><el-button link type="primary" @click="showError(row.name, row.lastError)">查看</el-button></div><span v-else class="faint">—</span></template></el-table-column>
-      <el-table-column prop="updatedAt" label="更新时间" width="150" />
-      <el-table-column label="操作" width="190" fixed="right"><template #default="{ row }"><el-button v-if="row.status === 'failed' || row.status === 'unindexed' || row.lastError" link type="primary" @click="retryDocument(row.id)">重新索引</el-button><el-button v-if="row.chunks > 0" link @click="deleteIndex(row)">删除索引</el-button><el-button link type="danger" @click="deleteFile(row)">删除文件</el-button></template></el-table-column>
+    <el-table :data="base.documentList" row-key="id">
+      <el-table-column label="文件名" min-width="200"><template #default="{ row }"><div class="cell-primary"><span class="file-type">{{ row.type }}</span><span><strong>{{ row.name }}</strong><small>{{ row.size }} · {{ row.chunks }} 个分块</small></span></div></template></el-table-column>
+      <el-table-column label="状态" width="130"><template #default="{ row }"><div class="stacked-cell"><StatusBadge :status="row.status" /><button v-if="row.lastError" type="button" class="error-link" :title="row.lastError" @click="showError(row.name, row.lastError)">查看失败原因</button></div></template></el-table-column>
+      <el-table-column prop="updatedAt" label="更新时间" width="110" />
+      <el-table-column label="操作" width="216" fixed="right"><template #default="{ row }"><el-button v-if="row.status === 'failed' || row.status === 'unindexed' || row.lastError" link type="primary" @click="retryDocument(row.id)">重新索引</el-button><el-button v-if="row.chunks > 0" link @click="deleteIndex(row)">删除索引</el-button><el-button link type="danger" @click="deleteFile(row)">删除文件</el-button></template></el-table-column>
       <template #empty><div class="table-empty"><el-icon><Document /></el-icon><strong>这个知识库还没有文档</strong><span>点右上角“上传文档”，支持 .txt 和 .md</span></div></template>
     </el-table>
     <el-dialog v-model="errorVisible" :title="errorTitle" width="620px"><pre class="error-detail-text">{{ selectedError }}</pre><template #footer><el-button :icon="CopyDocument" @click="copyError">复制原因</el-button><el-button type="primary" @click="errorVisible = false">关闭</el-button></template></el-dialog>
@@ -56,3 +54,8 @@ async function upload(file: File) {
   return false
 }
 </script>
+
+<style scoped>
+.error-link { align-self: flex-start; padding: 0; border: 0; background: none; color: var(--danger); font-size: 12px; cursor: pointer; }
+.error-link:hover { text-decoration: underline; }
+</style>

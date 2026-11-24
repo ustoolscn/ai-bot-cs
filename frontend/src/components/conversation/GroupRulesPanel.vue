@@ -39,7 +39,7 @@
       <div><h2>处理记录</h2><p>最近按群规则执行的审批、撤回、禁言和拉黑。</p></div>
       <el-button :icon="Refresh" @click="loadActions">刷新</el-button>
     </div>
-    <el-table :data="actions" max-height="480" empty-text="还没有处理记录" style="margin-top: 12px">
+    <el-table :data="actions" max-height="480" empty-text="还没有处理记录">
       <el-table-column label="操作" width="150"><template #default="{ row }">{{ labels[row.kind] || row.kind }}</template></el-table-column>
       <el-table-column label="结果" width="110"><template #default="{ row }"><span class="pill" :class="toneOf(row.status)">{{ labels[row.status] || row.status }}</span></template></el-table-column>
       <el-table-column label="原因" min-width="220"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.reason || '—' }}</strong><span v-if="row.detail">{{ row.detail }}</span></div></template></el-table-column>

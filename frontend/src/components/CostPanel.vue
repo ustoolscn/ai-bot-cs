@@ -2,6 +2,10 @@
   <section class="panel dash-card cost">
     <header>
       <h2>消费 <span class="muted">按当前价格估算</span></h2>
+      <el-tooltip v-if="data?.unpricedModels.length" placement="top" :content="`${data.unpricedModels.join('、')} 还没填价格，按 0 计入，实际花费会更高。点击去填写。`">
+        <button type="button" class="unpriced" @click="$router.push('/models')"><el-icon><WarningFilled /></el-icon>{{ data.unpricedModels.length }} 个模型未填价格</button>
+      </el-tooltip>
+      <span class="spacer" />
       <el-segmented v-model="range" :options="rangeOptions" size="small" />
     </header>
 
@@ -12,6 +16,7 @@
       </div>
 
       <div class="cost-kinds">
+        <div class="col-head"><span>按类型</span></div>
         <div class="stack" :class="{ empty: !rangeTotal }">
           <i v-for="k in kinds" :key="k.kind" :class="k.kind" :style="{ flexGrow: k.cost }" />
         </div>
@@ -26,27 +31,25 @@
       </div>
 
       <div class="cost-rank">
-        <el-segmented v-model="by" :options="byOptions" size="small" />
-        <ul v-if="ranked.length">
-          <li v-for="row in ranked" :key="row.id">
-            <span class="r-name" :class="{ derived: derivedIds.has(row.id) }" :title="row.name">{{ row.name || '未命名' }}</span>
-            <span class="r-bar"><i :style="{ transform: `scaleX(${rankMax ? row.cost / rankMax : 0})` }" /></span>
-            <strong>{{ money(row.cost) }}</strong>
-          </li>
-        </ul>
-        <p v-else class="muted none">这段时间还没有消费</p>
+        <div class="col-head"><span>花得最多</span><el-segmented v-model="by" :options="byOptions" size="small" /></div>
+        <Transition name="fade" mode="out-in">
+          <ul v-if="ranked.length" :key="by + range">
+            <li v-for="row in ranked" :key="row.id">
+              <span class="r-name" :class="{ derived: derivedIds.has(row.id) }" :title="row.name">{{ row.name || '未命名' }}</span>
+              <span class="r-bar"><i :style="{ transform: `scaleX(${rankMax ? row.cost / rankMax : 0})` }" /></span>
+              <strong>{{ money(row.cost) }}</strong>
+            </li>
+          </ul>
+          <p v-else class="muted none">这段时间还没有消费</p>
+        </Transition>
       </div>
     </div>
-
-    <p v-if="data?.unpricedModels.length" class="unpriced">
-      {{ data.unpricedModels.join('、') }} 还没填价格，按 0 计入，实际花费会更高。
-      <el-button link type="primary" size="small" @click="$router.push('/models')">去填写</el-button>
-    </p>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { WarningFilled } from '@element-plus/icons-vue'
 import { api } from '@/api'
 import CountUp from '@/components/fx/CountUp.vue'
 import type { CostRange, CostSummary } from '@/types'
@@ -96,16 +99,19 @@ defineExpose({ refresh })
 </script>
 
 <style scoped>
-.cost { display: flex; flex-direction: column; gap: 14px; padding: 16px 20px; }
-.cost > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; flex-wrap: wrap; }
-.cost h2 { display: flex; align-items: baseline; gap: 8px; font-size: 15px; font-weight: 600; }
+.cost { display: flex; flex-direction: column; gap: 16px; padding: 16px 20px 20px; }
+.cost > header { display: flex; align-items: center; gap: 12px; height: 32px; }
+.cost h2 { display: flex; align-items: baseline; gap: 8px; font-size: 15px; font-weight: 600; white-space: nowrap; }
 .cost h2 .muted { font-size: 12px; font-weight: 400; }
-.cost-grid { display: grid; grid-template-columns: minmax(140px, .7fr) minmax(0, 1.2fr) minmax(0, 1.3fr); gap: 28px; align-items: start; }
+.unpriced { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 0; border-radius: var(--radius-xs); background: var(--warning-light); color: var(--warning); font-size: 12px; cursor: pointer; transition: filter var(--dur-fast) var(--ease); }
+.unpriced:hover { filter: brightness(.97); }
+.cost-grid { display: grid; grid-template-columns: minmax(140px, .6fr) minmax(0, 1.2fr) minmax(0, 1.3fr); gap: 32px; align-items: start; }
+.col-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 28px; margin-bottom: 8px; color: var(--muted); font-size: 12px; }
 
-.cost-totals { display: flex; flex-direction: column; gap: 12px; }
+.cost-totals { display: flex; flex-direction: column; gap: 16px; padding-top: 2px; }
 .cost-totals div { display: flex; flex-direction: column; }
 .cost-totals span { color: var(--muted); font-size: 12px; }
-.money { font-size: 28px; font-weight: 600; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.money { font-size: 28px; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .money.small { font-size: 18px; color: var(--text-2); }
 .money i { margin-right: 2px; font-size: .6em; font-style: normal; color: var(--muted); }
 .money :deep(.count-up) { font-size: inherit; }
@@ -116,21 +122,20 @@ defineExpose({ refresh })
 .chat { background: var(--primary); }
 .embedding { background: var(--success); }
 .image { background: var(--warning); }
-.cost-kinds ul, .cost-rank ul { margin: 12px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.cost-kinds ul, .cost-rank ul { margin: 12px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.cost-rank ul { margin-top: 0; }
 .cost-kinds li { display: grid; grid-template-columns: 8px 36px minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 13px; }
 .dot { width: 8px; height: 8px; border-radius: 2px; }
 .k-label { color: var(--text-2); }
 .k-usage { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .cost-kinds strong, .cost-rank strong { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
 
-.cost-rank li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(48px, .8fr) 76px; align-items: center; gap: 10px; font-size: 13px; }
+.cost-rank li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(48px, .9fr) 72px; align-items: center; gap: 12px; font-size: 13px; }
 .r-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .r-name.derived { color: var(--muted); }
 .r-bar { position: relative; height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
 .r-bar i { position: absolute; inset: 0; border-radius: 3px; background: var(--primary); transform-origin: left; transition: transform .6s var(--ease); }
-.none { margin: 14px 0 0; font-size: 13px; }
-
-.unpriced { margin: 0; padding-top: 10px; border-top: 1px solid var(--line); color: var(--warning); font-size: 12px; }
+.none { margin: 4px 0 0; font-size: 13px; }
 @media (max-width: 1100px) { .cost-grid { grid-template-columns: 1fr 1fr; } .cost-rank { grid-column: 1 / -1; } }
-@media (max-width: 640px) { .cost-grid { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .cost-grid { grid-template-columns: 1fr; } .cost > header { flex-wrap: wrap; height: auto; } }
 </style>

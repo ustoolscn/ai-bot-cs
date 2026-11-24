@@ -62,7 +62,7 @@
           <div class="form-row" style="width: 100%">
             <el-upload :auto-upload="false" :show-file-list="false" :on-change="choose"><el-button :icon="Upload">{{ file ? '换一个文件' : '选择本地文件' }}</el-button></el-upload>
             <el-input v-if="!file" v-model="remote" placeholder="或填写 HTTPS 文件地址" class="grow" />
-            <span v-else class="grow truncate" style="line-height: 34px">{{ file.name }} <el-button link @click="file = undefined">移除</el-button></span>
+            <span v-else class="grow truncate" style="line-height: 32px">{{ file.name }} <el-button link @click="file = undefined">移除</el-button></span>
           </div>
         </el-form-item>
       </div>

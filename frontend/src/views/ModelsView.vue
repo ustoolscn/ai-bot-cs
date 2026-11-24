@@ -5,7 +5,7 @@
       <div class="list-group-title"><h2>{{ group.title }}</h2><span>{{ group.hint }}</span></div>
       <div v-if="group.items.length" class="entity-list">
         <div v-for="model in group.items" :key="model.id" class="entity-row">
-          <div class="entity-name"><span class="entity-icon" :class="model.kind === 'chat' ? 'purple' : 'green'"><el-icon><component :is="model.kind === 'chat' ? ChatDotSquare : model.kind === 'image' ? PictureIcon : model.kind === 'decision' ? Finished : Coin" /></el-icon></span><div><strong>{{ model.name }} <StatusBadge :status="model.status" /><span v-if="model.provider !== 'compatible'" class="pill busy proxy-pill">{{ providerLabel(model.provider, presets) }}</span><span v-if="model.proxyId" class="pill idle proxy-pill" :title="'请求经代理发出：' + proxyName(model.proxyId)">代理 · {{ proxyName(model.proxyId) }}</span></strong><small :title="model.baseUrl">{{ model.baseUrl }}</small></div></div>
+          <div class="entity-name"><span class="entity-icon" :class="model.kind === 'chat' ? 'purple' : 'green'"><el-icon><component :is="model.kind === 'chat' ? ChatDotSquare : model.kind === 'image' ? PictureIcon : model.kind === 'decision' ? Finished : Coin" /></el-icon></span><div><strong><span>{{ model.name }}</span><StatusBadge :status="model.status" /><span v-if="model.provider !== 'compatible'" class="pill busy proxy-pill">{{ providerLabel(model.provider, presets) }}</span><span v-if="model.proxyId" class="pill idle proxy-pill" :title="'请求经代理发出：' + proxyName(model.proxyId)">代理 · {{ proxyName(model.proxyId) }}</span></strong><small :title="model.baseUrl">{{ model.baseUrl }}</small></div></div>
           <div class="entity-facts">
             <div><span>模型</span><strong>{{ model.model }}</strong></div>
             <div v-if="model.kind === 'chat'"><span>联网搜索 / 思考等级</span><strong>{{ searchModeText(model.webSearchMode) }} · {{ reasoningText(model.reasoningEffort) }}</strong></div>
@@ -155,7 +155,7 @@ useAdminEvents(['model_profiles','model_proxies'], load)
 
 <style scoped>
 .price-item :deep(.el-form-item__content) { display: block; }
-.proxy-pill { margin-left: 6px; vertical-align: 1px; }
+.proxy-pill { flex: none; }
 .option-sub { margin-left: 8px; color: var(--muted); font-size: 12px; }
 .price-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; width: 100%; }
 .price-grid label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
