@@ -130,6 +130,7 @@ func (a *App) Router() http.Handler {
 	auth.DELETE("/model-profiles/:id", a.deleteModel)
 	auth.POST("/model-profiles/:id/test", a.testModel)
 	auth.GET("/conversations", a.listConversations)
+	auth.DELETE("/conversations/:id", a.deleteConversation)
 	auth.GET("/conversations/:id", a.getConversation)
 	auth.PUT("/conversations/:id", a.updateConversation)
 	auth.GET("/messages", a.listMessages)
@@ -400,9 +401,26 @@ func (a *App) saveBot(c *gin.Context) {
 	ok(c, gin.H{"id": id})
 }
 func (a *App) deleteBot(c *gin.Context) {
-	_, err := a.db.Exec(c, "DELETE FROM bots WHERE id=$1", c.Param("id"))
+	a.deleteRecord(c, "DELETE FROM bots WHERE id=$1")
+}
+
+func (a *App) deleteConversation(c *gin.Context) {
+	a.deleteRecord(c, "DELETE FROM conversations WHERE id=$1")
+}
+
+func (a *App) deleteRecord(c *gin.Context, statement string) {
+	if parseUUID(c.Param("id")) != nil {
+		fail(c, 400, "invalid_id", "ID 格式无效")
+		return
+	}
+	tag, err := a.db.Exec(c, statement, c.Param("id"))
 	if err != nil {
-		fail(c, 409, "delete_failed", "机器人存在关联数据或无法删除")
+		a.log.Error("delete record", "error", err)
+		fail(c, 500, "database_error", "删除失败")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		fail(c, 404, "not_found", "记录不存在")
 		return
 	}
 	ok(c, gin.H{"deleted": true})
@@ -656,7 +674,7 @@ func (a *App) testModel(c *gin.Context) {
 }
 
 func (a *App) listConversations(c *gin.Context) {
-	queryList(c, a, `SELECT c.id::text,c.bot_id::text AS "botId",c.service_id::text AS "serviceId",c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",b.name AS "botName",ARRAY(SELECT ck.knowledge_base_id::text FROM conversation_knowledge_bases ck WHERE ck.conversation_id=c.id) AS "knowledgeBaseIds",c.updated_at AS "updatedAt",COALESCE(ms.message_count,0) AS "messageCount",CASE WHEN c.type='private' THEN GREATEST(COALESCE(cm.member_count,0),1) ELSE COALESCE(cm.member_count,0) END AS "memberCount",COALESCE(ms.has_full_message_events,false) AS "hasFullMessageEvents" FROM conversations c JOIN bots b ON b.id=c.bot_id LEFT JOIN LATERAL (SELECT count(*) FILTER(WHERE event_type<>'PROCESSING_ACK') AS message_count,bool_or(event_type='GROUP_MESSAGE_CREATE') AS has_full_message_events FROM messages WHERE conversation_id=c.id) ms ON true LEFT JOIN LATERAL (SELECT count(*) AS member_count FROM conversation_members WHERE conversation_id=c.id AND active) cm ON true ORDER BY c.updated_at DESC`)
+	queryList(c, a, `SELECT c.id::text,c.bot_id::text AS "botId",c.service_id::text AS "serviceId",c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",b.name AS "botName",ARRAY(SELECT ck.knowledge_base_id::text FROM conversation_knowledge_bases ck WHERE ck.conversation_id=c.id) AS "knowledgeBaseIds",c.updated_at AS "updatedAt",COALESCE(ms.message_count,0) AS "messageCount",CASE WHEN c.type='private' THEN GREATEST(COALESCE(cm.member_count,0),1) ELSE COALESCE(cm.member_count,0) END AS "memberCount",COALESCE(ms.has_full_message_events,false) AS "hasFullMessageEvents" FROM conversations c JOIN bots b ON b.id=c.bot_id LEFT JOIN LATERAL (SELECT count(*) FILTER(WHERE event_type<>'PROCESSING_ACK') AS message_count,bool_or(event_type='GROUP_MESSAGE_CREATE') AS has_full_message_events FROM messages WHERE conversation_id=c.id) ms ON true LEFT JOIN LATERAL (SELECT count(*) AS member_count FROM conversation_members WHERE conversation_id=c.id AND active) cm ON true WHERE NOT c.bot_removed ORDER BY c.updated_at DESC`)
 }
 func (a *App) getConversation(c *gin.Context) {
 	rows, err := a.db.Query(c, `SELECT c.id::text,c.bot_id::text AS "botId",c.service_id::text AS "serviceId",c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",COALESCE(json_agg(ck.knowledge_base_id::text) FILTER(WHERE ck.knowledge_base_id IS NOT NULL),'[]') AS "knowledgeBaseIds" FROM conversations c LEFT JOIN conversation_knowledge_bases ck ON ck.conversation_id=c.id WHERE c.id=$1 GROUP BY c.id`, c.Param("id"))
@@ -1113,7 +1131,10 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 	conversationName := inboundConversationName(msg)
 	var conversationEnabled, guardEnabled bool
 	var cid, triggerMode string
-	err = tx.QueryRow(ctx, `INSERT INTO conversations(channel,bot_id,platform_id,type,name,context_limit,trigger_mode) VALUES('qq',$1,$2,$3,$4,$5,CASE WHEN $3='group' THEN 'smart' ELSE 'mention_only' END) ON CONFLICT(channel,bot_id,platform_id) DO UPDATE SET updated_at=now(),name=CASE WHEN conversations.name='' OR conversations.name=conversations.platform_id OR conversations.name LIKE 'QQ 群聊 · %' OR conversations.name LIKE 'QQ 用户 · %' THEN EXCLUDED.name ELSE conversations.name END RETURNING id::text,trigger_mode,enabled,enabled AND COALESCE((guard_policy->>'enabled')::bool,false)`, msg.BotID, msg.ConversationID, msg.ConversationType, conversationName, settings.DefaultContextLimit).Scan(&cid, &triggerMode, &conversationEnabled, &guardEnabled)
+	err = tx.QueryRow(ctx, `INSERT INTO conversations(channel,bot_id,platform_id,type,name,context_limit,membership_event_at,trigger_mode) VALUES('qq',$1,$2,$3,$4,$5,CASE WHEN $3='group' THEN $6::timestamptz END,CASE WHEN $3='group' THEN 'smart' ELSE 'mention_only' END) ON CONFLICT(channel,bot_id,platform_id) DO UPDATE SET updated_at=now(),
+		bot_removed=conversations.bot_removed AND conversations.membership_event_at>EXCLUDED.membership_event_at,
+		membership_event_at=GREATEST(conversations.membership_event_at,EXCLUDED.membership_event_at),
+		name=CASE WHEN conversations.name='' OR conversations.name=conversations.platform_id OR conversations.name LIKE 'QQ 群聊 · %' OR conversations.name LIKE 'QQ 用户 · %' THEN EXCLUDED.name ELSE conversations.name END RETURNING id::text,trigger_mode,enabled AND NOT bot_removed,enabled AND NOT bot_removed AND COALESCE((guard_policy->>'enabled')::bool,false)`, msg.BotID, msg.ConversationID, msg.ConversationType, conversationName, settings.DefaultContextLimit, msg.EventTime).Scan(&cid, &triggerMode, &conversationEnabled, &guardEnabled)
 	if err != nil {
 		return err
 	}
@@ -1264,8 +1285,10 @@ func (a *App) persistQQGroupEvent(ctx context.Context, tx pgx.Tx, botID string, 
 			return err
 		}
 	}
-	if env.T == "GROUP_DEL_ROBOT" {
-		_, err = tx.Exec(ctx, "UPDATE conversations SET enabled=false,updated_at=now() WHERE id=$1", conversationID)
+	if env.T == "GROUP_DEL_ROBOT" || env.T == "GROUP_ADD_ROBOT" {
+		removed := env.T == "GROUP_DEL_ROBOT"
+		_, err = tx.Exec(ctx, `UPDATE conversations SET bot_removed=$2,membership_event_at=$3 WHERE id=$1
+			AND (membership_event_at IS NULL OR membership_event_at<=$3)`, conversationID, removed, occurred)
 		return err
 	}
 	memberID := event.MemberOpenID

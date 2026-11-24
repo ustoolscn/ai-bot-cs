@@ -127,7 +127,7 @@ func (a *App) claimInbox(ctx context.Context) (inboxJob, error) {
 	}
 	defer tx.Rollback(ctx)
 	var j inboxJob
-	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,m.conversation_id::text,c.type,c.platform_id,COALESCE(m.platform_message_id,''),m.content,c.system_prompt,c.context_limit,c.enabled,m.reply_deadline,t.attempts,m.event_type,c.trigger_mode,m.parts @> '[{"type":"image"}]'::jsonb,COALESCE((m.raw_event#>'{d,mentions}') @> '[{"is_you":true}]'::jsonb,false) FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id WHERE t.status='pending' AND t.next_attempt_at<=now()
+	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,m.conversation_id::text,c.type,c.platform_id,COALESCE(m.platform_message_id,''),m.content,c.system_prompt,c.context_limit,c.enabled AND NOT c.bot_removed,m.reply_deadline,t.attempts,m.event_type,c.trigger_mode,m.parts @> '[{"type":"image"}]'::jsonb,COALESCE((m.raw_event#>'{d,mentions}') @> '[{"is_you":true}]'::jsonb,false) FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id WHERE t.status='pending' AND t.next_attempt_at<=now()
 	AND (m.reply_batch IS NULL OR NOT EXISTS (
       SELECT FROM messages other LEFT JOIN inbox_tasks ot ON ot.message_id=other.id
       WHERE other.reply_batch=m.reply_batch AND (

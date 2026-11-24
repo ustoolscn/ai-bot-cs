@@ -24,7 +24,7 @@ func (a *App) qqUpload(c *gin.Context) {
 	_ = http.NewResponseController(c.Writer).SetReadDeadline(time.Now().Add(10 * time.Minute))
 	id := c.Param("id")
 	var group, kind, app, enc string
-	if err := a.db.QueryRow(ctx, `SELECT c.platform_id,c.type,b.app_id,b.app_secret_enc FROM conversations c JOIN bots b ON b.id=c.bot_id WHERE c.id=$1 AND b.enabled AND c.enabled`, id).Scan(&group, &kind, &app, &enc); err != nil {
+	if err := a.db.QueryRow(ctx, `SELECT c.platform_id,c.type,b.app_id,b.app_secret_enc FROM conversations c JOIN bots b ON b.id=c.bot_id WHERE c.id=$1 AND b.enabled AND c.enabled AND NOT c.bot_removed`, id).Scan(&group, &kind, &app, &enc); err != nil {
 		fail(c, 404, "not_found", "会话不存在或已停用")
 		return
 	}
@@ -166,7 +166,7 @@ func (a *App) qqQueue(c *gin.Context) {
 	id := c.Param("id")
 	var kind, bot, target string
 	var extended bool
-	if err = tx.QueryRow(ctx, `SELECT c.type,c.bot_id::text,c.platform_id,c.qq_extended_replies FROM conversations c JOIN bots b ON b.id=c.bot_id WHERE c.id=$1 AND c.enabled AND b.enabled FOR UPDATE OF c`, id).Scan(&kind, &bot, &target, &extended); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT c.type,c.bot_id::text,c.platform_id,c.qq_extended_replies FROM conversations c JOIN bots b ON b.id=c.bot_id WHERE c.id=$1 AND c.enabled AND NOT c.bot_removed AND b.enabled FOR UPDATE OF c`, id).Scan(&kind, &bot, &target, &extended); err != nil {
 		fail(c, 404, "not_found", "会话不存在或已停用")
 		return
 	}

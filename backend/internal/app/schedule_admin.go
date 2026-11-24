@@ -24,7 +24,7 @@ func (a *App) scheduledPostRoutes(r *gin.RouterGroup) {
 	r.POST("/schedules/:item/test", validateScheduleID, a.testSchedule)
 	r.GET("/schedules/:item/runs", validateScheduleID, func(c *gin.Context) {
 		queryList(c, a, `SELECT r.id::text AS id,r.created_at AS "createdAt",r.is_test AS "isTest",c.name AS "groupName",b.name AS "botName",
- CASE WHEN o.status IN ('sent','failed','expired') THEN o.status WHEN j.status='failed' THEN 'failed' WHEN (s.revision<>r.revision OR NOT c.enabled OR NOT b.enabled OR (NOT s.enabled AND NOT r.is_test)) THEN 'cancelled'
+ CASE WHEN o.status IN ('sent','failed','expired') THEN o.status WHEN j.status='failed' THEN 'failed' WHEN (s.revision<>r.revision OR NOT c.enabled OR c.bot_removed OR NOT b.enabled OR (NOT s.enabled AND NOT r.is_test)) THEN 'cancelled'
  ELSE coalesce(o.status,j.status,'pending') END AS status,coalesce(o.last_error,j.last_error,'') AS error
  FROM (SELECT * FROM schedule_runs WHERE schedule_id=$1 ORDER BY created_at DESC LIMIT 10) r
  JOIN scheduled_posts s ON s.id=r.schedule_id JOIN schedule_deliveries d ON d.run_id=r.id JOIN conversations c ON c.id=d.conversation_id JOIN bots b ON b.id=c.bot_id

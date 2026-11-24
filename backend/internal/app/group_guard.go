@@ -84,7 +84,7 @@ func (a *App) reviewGroupMessage(ctx context.Context, mid string) (reviewErr err
 	var policy guardPolicy
 	var enabled, staff, blocked, hasImage bool
 	err := a.db.QueryRow(ctx, `SELECT c.id::text,c.bot_id::text,m.sender_id,m.platform_message_id,m.content,m.event_at,
- COALESCE(NULLIF(m.raw_event#>>'{d,author,member_role}',''),cm.qq_role,''),c.guard_policy,c.enabled AND b.enabled,
+ COALESCE(NULLIF(m.raw_event#>>'{d,author,member_role}',''),cm.qq_role,''),c.guard_policy,c.enabled AND NOT c.bot_removed AND b.enabled,
  COALESCE(cm.is_staff,false),m.context_excluded AND m.context_exclusion_reason<>'pending_review',m.parts @> '[{"type":"image"}]'::jsonb
  FROM group_reviews r JOIN messages m ON m.id=r.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=c.bot_id
  LEFT JOIN conversation_members cm ON cm.conversation_id=c.id AND cm.platform_user_id=m.sender_id WHERE r.message_id=$1 AND r.status='pending'`, mid).
@@ -247,7 +247,7 @@ func (a *App) queueJoinApproval(ctx context.Context, tx pgx.Tx, bot string, data
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO group_guard_actions(conversation_id,event_key,member_id,kind,reason,policy_revision)
  SELECT c.id,$3,$4,'approve','入群验证答案匹配',c.guard_revision FROM conversations c JOIN bots b ON b.id=c.bot_id
- WHERE c.bot_id=$1 AND c.platform_id=$2 AND c.type='group' AND c.enabled AND b.enabled
+ WHERE c.bot_id=$1 AND c.platform_id=$2 AND c.type='group' AND c.enabled AND NOT c.bot_removed AND b.enabled
  AND COALESCE(c.guard_policy->>'joinAnswer','')<>'' AND c.guard_policy->>'joinAnswer'=ANY($5::text[])
  AND NOT EXISTS(SELECT 1 FROM blocked_users bu WHERE bu.bot_id=c.bot_id AND bu.platform_user_id=$4 AND (bu.conversation_id IS NULL OR bu.conversation_id=c.id))
  ON CONFLICT DO NOTHING`, bot, e.Group, e.ID, e.User, answers)
@@ -261,7 +261,7 @@ func (a *App) processGuardAction(ctx context.Context) error {
 	err := a.db.QueryRow(ctx, `WITH picked AS (SELECT id FROM group_guard_actions WHERE status='pending' ORDER BY (kind='retract') DESC,created_at FOR UPDATE SKIP LOCKED LIMIT 1)
  UPDATE group_guard_actions a SET status='processing',updated_at=now() FROM picked, conversations c JOIN bots b ON b.id=c.bot_id
  WHERE a.id=picked.id AND c.id=a.conversation_id RETURNING a.id::text,a.kind,a.event_key,a.member_id,a.expires_at,c.platform_id,b.app_id,b.app_secret_enc,
- c.enabled AND b.enabled AND COALESCE(a.policy_revision=c.guard_revision,false) AND CASE WHEN a.kind='approve' THEN COALESCE(c.guard_policy->>'joinAnswer','')<>'' AND
+ c.enabled AND NOT c.bot_removed AND b.enabled AND COALESCE(a.policy_revision=c.guard_revision,false) AND CASE WHEN a.kind='approve' THEN COALESCE(c.guard_policy->>'joinAnswer','')<>'' AND
  NOT EXISTS(SELECT 1 FROM blocked_users u WHERE u.bot_id=c.bot_id AND u.platform_user_id=a.member_id AND (u.conversation_id IS NULL OR u.conversation_id=c.id))
  ELSE COALESCE((c.guard_policy->>'enabled')::bool,false) AND CASE WHEN a.kind='mute' THEN (c.guard_policy->>'muteMinutes')::int>0 ELSE (c.guard_policy->>'retract')::bool END END`).Scan(&id, &kind, &key, &user, &until, &group, &appID, &enc, &permitted)
 	if err != nil {
