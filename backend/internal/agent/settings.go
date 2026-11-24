@@ -18,15 +18,17 @@ type Settings struct {
 	SkillIDs         []string `json:"skillIds"`
 	KnowledgeBaseIDs []string `json:"knowledgeBaseIds"`
 	// Persona & style
-	PersonaName       string    `json:"personaName"`
-	StylePrompt       string    `json:"stylePrompt"`
-	Examples          []Example `json:"examples"`
-	GroupReplyChars   int       `json:"groupReplyChars"`
-	PrivateReplyChars int       `json:"privateReplyChars"`
-	SplitLongReplies  bool      `json:"splitLongReplies"`
-	MaxReplyParts     int       `json:"maxReplyParts"`
-	SanitizeMarkdown  bool      `json:"sanitizeMarkdown"`
-	MaxOutputTokens   int       `json:"maxOutputTokens"`
+	PersonaName         string    `json:"personaName"`
+	StylePrompt         string    `json:"stylePrompt"`
+	Examples            []Example `json:"examples"`
+	GroupReplyChars     int       `json:"groupReplyChars"`
+	PrivateReplyChars   int       `json:"privateReplyChars"`
+	SplitLongReplies    bool      `json:"splitLongReplies"`
+	MaxReplyParts       int       `json:"maxReplyParts"`
+	SanitizeMarkdown    bool      `json:"sanitizeMarkdown"`
+	MaxOutputTokens     int       `json:"maxOutputTokens"`
+	ReplyQuietSeconds   int       `json:"replyQuietSeconds"`
+	ReplyMaxWaitSeconds int       `json:"replyMaxWaitSeconds"`
 	// Context & memory
 	HistoryTokenBudget int    `json:"historyTokenBudget"`
 	GroupThreadMode    bool   `json:"groupThreadMode"`
@@ -79,7 +81,8 @@ const DefaultStylePrompt = `你是平台的在线客服，像一位熟练、友�
 // DefaultSettings returns sane defaults.
 func DefaultSettings() Settings {
 	return Settings{
-		PersonaName:              "小助手",
+		PersonaName:       "小助手",
+		ReplyQuietSeconds: 6, ReplyMaxWaitSeconds: 20,
 		StylePrompt:              DefaultStylePrompt,
 		GroupReplyChars:          120,
 		PrivateReplyChars:        220,
@@ -153,6 +156,9 @@ func (s *Settings) Normalize() {
 
 // Validate checks user-supplied settings.
 func (s Settings) Validate() error {
+	if s.ReplyQuietSeconds < 1 || s.ReplyMaxWaitSeconds < s.ReplyQuietSeconds || s.ReplyMaxWaitSeconds > 120 {
+		return fmt.Errorf("合并静默时间和最长等待须为 1 至 120 秒，最长等待须大于或等于静默时间")
+	}
 	switch s.LiveData.StatusImageStyle {
 	case "", "brief", "table", "heatmap", "night", "page", "off":
 	default:

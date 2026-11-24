@@ -74,10 +74,34 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.scheduleProcessingAckRetraction(ctx, j.BotID, j.ConversationID, j.PlatformMessageID)
 	}
 
-	originalQuestion := j.Content
-	j.Content, err = a.qqContext(ctx, j)
+	segments, err := a.replySegments(ctx, j.MessageID)
 	if err != nil {
 		return a.retryInbox(ctx, j, err)
+	}
+	if len(segments) == 0 {
+		return a.finishInbox(ctx, j.TaskID, "skipped", nil)
+	}
+	originalQuestion := segmentText(segments)
+	var descriptions, imageIDs []string
+	for _, part := range segments {
+		sub := j
+		sub.MessageID, sub.Content = part.ID, part.Content
+		description, e := a.qqContext(ctx, sub)
+		if e != nil {
+			return a.retryInbox(ctx, j, e)
+		}
+		if description != "" {
+			descriptions = append(descriptions, description)
+		}
+		if part.HasImage {
+			imageIDs = append(imageIDs, part.ID)
+		}
+		j.MentionsBot = j.MentionsBot || part.Mention
+	}
+	j.Content = strings.Join(descriptions, "\n")
+	j.HasImage = len(imageIDs) > 0
+	if j.ConversationType == "group" && j.TriggerMode == "mention_only" && !j.MentionsBot && j.EventType == "GROUP_MESSAGE_CREATE" {
+		return a.finishInbox(ctx, j.TaskID, "skipped", nil)
 	}
 	finishCheck("会话可接待", nil)
 	var imageParts []domain.ChatContentPart
@@ -99,9 +123,22 @@ func (a *App) processInbox(ctx context.Context) error {
 		}
 	}
 	priorImage := imageID != j.MessageID
-	if j.HasImage || priorImage {
+	if priorImage {
+		imageIDs = append(imageIDs, imageID)
+	}
+	if len(imageIDs) > 0 {
 		finish := a.startStage(ctx, j.MessageID, "图片读取")
-		imageParts, err = a.prepareMessageImages(ctx, imageID)
+		for _, id := range imageIDs {
+			var parts []domain.ChatContentPart
+			parts, err = a.prepareMessageImages(ctx, id)
+			if err != nil {
+				break
+			}
+			imageParts = append(imageParts, parts[:min(len(parts), maxInboundImages-len(imageParts))]...)
+			if len(imageParts) == maxInboundImages {
+				break
+			}
+		}
 		finish(fmt.Sprintf("%d 张图片", len(imageParts)), err)
 		if err != nil {
 			return a.retryInbox(ctx, j, err)
@@ -275,12 +312,31 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.retryInbox(ctx, j, err)
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, "SELECT id FROM conversations WHERE id=$1 FOR UPDATE", j.ConversationID); err != nil {
+	var extended bool
+	if err = tx.QueryRow(ctx, "SELECT qq_extended_replies FROM conversations WHERE id=$1 FOR UPDATE", j.ConversationID).Scan(&extended); err != nil {
 		return a.retryInbox(ctx, j, err)
 	}
 	var firstSeq int
-	if err = tx.QueryRow(ctx, `SELECT COALESCE(max(t.msg_seq),0)+1 FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.bot_id=$1 AND m.reply_to_message_id=$2 AND m.event_type<>'PROCESSING_ACK'`, j.BotID, j.PlatformMessageID).Scan(&firstSeq); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT COALESCE(max(t.msg_seq),0)+1 FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.bot_id=$1 AND m.reply_to_message_id=$2`, j.BotID, j.PlatformMessageID).Scan(&firstSeq); err != nil {
 		return a.retryInbox(ctx, j, err)
+	}
+	available := qqReplyLimit(j.ConversationType, extended) - firstSeq + 1
+	if available <= 0 {
+		_, err = tx.Exec(ctx, `UPDATE inbox_tasks SET status='skipped',last_error='QQ 被动回复次数已用完' WHERE id=$1`, j.TaskID)
+		if err == nil {
+			_, err = tx.Exec(ctx, "UPDATE agent_runs SET status='completed',completed_at=now() WHERE id=$1", runID)
+		}
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return a.retryInbox(ctx, j, err)
+		}
+		return tx.Commit(ctx)
+	}
+	if len(replyParts) > available {
+		replyParts = append(replyParts[:available-1], strings.Join(replyParts[available-1:], "\n"))
+	}
+	if len(segments) > 1 {
+		rt.quoteTarget = j.MessageID
 	}
 	for i, part := range replyParts {
 		if err != nil {
@@ -399,7 +455,7 @@ func (a *App) loadHistory(ctx context.Context, conversationID, currentMessageID 
 	}
 	rows, err := a.db.Query(ctx, `SELECT m.id::text,m.direction,m.sender_id,m.sender_name,m.content,m.parts,m.event_type,COALESCE(m.platform_message_id,''),COALESCE(m.reply_to_message_id,''),COALESCE(cm.is_staff,false),m.event_at
 		FROM messages m LEFT JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id
-		WHERE m.conversation_id=$1 AND `+visibleContextSQL+` AND m.id<>$2 AND m.event_at<=$3 AND m.event_type NOT IN ('PROCESSING_ACK')
+		WHERE m.conversation_id=$1 AND `+visibleContextSQL+` AND m.id<>$2 AND (m.reply_batch IS NULL OR m.reply_batch IS DISTINCT FROM (SELECT reply_batch FROM messages WHERE id=$2)) AND m.event_at<=$3 AND m.event_type NOT IN ('PROCESSING_ACK')
 		AND (m.content<>'' OR m.parts::text LIKE '%"image"%')
 		ORDER BY m.event_at DESC LIMIT $4`, conversationID, currentMessageID, before, fetch)
 	if err != nil {

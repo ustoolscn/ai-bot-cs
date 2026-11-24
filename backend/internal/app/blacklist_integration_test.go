@@ -92,6 +92,9 @@ func TestBlacklistIsolationAndOfficialKick(t *testing.T) {
 	if otherExcluded {
 		t.Fatal("group-scoped block leaked to another group")
 	}
+	if _, e = pool.Exec(ctx, "UPDATE messages SET reply_due_at=now() WHERE id=$1", mid); e != nil {
+		t.Fatal(e)
+	}
 	if e = a.processInbox(ctx); e != nil {
 		t.Fatal(e)
 	}

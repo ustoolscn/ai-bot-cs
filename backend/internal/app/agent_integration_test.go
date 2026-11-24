@@ -258,6 +258,7 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 
 	settings := dataMap(t, requestJSON(t, client, http.MethodGet, server.URL+"/api/agent/settings", nil, http.StatusOK))
 	settings["groupReplyChars"] = 30
+	settings["replyQuietSeconds"] = 1
 	settings["learningKnowledgeBaseId"] = kbID
 	live := settings["liveData"].(map[string]any)
 	live["enabled"] = true
@@ -295,7 +296,8 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	agentID := create("support-agents", map[string]any{"name": "接入顾问", "personalityId": presetID, "instructions": "解答接入流程问题"})
 	serviceProfileID := create("model-profiles", map[string]any{"name": "客服专用", "kind": "chat", "baseUrl": mock.URL + "/v1", "apiKey": "k", "model": "service-chat", "enabled": true, "inputPricePerMillion": 2, "outputPricePerMillion": 4, "cacheReadPricePerMillion": 1, "cacheWritePricePerMillion": 3})
 	requestJSON(t, client, http.MethodPost, server.URL+"/api/bots/"+botID+"/services", map[string]any{"name": "接入小助手", "agentId": agentID, "chatProfileId": embID}, http.StatusBadRequest)
-	serviceID := create("bots/"+botID+"/services", map[string]any{"name": "接入小助手", "agentId": agentID, "chatProfileId": serviceProfileID, "decisionProfileId": chatID, "simpleProfileId": chatID})
+	requestJSON(t, client, http.MethodPost, server.URL+"/api/bots/"+botID+"/services", map[string]any{"name": "无效等待", "settings": map[string]int{"replyQuietSeconds": 9, "replyMaxWaitSeconds": 4}}, http.StatusBadRequest)
+	serviceID := create("bots/"+botID+"/services", map[string]any{"name": "接入小助手", "settings": map[string]int{"replyQuietSeconds": 1, "replyMaxWaitSeconds": 4}, "agentId": agentID, "chatProfileId": serviceProfileID, "decisionProfileId": chatID, "simpleProfileId": chatID})
 	otherBotID := createdID(t, requestJSON(t, client, http.MethodPost, server.URL+"/api/bots", map[string]any{"name": "另一个机器人", "appId": "another", "appSecret": botSecret, "enabled": true}, http.StatusCreated))
 	otherServiceID := create("bots/"+otherBotID+"/services", map[string]any{"name": "其他客服", "agentId": agentID})
 	requestJSON(t, client, http.MethodPut, server.URL+"/api/conversations/"+convID, map[string]any{"triggerMode": "mention_only", "contextLimit": 20, "serviceId": otherServiceID}, http.StatusBadRequest)
@@ -304,6 +306,12 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	}, http.StatusOK)
 
 	requestJSON(t, client, http.MethodPut, server.URL+"/api/personalities/"+presetID, map[string]any{"name": "测试性格", "prompt": "使用更新后的表达习惯"}, http.StatusOK)
+	// This scenario exercises a follow-up to an earlier, already judged turn.
+	eventually(t, 5*time.Second, "first turn judged", func() (bool, error) {
+		var done bool
+		err := pool.QueryRow(ctx, `SELECT t.status='skipped' FROM inbox_tasks t JOIN messages m ON m.id=t.message_id WHERE m.platform_message_id='m1'`).Scan(&done)
+		return done, err
+	})
 	postQQWebhook(t, client, hook, botSecret, groupEventBody(t, "e3", "GROUP_MESSAGE_CREATE", "m3", "alice", "Alice", "那价格多少"))
 	eventually(t, 10*time.Second, "split price reply delivered", func() (bool, error) {
 		var n int

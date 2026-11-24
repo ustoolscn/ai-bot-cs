@@ -272,7 +272,7 @@ func (a *App) listServices(c *gin.Context) {
 
 func serviceField(key string) bool {
 	switch key {
-	case "stylePrompt", "examples", "liveData", "toolsEnabled", "toolNames", "skillIds", "knowledgeBaseIds", "maxToolSteps", "handoffPauseMinutes", "evaluationEnabled", "staffMiningEnabled", "autoPublishStaff", "autoPublishMinConfidence", "learningKnowledgeBaseId":
+	case "replyQuietSeconds", "replyMaxWaitSeconds", "stylePrompt", "examples", "liveData", "toolsEnabled", "toolNames", "skillIds", "knowledgeBaseIds", "maxToolSteps", "handoffPauseMinutes", "evaluationEnabled", "staffMiningEnabled", "autoPublishStaff", "autoPublishMinConfidence", "learningKnowledgeBaseId":
 		return true
 	}
 	return false

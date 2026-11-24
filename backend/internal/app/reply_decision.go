@@ -41,7 +41,7 @@ func (a *App) decisionHistory(ctx context.Context, j inboxJob, senderID string) 
 		m.content, m.parts @> '[{"type":"image"}]'::jsonb
 		FROM messages m JOIN messages cur ON cur.id=$2 AND m.conversation_id=cur.conversation_id
 		LEFT JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id
-		WHERE m.conversation_id=$1 AND (m.event_at,m.created_at,m.id)<(cur.event_at,cur.created_at,cur.id)
+		WHERE m.conversation_id=$1 AND (m.reply_batch IS NULL OR m.reply_batch IS DISTINCT FROM cur.reply_batch) AND (m.event_at,m.created_at,m.id)<(cur.event_at,cur.created_at,cur.id)
 		AND `+visibleContextSQL+` AND m.event_type<>'PROCESSING_ACK'
 		AND (m.direction='inbound' OR m.status='sent')
 		AND (m.content<>'' OR m.parts @> '[{"type":"image"}]'::jsonb)

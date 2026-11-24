@@ -1181,6 +1181,12 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 			return tx.Commit(ctx)
 		}
 	}
+	if !blocked && conversationEnabled {
+		queue, err = joinReplyWindow(ctx, tx, cid, msg.SenderID, mid, queue)
+		if err != nil {
+			return err
+		}
+	}
 	if needsReview {
 		err = a.queueReview(ctx, tx, mid, queue)
 		if err == nil {

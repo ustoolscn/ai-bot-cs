@@ -179,6 +179,9 @@ func Parse(body []byte, botID string) (Envelope, *domain.InboundMessage, error) 
 	if sender == "" {
 		sender = d.Author.ID
 	}
+	if sender == "" && ct == "private" {
+		sender = cid
+	}
 	senderName := strings.TrimSpace(d.Author.Username)
 	if senderName == "" {
 		senderName = strings.TrimSpace(d.Author.Nickname)

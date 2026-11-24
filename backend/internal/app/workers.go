@@ -120,22 +120,35 @@ type inboxJob struct {
 }
 
 func (a *App) claimInbox(ctx context.Context) (inboxJob, error) {
-	tx, err := a.db.Begin(ctx)
+	// Reject a stale candidate if a webhook committed a new segment while locking it.
+	tx, err := a.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
 		return inboxJob{}, err
 	}
 	defer tx.Rollback(ctx)
 	var j inboxJob
 	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,m.conversation_id::text,c.type,c.platform_id,COALESCE(m.platform_message_id,''),m.content,c.system_prompt,c.context_limit,c.enabled,m.reply_deadline,t.attempts,m.event_type,c.trigger_mode,m.parts @> '[{"type":"image"}]'::jsonb,COALESCE((m.raw_event#>'{d,mentions}') @> '[{"is_you":true}]'::jsonb,false) FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id WHERE t.status='pending' AND t.next_attempt_at<=now()
-	AND (m.handoff_id IS NULL OR NOT EXISTS (
+	AND (m.reply_batch IS NULL OR NOT EXISTS (
+      SELECT FROM messages other LEFT JOIN inbox_tasks ot ON ot.message_id=other.id
+      WHERE other.reply_batch=m.reply_batch AND (
+        other.reply_due_at>now()
+        OR (ot.status='pending' AND (other.event_at,other.created_at,other.id)>(m.event_at,m.created_at,m.id))
+        OR EXISTS (SELECT FROM group_reviews r JOIN agent_jobs job ON job.dedupe_key='review:'||r.message_id::text
+          WHERE r.message_id=other.id AND r.status='pending' AND job.status IN ('pending','processing')))))
+    AND (m.handoff_id IS NULL OR NOT EXISTS (
 	  SELECT FROM messages prior JOIN outbox_tasks pt ON pt.message_id=prior.id
 	  WHERE prior.handoff_id=m.handoff_id AND prior.conversation_id=m.conversation_id
 	  AND pt.status IN ('pending','processing') AND (prior.created_at,prior.id)<(m.created_at,m.id)))
-	ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationID, &j.ConversationType, &j.PlatformConversationID, &j.PlatformMessageID, &j.Content, &j.SystemPrompt, &j.ContextLimit, &j.Enabled, &j.Deadline, &j.Attempts, &j.EventType, &j.TriggerMode, &j.HasImage, &j.MentionsBot)
+	ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF c,t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationID, &j.ConversationType, &j.PlatformConversationID, &j.PlatformMessageID, &j.Content, &j.SystemPrompt, &j.ContextLimit, &j.Enabled, &j.Deadline, &j.Attempts, &j.EventType, &j.TriggerMode, &j.HasImage, &j.MentionsBot)
 	if err != nil {
 		return inboxJob{}, err
 	}
 	_, err = tx.Exec(ctx, "UPDATE inbox_tasks SET status='processing',locked_at=now(),attempts=attempts+1,updated_at=now() WHERE id=$1", j.TaskID)
+	if err != nil {
+		return inboxJob{}, err
+	}
+	_, err = tx.Exec(ctx, `UPDATE inbox_tasks t SET status='merged',updated_at=now() FROM messages m,messages anchor
+    WHERE anchor.id=$1 AND m.reply_batch=anchor.reply_batch AND t.message_id=m.id AND t.status='pending'`, j.MessageID)
 	if err != nil {
 		return inboxJob{}, err
 	}
@@ -451,10 +464,11 @@ func (a *App) processOutbox(ctx context.Context) error {
 	}
 	if j.EventType == "AI_RESPONSE" {
 		var selected string
-		if err = a.db.QueryRow(ctx, `SELECT COALESCE(q.qq_ref_idx,'') FROM messages m LEFT JOIN messages q ON q.id=m.qq_quote_target AND q.conversation_id=m.conversation_id AND q.status='sent' AND NOT q.context_excluded WHERE m.id=$1`, j.MessageID).Scan(&selected); err != nil {
+		var inbound bool
+		if err = a.db.QueryRow(ctx, `SELECT COALESCE(q.qq_ref_idx,''),coalesce(q.direction='inbound',false) FROM messages m LEFT JOIN messages q ON q.id=m.qq_quote_target AND q.conversation_id=m.conversation_id AND (q.status='sent' OR (q.direction='inbound' AND q.platform_message_id=m.reply_to_message_id)) AND NOT q.context_excluded WHERE m.id=$1`, j.MessageID).Scan(&selected, &inbound); err != nil {
 			return a.retryOutbox(ctx, j, err)
 		}
-		if selected != "" {
+		if inbound || selected != "" {
 			reference = selected
 		}
 	}

@@ -36,6 +36,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	defer cancel()
 	pool := newIntegrationSchema(t, ctx, databaseURL)
 
+	setTestReplyQuietSecond(t, ctx, pool)
 	mock := newUpstreamMock(t)
 	defer mock.Close()
 
@@ -171,7 +172,13 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 		"knowledgeBaseIds": []string{kbID},
 	}, http.StatusOK)
 
-	mentionBody := qqEventBody(t, "event-mention", "GROUP_AT_MESSAGE_CREATE", "message-mention", "@机器人 退款期限是多久？")
+	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, qqEventBody(t, "first-question", "GROUP_AT_MESSAGE_CREATE", "first-piece", "我买了一个套餐"))
+	var lastEvent map[string]any
+	if err := json.Unmarshal(qqEventBody(t, "event-mention", "GROUP_MESSAGE_CREATE", "message-mention", "退款期限是多久？"), &lastEvent); err != nil {
+		t.Fatal(err)
+	}
+	lastEvent["d"].(map[string]any)["message_scene"] = map[string]any{"ext": []string{"msg_idx=ref-final"}}
+	mentionBody, _ := json.Marshal(lastEvent)
 	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, mentionBody)
 	eventually(t, 8*time.Second, "RAG answer delivered to QQ", func() (bool, error) {
 		var sent int
@@ -190,7 +197,7 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 		t.Fatalf("expected one chat request, got %d", len(chatRequests))
 	}
 	chatPayload := string(chatRequests[0])
-	for _, expected := range []string{"七天内可以申请无理由退款", "今天的普通群消息只应作为上下文", "退款期限是多久", `"enable_search":true`, `"reasoning_effort":"medium"`} {
+	for _, expected := range []string{"七天内可以申请无理由退款", "今天的普通群消息只应作为上下文", `我买了一个套餐\n退款期限是多久`, `"enable_search":true`, `"reasoning_effort":"medium"`} {
 		if !strings.Contains(chatPayload, expected) {
 			t.Fatalf("chat prompt is missing %q: %s", expected, chatPayload)
 		}
@@ -202,7 +209,8 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	}
 	body := sends[0].Body
 	md, _ := body["markdown"].(map[string]any)
-	if body["msg_id"] != "message-mention" || body["msg_type"] != float64(2) || !strings.Contains(fmt.Sprint(md["content"]), "根据知识库，退款期限是七天。") || !strings.Contains(fmt.Sprint(md["content"]), "qqbot-at-user") {
+	reference, _ := body["message_reference"].(map[string]any)
+	if reference["message_id"] != "ref-final" || body["msg_id"] != "message-mention" || body["msg_type"] != float64(2) || !strings.Contains(fmt.Sprint(md["content"]), "根据知识库，退款期限是七天。") || !strings.Contains(fmt.Sprint(md["content"]), "qqbot-at-user") {
 		t.Fatalf("unexpected final reply: %#v", body)
 	}
 	if mock.QQRetractionCount() != 0 {
@@ -479,6 +487,7 @@ func TestModel403ExcludesMessageFromFutureContext(t *testing.T) {
 	defer cancel()
 	pool := newIntegrationSchema(t, ctx, databaseURL)
 
+	setTestReplyQuietSecond(t, ctx, pool)
 	var mu sync.Mutex
 	var chatBodies [][]byte
 	var qqSendSequence int
@@ -1032,4 +1041,11 @@ func mainChatRequests(all [][]byte) [][]byte {
 		}
 	}
 	return out
+}
+
+func setTestReplyQuietSecond(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `INSERT INTO system_settings(key,value) VALUES('agent_settings','{"replyQuietSeconds":1}') ON CONFLICT(key) DO UPDATE SET value=system_settings.value || excluded.value`); err != nil {
+		t.Fatal(err)
+	}
 }

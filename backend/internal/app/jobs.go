@@ -188,6 +188,13 @@ func (a *App) jobEvaluate(ctx context.Context, runID, messageID, profileID strin
 	if err != nil {
 		return err
 	}
+	segments, err := a.replySegments(ctx, messageID)
+	if err != nil {
+		return err
+	}
+	if len(segments) > 1 {
+		question = segmentText(segments)
+	}
 	var answer string
 	_ = a.db.QueryRow(ctx, `SELECT COALESCE(string_agg(content, E'\n' ORDER BY event_at),'') FROM messages WHERE conversation_id=$1 AND direction='outbound' AND event_type='AI_RESPONSE' AND reply_to_message_id=$2`, convID, platformID).Scan(&answer)
 	if strings.TrimSpace(answer) == "" {

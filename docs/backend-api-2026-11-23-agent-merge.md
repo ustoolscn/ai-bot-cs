@@ -15,6 +15,7 @@
 
 - 人设与示例使用 `stylePrompt`、`examples: [{question,answer}]`。客服名称兼作人设名称，职责在顶层 `instructions`。
 - 技能和工具使用 `toolsEnabled,maxToolSteps,skillIds,toolNames`。技能按 ID、工具按名称选择，供给范围仍受系统技能和工具启用状态限制。`null` 沿用可用集合，`[]` 表示不选。知识库使用 `knowledgeBaseIds`，`null` 沿用群绑定，`[]` 关闭检索。
+- 连续消息合并使用整数秒。`replyQuietSeconds` 是最后一条后的静默时间，默认 6 秒。`replyMaxWaitSeconds` 从第一条起算，默认 20 秒。两项范围均为 1–120，最长等待须大于或等于静默时间。
 - 学习及人工使用 `evaluationEnabled,staffMiningEnabled,autoPublishStaff,autoPublishMinConfidence,learningKnowledgeBaseId,handoffPauseMinutes`。
 - `liveData` 支持 `enabled,baseUrl,userId,injectSnapshot,priceNote,statusPageUrl,statusImageStyle`。`hasAccessToken` 只读。设置令牌使用**请求顶层**的 `liveDataAccessToken`；省略保留同站令牌，空串清除，更换网站请重新输入令牌。
 - 原 `/personalities` 与 `/support-agents` 仍可读写旧模板，原客服与会话 ID 保留。新页面直接编辑客服。
