@@ -151,8 +151,7 @@ func TestServiceMergeAndMemory(t *testing.T) {
 	}
 }
 
-// Each model call rejects the same content. Verify the failed item and its
-// cached summary cannot poison the next turn, including post-reply extraction.
+// A first 403 at any stage isolates its source while preserving the existing summary.
 func TestAuxiliaryModerationRecovery(t *testing.T) {
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
@@ -189,7 +188,7 @@ func TestAuxiliaryModerationRecovery(t *testing.T) {
 			}
 			check(pool.QueryRow(ctx, `INSERT INTO conversations(channel,bot_id,platform_id,type,trigger_mode) VALUES('qq',$1,$2,'group',$3) RETURNING id::text`, bot, stage, mode).Scan(&cid))
 			check(pool.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,platform_message_id,direction,sender_id,content,event_at) VALUES('qq',$1,$2,'m'||$3,'inbound','user','sample',now()) RETURNING id::text`, bot, cid, stage).Scan(&mid))
-			_, err := pool.Exec(ctx, `INSERT INTO conversation_summaries(conversation_id,scope_key,summary,covered_until) VALUES($1,'','old flagged summary',now()-interval '1 day')`, cid)
+			_, err := pool.Exec(ctx, `INSERT INTO conversation_summaries(conversation_id,scope_key,summary,covered_until) VALUES($1,'','existing summary',now()-interval '1 day')`, cid)
 			check(err)
 			switch stage {
 			case "rewrite", "decision":
@@ -227,7 +226,7 @@ func TestAuxiliaryModerationRecovery(t *testing.T) {
 			check(pool.QueryRow(ctx, `SELECT context_excluded,(SELECT count(*) FROM conversation_summaries WHERE conversation_id=$2) FROM messages WHERE id=$1`, mid, cid).Scan(&excluded, &summaries))
 			kind := map[string]string{"decision": "reply_decision", "rewrite": "rewrite", "summarize": "summarize", "evaluate": "evaluate", "group_review": "group_moderation"}[stage]
 			check(pool.QueryRow(ctx, "SELECT count(*) FROM model_calls WHERE kind=$1 AND error IS NOT NULL", kind).Scan(&calls))
-			if !excluded || summaries != 0 || calls != 1 {
+			if !excluded || summaries != 1 || calls != 1 {
 				t.Fatalf("excluded=%v summaries=%d calls=%d", excluded, summaries, calls)
 			}
 		})

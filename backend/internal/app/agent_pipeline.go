@@ -189,7 +189,9 @@ func (a *App) processInbox(ctx context.Context) error {
 		}
 		skipKB = skipKB || (decision.SocialOnly && len(imageParts) == 0)
 		if !*decision.Reply {
-			return a.finishInbox(ctx, j.TaskID, "skipped", nil)
+			_, err = a.db.Exec(ctx, `WITH recovered AS (`+clearModerationStreakSQL+`)
+              UPDATE inbox_tasks SET status='skipped',last_error=NULL,updated_at=now() WHERE id=$2`, j.ConversationID, j.TaskID)
+			return err
 		}
 	}
 	if profileID == "" {
@@ -297,11 +299,6 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.retryInbox(ctx, j, out.err)
 	}
 
-	if excluded, e := a.messageExcluded(ctx, j.MessageID); e != nil {
-		return a.retryInbox(ctx, j, e)
-	} else if excluded {
-		return a.finishInbox(ctx, j.TaskID, "skipped", nil)
-	}
 	finishShape := a.startStage(ctx, j.MessageID, "回复整理与分段")
 	caption, attached := extractOutboundImage(out.content)
 	replyParts := a.shapeReply(settings, j.ConversationType, caption)
@@ -314,6 +311,24 @@ func (a *App) processInbox(ctx context.Context) error {
 	defer tx.Rollback(ctx)
 	var extended bool
 	if err = tx.QueryRow(ctx, "SELECT qq_extended_replies FROM conversations WHERE id=$1 FOR UPDATE", j.ConversationID).Scan(&extended); err != nil {
+		return a.retryInbox(ctx, j, err)
+	}
+	// A background job may have isolated this message during generation.
+	// Check under the same lock used to quarantine its existing AI replies.
+	var visible bool
+	if err = tx.QueryRow(ctx, `SELECT `+visibleContextSQL+` FROM messages m WHERE m.id=$1`, j.MessageID).Scan(&visible); err != nil {
+		return a.retryInbox(ctx, j, err)
+	}
+	if !visible {
+		_, err = tx.Exec(ctx, `WITH closed AS (UPDATE agent_runs SET status='skipped',completed_at=now() WHERE id=$2)
+            UPDATE inbox_tasks SET status='skipped',updated_at=now() WHERE id=$1`, j.TaskID, runID)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return a.retryInbox(ctx, j, err)
+		}
+		return tx.Commit(ctx)
+	}
+	if _, err = tx.Exec(ctx, clearModerationStreakSQL, j.ConversationID); err != nil {
 		return a.retryInbox(ctx, j, err)
 	}
 	var firstSeq int

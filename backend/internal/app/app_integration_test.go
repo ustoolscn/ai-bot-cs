@@ -557,6 +557,10 @@ func TestModel403ExcludesMessageFromFutureContext(t *testing.T) {
 	if _, err := pool.Exec(ctx, "INSERT INTO conversations(channel,bot_id,platform_id,type,trigger_mode) VALUES('qq',$1,'group-open-id','group','mention_only')", botID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = pool.Exec(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,sender_id,direction,event_at,content)
+        SELECT 'qq',bot_id,id,'other-member','inbound',now()-interval '2 minutes','其他群员的历史问题' FROM conversations WHERE bot_id=$1`, botID); err != nil {
+		t.Fatal(err)
+	}
 	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+botID, botSecret, qqEventBody(t, "moderation-event", "GROUP_AT_MESSAGE_CREATE", "moderation-message", "触发审查的句子"))
 	eventually(t, 5*time.Second, "403 message excluded", func() (bool, error) {
 		var taskStatus string
@@ -594,8 +598,12 @@ func TestModel403ExcludesMessageFromFutureContext(t *testing.T) {
 	if len(requests) != 2 {
 		t.Fatalf("403 request should not retry: requests=%d", len(requests))
 	}
-	if bytes.Contains(requests[1], []byte("触发审查的句子")) || !bytes.Contains(requests[1], []byte("这是后续正常问题")) {
+	if !bytes.Contains(requests[1], []byte("其他群员的历史问题")) || bytes.Contains(requests[1], []byte("触发审查的句子")) || !bytes.Contains(requests[1], []byte("这是后续正常问题")) {
 		t.Fatalf("future context still contains moderated message: %s", requests[1])
+	}
+	var recovered bool
+	if err = pool.QueryRow(ctx, `SELECT moderation_pending_at IS NULL AND moderation_cutoff IS NULL FROM conversations WHERE bot_id=$1`, botID).Scan(&recovered); err != nil || !recovered {
+		t.Fatalf("successful turn did not reset the streak: recovered=%v err=%v", recovered, err)
 	}
 }
 

@@ -196,7 +196,7 @@ func (a *App) jobEvaluate(ctx context.Context, runID, messageID, profileID strin
 		question = segmentText(segments)
 	}
 	var answer string
-	_ = a.db.QueryRow(ctx, `SELECT COALESCE(string_agg(content, E'\n' ORDER BY event_at),'') FROM messages WHERE conversation_id=$1 AND direction='outbound' AND event_type='AI_RESPONSE' AND reply_to_message_id=$2`, convID, platformID).Scan(&answer)
+	_ = a.db.QueryRow(ctx, `SELECT COALESCE(string_agg(content, E'\n' ORDER BY event_at),'') FROM messages WHERE conversation_id=$1 AND direction='outbound' AND event_type='AI_RESPONSE' AND NOT context_excluded AND reply_to_message_id=$2`, convID, platformID).Scan(&answer)
 	if strings.TrimSpace(answer) == "" {
 		return nil
 	}
@@ -307,7 +307,8 @@ func (a *App) jobSummarize(ctx context.Context, conversationID, scope, until, pr
 	var summary string
 	coveredUntil := time.Unix(0, 0).UTC()
 	var cutoff time.Time
-	if err = a.db.QueryRow(ctx, `SELECT coalesce(s.summary,''),coalesce(s.covered_until,'epoch'),coalesce(c.moderation_cutoff,'epoch') FROM conversations c LEFT JOIN conversation_summaries s ON s.conversation_id=c.id AND s.scope_key=$2 WHERE c.id=$1`, conversationID, scope).Scan(&summary, &coveredUntil, &cutoff); err != nil {
+	var revision int64
+	if err = a.db.QueryRow(ctx, `SELECT coalesce(s.summary,''),coalesce(s.covered_until,'epoch'),coalesce(c.moderation_cutoff,'epoch'),c.moderation_revision FROM conversations c LEFT JOIN conversation_summaries s ON s.conversation_id=c.id AND s.scope_key=$2 WHERE c.id=$1`, conversationID, scope).Scan(&summary, &coveredUntil, &cutoff, &revision); err != nil {
 		return err
 	}
 	if cutoff.After(coveredUntil) {
@@ -368,7 +369,7 @@ func (a *App) jobSummarize(ctx context.Context, conversationID, scope, until, pr
 	}
 	defer tx.Rollback(ctx)
 	var fresh bool
-	if err = tx.QueryRow(ctx, "SELECT coalesce(moderation_cutoff,'epoch')=$2 FROM conversations WHERE id=$1 FOR UPDATE", conversationID, cutoff).Scan(&fresh); err != nil {
+	if err = tx.QueryRow(ctx, "SELECT coalesce(moderation_cutoff,'epoch')=$2 AND moderation_revision=$3 FROM conversations WHERE id=$1 FOR UPDATE", conversationID, cutoff, revision).Scan(&fresh); err != nil {
 		return err
 	}
 	if !fresh {
