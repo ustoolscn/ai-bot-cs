@@ -10,6 +10,7 @@ export const modelProviderPresets: ModelProviderPreset[] = [
     keyUrl: 'https://platform.deepseek.com/api_keys',
     models: [
       { kind: 'chat', model: 'deepseek-flash', label: 'DeepSeek Flash', supportsWebSearch: true },
+      { kind: 'chat', model: 'deepseek-v4-pro', label: 'DeepSeek-V4 Pro', supportsWebSearch: true },
     ],
   },
   {
@@ -21,6 +22,7 @@ export const modelProviderPresets: ModelProviderPreset[] = [
     models: [
       { kind: 'chat', model: 'glm-4.7', label: 'GLM-4.7', supportsWebSearch: true },
       { kind: 'chat', model: 'glm-5.3', label: 'GLM-5.3', supportsWebSearch: true },
+      { kind: 'chat', model: 'glm-5.3-flash', label: 'GLM-5.3 Flash', supportsWebSearch: true },
     ],
   },
 ]
