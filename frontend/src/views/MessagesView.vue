@@ -6,7 +6,7 @@
     </PageHeader>
     <div class="toolbar">
       <el-input v-model="search" placeholder="搜索问题、回复、发送者或消息 ID" :prefix-icon="Search" clearable />
-      <el-segmented v-model="status" :options="[{ label: '全部', value: 'all' }, { label: '成功', value: 'success' }, { label: '转人工', value: 'handoff' }, { label: '无需回复', value: 'skipped' }, { label: '失败', value: 'failed' }]" />
+      <el-segmented v-model="status" :options="[{ label: '全部', value: 'all' }, { label: '成功', value: 'success' }, { label: '转人工', value: 'handoff' }, { label: '无需回复', value: 'skipped' }, { label: '已合并', value: 'merged' }, { label: '失败', value: 'failed' }]" />
       <span class="spacer" />
       <span class="muted" style="font-size: 13px">{{ filtered.length }} 条</span>
     </div>
@@ -35,6 +35,7 @@
             <strong>{{ selected.sender }}</strong>
             <span>{{ selected.conversationName }} · {{ selected.botName }}</span>
           </div>
+          <p v-if="selected.status === 'merged'" class="md-merged">同一个人连续发了几条，这条已合并到后面的消息里，由最后一条一起回复。</p>
           <dl class="md-facts">
             <div><dt>时间</dt><dd class="num">{{ selected.time }}</dd></div>
             <div><dt>总用时</dt><dd class="num">{{ selected.latency ? formatDuration(selected.latency) : '—' }}</dd></div>
@@ -51,7 +52,7 @@
               <p>{{ selected.question }}</p>
               <div v-if="selected.attachments?.length" class="message-image-grid"><div v-for="(v,i) in selected.attachments.filter(p=>p.type==='voice')" :key="i"><audio v-if="v.waveUrl" controls preload="none" :src="v.waveUrl"/><p>{{v.transcript}}</p></div><el-image v-for="(image,index) in selected.attachments.filter(p=>p.type==='image')" :key="image.previewUrl || index" :src="image.previewUrl" :preview-src-list="previewUrls(selected.attachments)" fit="cover" loading="lazy" /></div>
             </div>
-            <div v-if="!selected.handoffStatus || botAnswer || selected.answerAttachments?.length" class="md-bubble is-bot" :class="{ 'is-empty': !selected.answer && !selected.answerAttachments?.length }">
+            <div v-if="selected.status !== 'merged' && (!selected.handoffStatus || botAnswer || selected.answerAttachments?.length)" class="md-bubble is-bot" :class="{ 'is-empty': !selected.answer && !selected.answerAttachments?.length }">
               <small>{{ selected.botName }}</small>
               <p>{{ botAnswer || (selected.answerAttachments?.length ? '图片回复' : selected.status === 'skipped' ? '判断这条消息无需回复。' : '处理尚未完成或失败，未生成回复。') }}</p>
               <div v-if="selected.answerAttachments?.length" class="message-image-grid"><el-image v-for="(image,index) in selected.answerAttachments" :key="image.previewUrl || index" :src="image.previewUrl" :preview-src-list="previewUrls(selected.answerAttachments)" fit="cover" loading="lazy" /></div>
@@ -64,12 +65,12 @@
           </div>
         </section>
 
-        <section class="md-section">
+        <section v-if="selected.status !== 'merged'" class="md-section">
           <h3>处理过程 <small v-if="selected.timeline?.totalMs != null">共 {{ formatDuration(selected.timeline.totalMs) }} · 悬停查看每步说明</small></h3>
           <StageBars :stages="selected.timeline?.stages || flowStages" waterfall />
         </section>
 
-        <section class="md-section">
+        <section v-if="selected.status !== 'merged'" class="md-section">
           <h3>Token 与成本</h3>
           <div class="md-tokens">
             <div><span>输入</span><strong class="num">{{ selected.inputTokens.toLocaleString() }}</strong></div>
@@ -148,13 +149,15 @@ const traceSteps = computed(() => {
   const message = selected.value
   const pending = message.status === 'pending' || message.status === 'processing'
   const failed = message.status === 'failed'
-  const stageStatus = (completed: boolean): Status => failed ? 'failed' : completed ? 'success' : pending ? 'pending' : 'warning'
+  // 被合并的消息不单独回复，由同一批里最后一条一起处理
+  const merged = message.status === 'merged'
+  const stageStatus = (completed: boolean): Status => merged ? 'skipped' : failed ? 'failed' : completed ? 'success' : pending ? 'pending' : 'warning'
   return [
     { title: 'QQ 事件接收', description: message.eventType, duration: '—', status: 'success' as Status },
     { title: '上下文构建', description: `实际发送给模型 ${message.contextMessages?.length || 0} 条消息`, duration: duration(message.contextLatency), status: stageStatus(Boolean(message.contextMessages?.length) || message.contextLatency > 0) },
     { title: '知识检索', description: `召回 ${message.knowledgeHits} 条知识片段`, duration: duration(message.retrievalLatency), status: stageStatus(message.retrievalLatency > 0 || message.knowledgeHits > 0) },
     { title: '模型生成', description: message.model || '尚未调用', duration: duration(message.modelLatency), status: stageStatus(Boolean(message.answer) || Boolean(message.answerAttachments?.length) || message.modelLatency > 0) },
-    { title: 'QQ 消息投递', description: message.deliveryStatus === 'success' ? '发送成功' : message.deliveryStatus === 'failed' ? '发送失败' : '等待投递', duration: duration(message.deliveryLatency), status: message.deliveryStatus },
+    { title: 'QQ 消息投递', description: merged ? '和后面的消息一起回复' : message.deliveryStatus === 'success' ? '发送成功' : message.deliveryStatus === 'failed' ? '发送失败' : '等待投递', duration: duration(message.deliveryLatency), status: message.deliveryStatus },
   ]
 })
 
@@ -222,6 +225,7 @@ useAdminEvents(['messages','message_retractions','agent_runs','model_calls','too
 </script>
 
 <style scoped>
+.md-merged { margin: 0; color: var(--muted); font-size: 13px; }
 .md { display: flex; flex-direction: column; gap: 24px; }
 .md-head { display: flex; flex-direction: column; gap: 12px; }
 .md-who { display: flex; align-items: baseline; gap: 10px; min-width: 0; }

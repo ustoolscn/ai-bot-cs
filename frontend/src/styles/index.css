@@ -244,8 +244,8 @@ code, kbd, pre, .mono { font-family: var(--font-mono); }
 .status-badge.is-warning .status-dot, .status-badge.is-pending .status-dot, .status-badge.is-processing .status-dot, .status-badge.is-indexing .status-dot { background: #d18a12; }
 .status-badge.is-failed .status-dot, .status-badge.is-offline .status-dot, .status-badge.is-error .status-dot { background: var(--danger); }
 .status-badge.is-failed, .status-badge.is-error { color: var(--danger); }
-.status-badge.is-skipped { color: var(--muted); }
-.status-badge.is-skipped .status-dot { background: var(--faint); }
+.status-badge.is-skipped, .status-badge.is-merged { color: var(--muted); }
+.status-badge.is-skipped .status-dot, .status-badge.is-merged .status-dot { background: var(--faint); }
 
 .count-pill { display: inline-block; min-width: 20px; margin-left: 6px; padding: 0 6px; border-radius: 9px; background: var(--surface-3); color: var(--text-2); font-size: 12px; font-weight: 600; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
 .count-pill.hot { background: var(--danger); color: #fff; }

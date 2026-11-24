@@ -4,7 +4,7 @@ export function formatDuration(ms?: number) {
 }
 
 export function statusText(status: string) {
-  return ({ online: '在线', offline: '离线', warning: '异常', success: '成功', failed: '失败', processing: '处理中', pending: '待处理', unindexed: '未索引', skipped: '无需回复' } as Record<string, string>)[status] || status
+  return ({ online: '在线', offline: '离线', warning: '异常', success: '成功', failed: '失败', processing: '处理中', pending: '待处理', unindexed: '未索引', skipped: '无需回复', merged: '已合并' } as Record<string, string>)[status] || status
 }
 
 /** 消息结论：转人工的消息按工单进度显示，其余按原状态。 */

@@ -1,7 +1,7 @@
 export interface ApiEnvelope<T> { data: T }
 export interface ApiErrorEnvelope { error: { code: string; message: string } }
 
-export type Status = 'online' | 'offline' | 'warning' | 'success' | 'failed' | 'processing' | 'pending' | 'unindexed' | 'skipped'
+export type Status = 'online' | 'offline' | 'warning' | 'success' | 'failed' | 'processing' | 'pending' | 'unindexed' | 'skipped' | 'merged'
 
 export interface Bot {
   id: string
