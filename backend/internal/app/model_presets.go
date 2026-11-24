@@ -21,10 +21,12 @@ type providerPreset struct {
 var modelProviderPresets = []providerPreset{
 	{"deepseek", "DeepSeek 官方", "https://api.deepseek.com", "deepseek", "https://platform.deepseek.com/api_keys", []presetModel{
 		{"chat", "deepseek-flash", "DeepSeek Flash", true},
+		{"chat", "deepseek-v4-pro", "DeepSeek V4 Pro", true},
 	}},
 	{"zhipu", "智谱 GLM 官方", "https://open.bigmodel.cn/api/paas/v4", "zhipu", "https://bigmodel.cn/usercenter/proj-mgmt/apikeys", []presetModel{
 		{"chat", "glm-4.7", "GLM-4.7", true},
 		{"chat", "glm-5.3", "GLM-5.3", true},
+		{"chat", "glm-5.3-flash", "GLM-5.3-Flash", true},
 	}},
 }
 

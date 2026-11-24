@@ -94,6 +94,37 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	}
 	requestJSON(t, client, http.MethodGet, server.URL+"/api/auth/me", nil, http.StatusOK)
 
+	t.Run("discover draft and saved models", func(t *testing.T) {
+		profiles := server.URL + "/api/model-profiles"
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != "/v1/models" {
+				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			}
+			if r.Header.Get("Authorization") != "Bearer discovery-key" {
+				http.Error(w, r.Header.Get("Authorization"), http.StatusUnauthorized)
+				return
+			}
+			io.WriteString(w, `{"data":[{"id":"new/custom-model"},{"id":"new/custom-model"},{"id":"embedding-v3"}]}`)
+		}))
+		defer upstream.Close()
+		input := map[string]any{"provider": "compatible", "baseUrl": upstream.URL + "/v1/", "apiKey": "discovery-key"}
+		checkModels := func(in map[string]any) {
+			t.Helper()
+			ids := dataSlice(t, requestJSON(t, client, "POST", profiles+"/discover", in, 200))
+			if len(ids) != 2 || ids[0] != "new/custom-model" || ids[1] != "embedding-v3" {
+				t.Fatal(ids)
+			}
+		}
+		checkModels(input)
+		input["kind"], input["name"], input["model"], input["enabled"] = "chat", "Discovery", "manual-id", false
+		id := createdID(t, requestJSON(t, client, "POST", profiles, input, 200))
+		defer requestJSON(t, client, "DELETE", profiles+"/"+id, nil, 200)
+		checkModels(map[string]any{"profileId": id})
+		requestJSON(t, client, "POST", profiles+"/discover", map[string]any{"profileId": id, "baseUrl": upstream.URL + "/other"}, 400)
+		result := requestJSON(t, client, "POST", profiles+"/discover", map[string]any{"profileId": id, "apiKey": "wrong-secret"}, 502)
+		assertSecretNotReturned(t, result, "wrong-secret")
+	})
+
 	t.Run("official profile defaults, saved key and search diagnostics", func(t *testing.T) {
 		profiles := server.URL + "/api/model-profiles"
 		presets := dataSlice(t, requestJSON(t, client, "GET", server.URL+"/api/model-provider-presets", nil, 200))
@@ -249,8 +280,8 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	}
 	body := sends[0].Body
 	md, _ := body["markdown"].(map[string]any)
-	reference, _ := body["message_reference"].(map[string]any)
-	if reference["message_id"] != "ref-final" || body["msg_id"] != "message-mention" || body["msg_type"] != float64(2) || !strings.Contains(fmt.Sprint(md["content"]), "根据知识库，退款期限是七天。") || !strings.Contains(fmt.Sprint(md["content"]), "qqbot-at-user") {
+	_, hasReference := body["message_reference"]
+	if hasReference || body["msg_id"] != "message-mention" || body["msg_type"] != float64(2) || !strings.Contains(fmt.Sprint(md["content"]), "根据知识库，退款期限是七天。") || !strings.Contains(fmt.Sprint(md["content"]), "qqbot-at-user") {
 		t.Fatalf("unexpected final reply: %#v", body)
 	}
 	if mock.QQRetractionCount() != 0 {

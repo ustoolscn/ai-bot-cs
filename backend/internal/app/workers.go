@@ -431,13 +431,12 @@ func (a *App) processOutbox(ctx context.Context) error {
 	if active {
 		replyTo = ""
 	}
-	var mention, mentionName, quote string
+	var mention, mentionName string
 	var raw []byte
 	if j.EventType == "AI_RESPONSE" && j.ConversationType == "group" && j.Sequence == 1 {
-		if err := a.db.QueryRow(ctx, `SELECT sender_id,sender_name,content,raw_event FROM messages WHERE conversation_id=$1 AND platform_message_id=$2 AND direction='inbound'`, j.ConversationRecordID, j.ReplyTo).Scan(&mention, &mentionName, &quote, &raw); err != nil {
+		if err := a.db.QueryRow(ctx, `SELECT sender_id,sender_name FROM messages WHERE conversation_id=$1 AND platform_message_id=$2 AND direction='inbound'`, j.ConversationRecordID, j.ReplyTo).Scan(&mention, &mentionName); err != nil {
 			return a.retryOutbox(ctx, j, err)
 		}
-		quote = agent.TruncateReply(agent.PlainLinks(quote), 120)
 	}
 	if (j.EventType == "HUMAN_REPLY" || j.EventType == "HANDOFF_UPDATE") && j.ReplyTo != "" && j.ConversationType == "group" {
 		if err = a.db.QueryRow(ctx, "SELECT raw_event,COALESCE(NULLIF(sender_name,''),sender_id) FROM messages WHERE conversation_id=$1 AND platform_message_id=$2", j.ConversationRecordID, j.ReplyTo).Scan(&raw, &mentionName); err != nil {
@@ -451,7 +450,7 @@ func (a *App) processOutbox(ctx context.Context) error {
 	if j.EventType == "HUMAN_REPLY" {
 		j.Text = "【人工客服】" + j.Text
 	}
-	if j.EventType == "AI_RESPONSE" && j.Sequence == 1 {
+	if j.EventType == "AI_RESPONSE" && j.ConversationType == "private" && j.Sequence == 1 {
 		var own string
 		err = a.db.QueryRow(ctx, `SELECT COALESCE((SELECT o.qq_ref_idx FROM messages o WHERE o.conversation_id=i.conversation_id AND o.direction='outbound' AND o.status='sent' AND NOT o.context_excluded AND o.qq_ref_idx<>'' AND (i.raw_event#>'{d,message_scene,ext}') ? ('ref_msg_idx='||o.qq_ref_idx) LIMIT 1),'') FROM messages i WHERE i.conversation_id=$1 AND i.platform_message_id=$2`, j.ConversationRecordID, j.ReplyTo).Scan(&own)
 		if err != nil {
@@ -459,13 +458,13 @@ func (a *App) processOutbox(ctx context.Context) error {
 		}
 		if own != "" {
 			reference = own
-		} else if j.ConversationType == "private" {
+		} else {
 			if err = a.db.QueryRow(ctx, "SELECT qq_ref_idx FROM messages WHERE conversation_id=$1 AND platform_message_id=$2", j.ConversationRecordID, j.ReplyTo).Scan(&reference); err != nil {
 				return a.retryOutbox(ctx, j, err)
 			}
 		}
 	}
-	if j.EventType == "AI_RESPONSE" {
+	if j.EventType == "AI_RESPONSE" && j.ConversationType == "private" {
 		var selected string
 		var inbound bool
 		if err = a.db.QueryRow(ctx, `SELECT COALESCE(q.qq_ref_idx,''),coalesce(q.direction='inbound',false) FROM messages m LEFT JOIN messages q ON q.id=m.qq_quote_target AND q.conversation_id=m.conversation_id AND (q.status='sent' OR (q.direction='inbound' AND q.platform_message_id=m.reply_to_message_id)) AND NOT q.context_excluded WHERE m.id=$1`, j.MessageID).Scan(&selected, &inbound); err != nil {
@@ -487,7 +486,7 @@ func (a *App) processOutbox(ctx context.Context) error {
 		}
 		receipt, err = client.SendConfigured(sendCtx, qq.Prefix(j.ConversationType, j.ConversationID), p)
 	} else {
-		receipt, err = client.SendWithReceipt(sendCtx, domain.OutboundMessage{ID: j.MessageID, Channel: "qq", BotID: j.BotID, ConversationType: j.ConversationType, ConversationID: j.ConversationID, ReplyToMessageID: replyTo, MentionUserID: mention, MentionUserName: mentionName, ReferenceMessageID: reference, QuotedText: quote, Text: j.Text, Format: format, Parts: j.Parts, ReplyDeadline: j.Deadline, Sequence: j.Sequence})
+		receipt, err = client.SendWithReceipt(sendCtx, domain.OutboundMessage{ID: j.MessageID, Channel: "qq", BotID: j.BotID, ConversationType: j.ConversationType, ConversationID: j.ConversationID, ReplyToMessageID: replyTo, MentionUserID: mention, MentionUserName: mentionName, ReferenceMessageID: reference, Text: j.Text, Format: format, Parts: j.Parts, ReplyDeadline: j.Deadline, Sequence: j.Sequence})
 	}
 	if err != nil {
 		if hasContentPart(j.Parts, "ark_ack") {

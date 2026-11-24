@@ -456,6 +456,9 @@ func firstNonEmpty(vals ...string) string {
 }
 
 func toolSelected(rt *turnRuntime, name string) bool {
+	if name == "quote_previous_reply" && rt.conversationType == "group" {
+		return false
+	}
 	if name == "generate_image" && rt.settings.ImageProfileID == "" {
 		return false
 	}

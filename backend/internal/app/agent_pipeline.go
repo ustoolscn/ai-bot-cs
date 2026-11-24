@@ -361,7 +361,7 @@ func (a *App) processInbox(ctx context.Context) error {
 	if len(replyParts) > available {
 		replyParts = append(replyParts[:available-1], strings.Join(replyParts[available-1:], "\n"))
 	}
-	if len(segments) > 1 {
+	if j.ConversationType == "private" && len(segments) > 1 {
 		rt.quoteTarget = j.MessageID
 	}
 	for i, part := range replyParts {

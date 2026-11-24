@@ -99,9 +99,6 @@ func (c *Client) SendWithReceipt(ctx context.Context, m domain.OutboundMessage) 
 	if m.Format == "markdown" {
 		payload["msg_type"] = 2
 		content := m.Text
-		if m.ConversationType == "group" && m.ReferenceMessageID == "" && m.QuotedText != "" {
-			content = "回复「" + html.EscapeString(m.QuotedText) + "」\n" + content
-		}
 		if m.ConversationType == "group" && m.MentionUserID != "" {
 			content = `<qqbot-at-user id="` + html.EscapeString(m.MentionUserID) + `" /> ` + content
 		}
@@ -123,7 +120,8 @@ func (c *Client) SendWithReceipt(ctx context.Context, m domain.OutboundMessage) 
 		if m.Format == "image-only" {
 			delete(payload, "content")
 		} else if strings.TrimSpace(m.Text) == "" {
-			payload["content"] = "图片"
+			m.Text = "图片"
+			payload["content"] = textPayload(m)["content"]
 		}
 		delete(payload, "markdown")
 	}
@@ -157,9 +155,6 @@ func textPayload(m domain.OutboundMessage) map[string]any {
 			name = m.MentionUserID
 		}
 		text = "@" + name + " " + text
-	}
-	if m.ConversationType == "group" && m.ReferenceMessageID == "" && m.QuotedText != "" {
-		text = "回复「" + m.QuotedText + "」\n" + text
 	}
 	payload := map[string]any{"content": text, "msg_type": 0}
 	if m.ReferenceMessageID != "" {

@@ -358,8 +358,8 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 		}
 		firstSegment := payload["msg_seq"] == float64(1)
 		markdown := payload["markdown"].(map[string]any)["content"].(string)
-		ref, hasRef := payload["message_reference"].(map[string]any)
-		if strings.Contains(markdown, "qqbot-at-user") != firstSegment || hasRef != firstSegment || (hasRef && ref["message_id"] != "ref-m3") || strings.Contains(markdown, "回复「") {
+		_, hasRef := payload["message_reference"]
+		if strings.Contains(markdown, "qqbot-at-user") != firstSegment || hasRef || strings.Contains(markdown, "回复「") {
 			t.Fatalf("unexpected mention or quote on segment %v: %#v", payload["msg_seq"], payload)
 		}
 		checkedSegments++

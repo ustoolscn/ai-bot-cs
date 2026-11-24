@@ -127,6 +127,7 @@ func (a *App) Router() http.Handler {
 	auth.GET("/model-provider-presets", func(c *gin.Context) { ok(c, modelProviderPresets) })
 	auth.GET("/model-profiles", a.listModels)
 	auth.POST("/model-profiles", a.saveModel)
+	auth.POST("/model-profiles/discover", a.discoverModels)
 	auth.PUT("/model-profiles/:id", a.saveModel)
 	auth.DELETE("/model-profiles/:id", a.deleteModel)
 	auth.POST("/model-profiles/:id/test", a.testModel)
