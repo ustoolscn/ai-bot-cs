@@ -728,7 +728,7 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 				res.ToolCalls[i].ID = fmt.Sprintf("call_%d_%d", step, i)
 			}
 		}
-		messages = append(messages, domain.ChatMessage{Role: "assistant", Content: res.Content, ToolCalls: res.ToolCalls})
+		messages = append(messages, domain.ChatMessage{Role: "assistant", Content: res.Content, ToolCalls: res.ToolCalls, CompletionState: res.CompletionState})
 		for _, call := range res.ToolCalls {
 			started := time.Now()
 			finish := a.startStage(ctx, rt.messageID, "工具 · "+call.Name)

@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -50,15 +51,31 @@ type ChatContentPart struct {
 	DataURL     string `json:"-"`
 }
 
-type ChatMessage struct {
-	Name       string            `json:"name,omitempty"`
-	Role       string            `json:"role"`
-	Content    string            `json:"content"`
-	Parts      []ChatContentPart `json:"parts,omitempty"`
-	ToolCalls  []ToolCall        `json:"toolCalls,omitempty"`
-	ToolCallID string            `json:"toolCallId,omitempty"`
+// CompletionState is replayed only within the current provider tool loop.
+type CompletionState struct {
+	Reasoning       json.RawMessage
+	ServerToolCalls json.RawMessage
 }
+type ChatMessage struct {
+	CompletionState `json:"-"`
+	Name            string            `json:"name,omitempty"`
+	Role            string            `json:"role"`
+	Content         string            `json:"content"`
+	Parts           []ChatContentPart `json:"parts,omitempty"`
+	ToolCalls       []ToolCall        `json:"toolCalls,omitempty"`
+	ToolCallID      string            `json:"toolCallId,omitempty"`
+}
+type SearchSource struct {
+	Title    string `json:"title"`
+	URL      string `json:"url"`
+	SiteName string `json:"siteName"`
+}
+
 type ChatResult struct {
+	CompletionState                     `json:"-"`
+	Searched                            bool
+	SearchQueries                       []string
+	Sources                             []SearchSource
 	Content                             string
 	InputTokens, OutputTokens           int
 	CachedInputTokens, CacheWriteTokens int

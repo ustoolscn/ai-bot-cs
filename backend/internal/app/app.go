@@ -124,6 +124,7 @@ func (a *App) Router() http.Handler {
 	auth.DELETE("/bots/:id", a.deleteBot)
 	a.proxyRoutes(auth)
 	a.operatorRoutes(auth)
+	auth.GET("/model-provider-presets", func(c *gin.Context) { ok(c, modelProviderPresets) })
 	auth.GET("/model-profiles", a.listModels)
 	auth.POST("/model-profiles", a.saveModel)
 	auth.PUT("/model-profiles/:id", a.saveModel)
@@ -427,6 +428,7 @@ func (a *App) deleteRecord(c *gin.Context, statement string) {
 }
 
 type modelInput struct {
+	Provider                  string          `json:"provider"`
 	ProxyID                   json.RawMessage `json:"proxyId"`
 	PricePerImage             json.RawMessage `json:"pricePerImage"`
 	InputPricePerMillion      json.RawMessage `json:"inputPricePerMillion"`
@@ -447,11 +449,19 @@ type modelInput struct {
 }
 
 func (a *App) listModels(c *gin.Context) {
-	queryList(c, a, `SELECT id::text,proxy_id::text AS "proxyId",name,kind,base_url AS "baseUrl",model,dimension,enabled,is_default AS "isDefault",api_key_enc<>'' AS "hasApiKey",web_search_mode AS "webSearchMode",reasoning_effort AS "reasoningEffort",extra_body AS "extraBody",price_per_image AS "pricePerImage",input_price AS "inputPricePerMillion",output_price AS "outputPricePerMillion",cache_read_price AS "cacheReadPricePerMillion",cache_write_price AS "cacheWritePricePerMillion",created_at AS "createdAt" FROM model_profiles ORDER BY kind,name`)
+	queryList(c, a, `SELECT id::text,proxy_id::text AS "proxyId",provider,name,kind,base_url AS "baseUrl",model,dimension,enabled,is_default AS "isDefault",api_key_enc<>'' AS "hasApiKey",web_search_mode AS "webSearchMode",reasoning_effort AS "reasoningEffort",extra_body AS "extraBody",price_per_image AS "pricePerImage",input_price AS "inputPricePerMillion",output_price AS "outputPricePerMillion",cache_read_price AS "cacheReadPricePerMillion",cache_write_price AS "cacheWritePricePerMillion",created_at AS "createdAt" FROM model_profiles ORDER BY kind,name`)
 }
 func (a *App) saveModel(c *gin.Context) {
 	var in modelInput
-	if c.ShouldBindJSON(&in) != nil || in.Name == "" || in.BaseURL == "" || in.Model == "" || (in.Kind != "chat" && in.Kind != "embedding" && in.Kind != "image") {
+	if c.ShouldBindJSON(&in) != nil {
+		fail(c, 400, "invalid_request", "模型配置格式无效")
+		return
+	}
+	if err := in.applyProvider(); err != nil {
+		fail(c, 400, "invalid_request", err.Error())
+		return
+	}
+	if in.Name == "" || in.BaseURL == "" || in.Model == "" || (in.Kind != "chat" && in.Kind != "embedding" && in.Kind != "image") {
 		fail(c, 400, "invalid_request", "模型配置不完整")
 		return
 	}
@@ -470,10 +480,6 @@ func (a *App) saveModel(c *gin.Context) {
 		in.Dimension = nil
 		if in.WebSearchMode == "" {
 			in.WebSearchMode = "disabled"
-		}
-		if in.WebSearchMode != "disabled" && in.WebSearchMode != "qwen" && in.WebSearchMode != "openai" && in.WebSearchMode != "responses" && in.WebSearchMode != "custom" {
-			fail(c, 400, "invalid_request", "联网搜索模式无效")
-			return
 		}
 		if in.ReasoningEffort == "" {
 			in.ReasoningEffort = "default"
@@ -512,12 +518,12 @@ func (a *App) saveModel(c *gin.Context) {
 			return
 		}
 		enc, _ := a.cipher.Encrypt(in.APIKey)
-		err = tx.QueryRow(c, "INSERT INTO model_profiles(name,kind,base_url,api_key_enc,model,dimension,enabled,is_default,web_search_mode,reasoning_effort,extra_body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id::text", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), enc, in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ReasoningEffort, in.ExtraBody).Scan(&id)
+		err = tx.QueryRow(c, "INSERT INTO model_profiles(name,kind,base_url,api_key_enc,model,dimension,enabled,is_default,web_search_mode,reasoning_effort,extra_body,provider) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id::text", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), enc, in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ReasoningEffort, in.ExtraBody, in.Provider).Scan(&id)
 	} else if in.APIKey != "" {
 		enc, _ := a.cipher.Encrypt(in.APIKey)
-		_, err = tx.Exec(c, "UPDATE model_profiles SET name=$1,kind=$2,base_url=$3,api_key_enc=$4,model=$5,dimension=$6,enabled=$7,is_default=$8,web_search_mode=$9,reasoning_effort=$10,extra_body=$11,updated_at=now() WHERE id=$12", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), enc, in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ReasoningEffort, in.ExtraBody, id)
+		_, err = tx.Exec(c, "UPDATE model_profiles SET name=$1,kind=$2,base_url=$3,api_key_enc=$4,model=$5,dimension=$6,enabled=$7,is_default=$8,web_search_mode=$9,reasoning_effort=$10,extra_body=$11,provider=$13,updated_at=now() WHERE id=$12", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), enc, in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ReasoningEffort, in.ExtraBody, id, in.Provider)
 	} else {
-		_, err = tx.Exec(c, "UPDATE model_profiles SET name=$1,kind=$2,base_url=$3,model=$4,dimension=$5,enabled=$6,is_default=$7,web_search_mode=$8,reasoning_effort=$9,extra_body=$10,updated_at=now() WHERE id=$11", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ReasoningEffort, in.ExtraBody, id)
+		_, err = tx.Exec(c, "UPDATE model_profiles SET name=$1,kind=$2,base_url=$3,model=$4,dimension=$5,enabled=$6,is_default=$7,web_search_mode=$8,reasoning_effort=$9,extra_body=$10,provider=$12,updated_at=now() WHERE id=$11", in.Name, in.Kind, strings.TrimRight(in.BaseURL, "/"), in.Model, in.Dimension, enabled, in.IsDefault, in.WebSearchMode, in.ReasoningEffort, in.ExtraBody, id, in.Provider)
 	}
 	if err == nil && in.ProxyID != nil {
 		var proxy string
@@ -563,11 +569,15 @@ func (a *App) loadModel(ctx context.Context, id string) (*openai.Client, string,
 	return cl, kind, err
 }
 func (a *App) loadModelDetails(ctx context.Context, id string) (*openai.Client, string, string, *int, error) {
+	return a.readModelProfile(ctx, id, false)
+}
+
+func (a *App) readModelProfile(ctx context.Context, id string, includeDisabled bool) (*openai.Client, string, string, *int, error) {
 	var base, keyEnc, model, kind, webSearchMode, reasoningEffort string
 	var dimension *int
 	var proxy string
 	var extraBodyRaw []byte
-	err := a.db.QueryRow(ctx, "SELECT base_url,api_key_enc,model,kind,dimension,web_search_mode,reasoning_effort,extra_body,COALESCE((SELECT address FROM model_proxies WHERE id=proxy_id),'') FROM model_profiles WHERE id=$1 AND enabled", id).Scan(&base, &keyEnc, &model, &kind, &dimension, &webSearchMode, &reasoningEffort, &extraBodyRaw, &proxy)
+	err := a.db.QueryRow(ctx, "SELECT base_url,api_key_enc,model,kind,dimension,web_search_mode,reasoning_effort,extra_body,COALESCE((SELECT address FROM model_proxies WHERE id=proxy_id),'') FROM model_profiles WHERE id=$1 AND (enabled OR $2)", id, includeDisabled).Scan(&base, &keyEnc, &model, &kind, &dimension, &webSearchMode, &reasoningEffort, &extraBodyRaw, &proxy)
 	if err != nil {
 		return nil, "", "", nil, err
 	}
@@ -584,6 +594,7 @@ func (a *App) loadModelDetails(ctx context.Context, id string) (*openai.Client, 
 	if err != nil {
 		return nil, "", "", nil, err
 	}
+	client.WebSearchMode = webSearchMode
 	client.ReasoningEffort = reasoningEffort
 	if len(extraBodyRaw) > 0 {
 		_ = json.Unmarshal(extraBodyRaw, &client.ExtraBody)
@@ -608,6 +619,7 @@ func (a *App) loadModelDetails(ctx context.Context, id string) (*openai.Client, 
 }
 func (a *App) testModel(c *gin.Context) {
 	var in struct {
+		WebSearch    *bool  `json:"webSearch"`
 		Input        string `json:"input"`
 		SystemPrompt string `json:"systemPrompt"`
 	}
@@ -615,10 +627,24 @@ func (a *App) testModel(c *gin.Context) {
 		fail(c, 400, "invalid_request", "测试参数格式无效")
 		return
 	}
-	cl, kind, model, dimension, err := a.loadModelDetails(c, c.Param("id"))
+	searchTest := in.WebSearch != nil && *in.WebSearch
+	cl, kind, model, dimension, err := a.readModelProfile(c, c.Param("id"), searchTest)
 	if err != nil {
 		fail(c, 404, "not_found", "模型不存在")
 		return
+	}
+	if searchTest && (kind != "chat" || cl.WebSearchMode == "disabled") {
+		fail(c, 400, "invalid_request", "请为对话模型开启联网搜索")
+		return
+	}
+	// The Qwen compatible endpoint only includes source evidence when requested.
+	if searchTest && cl.WebSearchMode == "qwen" {
+		options, _ := cl.ExtraBody["search_options"].(map[string]any)
+		if options == nil {
+			options = map[string]any{}
+		}
+		options["enable_source"] = true
+		cl.ExtraBody["search_options"] = options
 	}
 	started := time.Now()
 	if kind == "image" {
@@ -654,7 +680,11 @@ func (a *App) testModel(c *gin.Context) {
 		return
 	} else {
 		if strings.TrimSpace(in.Input) == "" {
-			in.Input = "请只回复：连接测试成功"
+			if searchTest {
+				in.Input = "请联网搜索最近一次 DeepSeek 官方模型更新，并引用官方来源。"
+			} else {
+				in.Input = "请只回复：连接测试成功"
+			}
 		}
 		messages := make([]domain.ChatMessage, 0, 2)
 		if strings.TrimSpace(in.SystemPrompt) != "" {
@@ -662,13 +692,13 @@ func (a *App) testModel(c *gin.Context) {
 		}
 		messages = append(messages, domain.ChatMessage{Role: "user", Content: in.Input})
 		var result domain.ChatResult
-		result, err = cl.Chat(c, messages)
+		result, err = cl.ChatWith(c, messages, domain.ChatOptions{DisableWebSearch: in.WebSearch != nil && !*in.WebSearch})
 		a.recordModelCall(c, "", "", c.Param("id"), "chat_test", result, time.Since(started).Milliseconds(), err)
 		if err != nil {
 			fail(c, 502, "model_error", err.Error())
 			return
 		}
-		ok(c, gin.H{"kind": kind, "model": model, "content": result.Content, "inputTokens": result.InputTokens, "outputTokens": result.OutputTokens, "latencyMs": time.Since(started).Milliseconds()})
+		ok(c, gin.H{"kind": kind, "model": model, "content": result.Content, "searched": result.Searched, "searchQueries": result.SearchQueries, "sources": result.Sources, "inputTokens": result.InputTokens, "outputTokens": result.OutputTokens, "latencyMs": time.Since(started).Milliseconds()})
 		return
 	}
 }

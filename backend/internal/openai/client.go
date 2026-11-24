@@ -18,6 +18,7 @@ type Client struct {
 	BaseURL, APIKey, Model string
 	Dimensions             int
 	ExtraBody              map[string]any
+	WebSearchMode          string
 	UseResponses           bool
 	ReasoningEffort        string
 	HTTP                   *http.Client
@@ -103,18 +104,20 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 		Function fnCall `json:"function"`
 	}
 	type requestMsg struct {
-		Role       string     `json:"role"`
-		Content    any        `json:"content"`
-		ToolCalls  []toolCall `json:"tool_calls,omitempty"`
-		ToolCallID string     `json:"tool_call_id,omitempty"`
+		Reasoning       json.RawMessage `json:"reasoning_content,omitempty"`
+		ServerToolCalls json.RawMessage `json:"server_tool_calls,omitempty"`
+		Role            string          `json:"role"`
+		Content         any             `json:"content"`
+		ToolCalls       []toolCall      `json:"tool_calls,omitempty"`
+		ToolCallID      string          `json:"tool_call_id,omitempty"`
 	}
 	type responseMsg struct {
-		Annotations []struct {
-			Type string `json:"type"`
-		} `json:"annotations"`
-		Role      string     `json:"role"`
-		Content   string     `json:"content"`
-		ToolCalls []toolCall `json:"tool_calls"`
+		Annotations     []citation      `json:"annotations"`
+		Reasoning       json.RawMessage `json:"reasoning_content"`
+		ServerToolCalls json.RawMessage `json:"server_tool_calls"`
+		Role            string          `json:"role"`
+		Content         string          `json:"content"`
+		ToolCalls       []toolCall      `json:"tool_calls"`
 	}
 	chatMessages := make([]requestMsg, 0, len(messages))
 	for _, m := range messages {
@@ -122,7 +125,7 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 		if len(m.Parts) > 0 {
 			content = completionContent(m)
 		}
-		rm := requestMsg{Role: m.Role, Content: content, ToolCallID: m.ToolCallID}
+		rm := requestMsg{Reasoning: m.Reasoning, ServerToolCalls: m.ServerToolCalls, Role: m.Role, Content: content, ToolCallID: m.ToolCallID}
 		for _, tc := range m.ToolCalls {
 			rm.ToolCalls = append(rm.ToolCalls, toolCall{ID: tc.ID, Type: "function", Function: fnCall{Name: tc.Name, Arguments: tc.Arguments}})
 		}
@@ -138,11 +141,17 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 	if c.ReasoningEffort != "" && c.ReasoningEffort != "default" {
 		req["reasoning_effort"] = c.ReasoningEffort
 	}
-	if len(opts.Tools) > 0 {
-		tools := make([]map[string]any, 0, len(opts.Tools))
-		for _, t := range opts.Tools {
-			tools = append(tools, map[string]any{"type": "function", "function": map[string]any{"name": t.Name, "description": t.Description, "parameters": t.Parameters}})
-		}
+	tools := make([]map[string]any, 0, len(opts.Tools)+1)
+	nativeTool := c.searchTool()
+	if nativeTool != nil && !opts.DisableWebSearch {
+		tools = append(tools, nativeTool)
+		delete(req, "tool_choice")
+		delete(req, "web_search_options")
+	}
+	for _, t := range opts.Tools {
+		tools = append(tools, map[string]any{"type": "function", "function": map[string]any{"name": t.Name, "description": t.Description, "parameters": t.Parameters}})
+	}
+	if len(tools) > 0 {
 		req["tools"] = tools
 	}
 	if opts.DisableWebSearch {
@@ -153,7 +162,7 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 	if opts.MaxOutputTokens > 0 {
 		req["max_tokens"] = opts.MaxOutputTokens
 	}
-	if opts.RequireWebSearch {
+	if opts.RequireWebSearch && nativeTool == nil {
 		if req["enable_search"] == true {
 			req["search_options"] = map[string]any{"forced_search": true, "enable_source": true}
 		} else if req["web_search_options"] == nil {
@@ -164,7 +173,8 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 		SearchInfo struct {
 			Results []json.RawMessage `json:"search_results"`
 		} `json:"search_info"`
-		Choices []struct {
+		WebSearch json.RawMessage `json:"web_search"`
+		Choices   []struct {
 			Message responseMsg `json:"message"`
 		} `json:"choices"`
 		Usage tokenUsage `json:"usage"`
@@ -182,19 +192,46 @@ func (c *Client) completionsChat(ctx context.Context, messages []domain.ChatMess
 		return domain.ChatResult{}, fmt.Errorf("model returned no choices")
 	}
 	msg := resp.Choices[0].Message
-	if opts.RequireWebSearch && len(resp.SearchInfo.Results) == 0 {
-		cited := false
-		for _, a := range msg.Annotations {
-			if a.Type == "url_citation" {
-				cited = true
-				break
+	result := resp.Usage.result()
+	result.SearchQueries = []string{}
+	result.Sources = []domain.SearchSource{}
+	metadata := map[string]searchSource{}
+	if nativeTool != nil && len(msg.ToolCalls) > 0 {
+		result.CompletionState = domain.CompletionState{Reasoning: msg.Reasoning, ServerToolCalls: msg.ServerToolCalls}
+	}
+	var steps []serverStep
+	_ = json.Unmarshal(msg.ServerToolCalls, &steps)
+	for _, step := range steps {
+		for _, call := range step.Calls {
+			if call.Type != "deepseek_web_search" {
+				continue
+			}
+			call.Action.addQueries(&result)
+			if call.Status != "completed" {
+				continue
+			}
+			result.Searched = true
+			for _, source := range call.Sources {
+				metadata[source.URL] = source
 			}
 		}
-		if !cited {
-			return domain.ChatResult{}, fmt.Errorf("联网模型未返回检索来源")
+	}
+	addCitations(&result, msg.Annotations, metadata)
+	var webSources []searchSource
+	_ = json.Unmarshal(resp.WebSearch, &webSources)
+	for _, source := range webSources {
+		addSource(&result, source)
+	}
+	for _, raw := range resp.SearchInfo.Results {
+		var source searchSource
+		if json.Unmarshal(raw, &source) == nil {
+			addSource(&result, source)
 		}
 	}
-	result := resp.Usage.result()
+	result.Searched = result.Searched || len(resp.SearchInfo.Results) > 0 || len(webSources) > 0
+	if opts.RequireWebSearch && !result.Searched {
+		return domain.ChatResult{}, fmt.Errorf("联网模型未返回检索来源")
+	}
 	result.Content = msg.Content
 	for _, tc := range msg.ToolCalls {
 		if tc.Function.Name == "" {
@@ -269,14 +306,16 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 	var resp struct {
 		OutputText string `json:"output_text"`
 		Output     []struct {
-			Status    string `json:"status"`
-			Type      string `json:"type"`
-			CallID    string `json:"call_id"`
-			Name      string `json:"name"`
-			Arguments string `json:"arguments"`
+			Action    searchAction `json:"action"`
+			Status    string       `json:"status"`
+			Type      string       `json:"type"`
+			CallID    string       `json:"call_id"`
+			Name      string       `json:"name"`
+			Arguments string       `json:"arguments"`
 			Content   []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
+				Type        string     `json:"type"`
+				Text        string     `json:"text"`
+				Annotations []citation `json:"annotations"`
 			} `json:"content"`
 		} `json:"output"`
 		Usage tokenUsage `json:"usage"`
@@ -286,10 +325,18 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 	}
 	parts := make([]string, 0, 2)
 	var calls []domain.ToolCall
-	searched := false
+	result := resp.Usage.result()
+	result.SearchQueries = []string{}
+	result.Sources = []domain.SearchSource{}
+	completedSearch := false
 	for _, output := range resp.Output {
 		if output.Type == "web_search_call" && output.Status == "completed" {
-			searched = true
+			result.Searched = true
+			completedSearch = true
+			output.Action.addQueries(&result)
+			for _, source := range output.Action.Sources {
+				addSource(&result, source)
+			}
 		}
 		if output.Type == "function_call" && output.Name != "" {
 			calls = append(calls, domain.ToolCall{ID: output.CallID, Name: output.Name, Arguments: output.Arguments})
@@ -299,12 +346,13 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 			continue
 		}
 		for _, content := range output.Content {
+			addCitations(&result, content.Annotations, nil)
 			if content.Type == "output_text" && strings.TrimSpace(content.Text) != "" {
 				parts = append(parts, content.Text)
 			}
 		}
 	}
-	if opts.RequireWebSearch && !searched {
+	if opts.RequireWebSearch && !completedSearch {
 		return domain.ChatResult{}, fmt.Errorf("联网模型未完成检索")
 	}
 	content := strings.TrimSpace(strings.Join(parts, "\n"))
@@ -314,7 +362,6 @@ func (c *Client) responsesChat(ctx context.Context, messages []domain.ChatMessag
 	if content == "" && len(calls) == 0 {
 		return domain.ChatResult{}, fmt.Errorf("responses API returned no output_text")
 	}
-	result := resp.Usage.result()
 	result.Content, result.ToolCalls = content, calls
 	return result, nil
 }

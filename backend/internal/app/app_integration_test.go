@@ -94,6 +94,46 @@ func TestMVPPostgresPgvectorEndToEnd(t *testing.T) {
 	}
 	requestJSON(t, client, http.MethodGet, server.URL+"/api/auth/me", nil, http.StatusOK)
 
+	t.Run("official profile defaults, saved key and search diagnostics", func(t *testing.T) {
+		profiles := server.URL + "/api/model-profiles"
+		presets := dataSlice(t, requestJSON(t, client, "GET", server.URL+"/api/model-provider-presets", nil, 200))
+		if len(presets) < 2 {
+			t.Fatalf("missing presets: %v", presets)
+		}
+		const key = "official-test-key"
+		id := createdID(t, requestJSON(t, client, "POST", profiles, map[string]any{"provider": "deepseek", "apiKey": key}, 200))
+		defer requestJSON(t, client, "DELETE", profiles+"/"+id, nil, 200)
+		raw := requestJSON(t, client, "GET", profiles, nil, 200)
+		assertSecretNotReturned(t, raw, key)
+		saved := object(t, dataSlice(t, raw)[0])
+		if saved["provider"] != "deepseek" || saved["webSearchMode"] != "deepseek" || saved["model"] != "deepseek-flash" || saved["hasApiKey"] != true {
+			t.Fatal(saved)
+		}
+		requestJSON(t, client, "PUT", profiles+"/"+id, map[string]any{"provider": "deepseek", "model": "custom-flash", "enabled": false}, 200)
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer "+key {
+				t.Error("saved key missing")
+			}
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload["model"] != "custom-flash" {
+				t.Errorf("invalid payload: %v %v", payload, err)
+			}
+			io.WriteString(w, `{"choices":[{"message":{"content":"news","annotations":[{"type":"url_citation","url_citation":{"url":"https://example.com/news","title":"News"}}]}}]}`)
+		}))
+		defer upstream.Close()
+		if _, err := pool.Exec(ctx, "UPDATE model_profiles SET base_url=$1 WHERE id=$2", upstream.URL, id); err != nil {
+			t.Fatal(err)
+		}
+		result := dataMap(t, requestJSON(t, client, "POST", profiles+"/"+id+"/test", map[string]bool{"webSearch": true}, 200))
+		if result["searched"] != true || len(result["searchQueries"].([]any)) != 0 || len(result["sources"].([]any)) != 1 {
+			t.Fatal(result)
+		}
+		if _, err := pool.Exec(ctx, "UPDATE model_profiles SET web_search_mode='disabled' WHERE id=$1", id); err != nil {
+			t.Fatal(err)
+		}
+		requestJSON(t, client, "POST", profiles+"/"+id+"/test", map[string]bool{"webSearch": true}, 400)
+	})
+
 	const chatAPIKey = "chat-secret-key-that-must-not-leak"
 	chatID := createdID(t, requestJSON(t, client, http.MethodPost, server.URL+"/api/model-profiles", map[string]any{
 		"name": "集成测试对话模型", "kind": "chat", "baseUrl": mock.URL + "/v1",
