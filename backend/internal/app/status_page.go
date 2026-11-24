@@ -188,7 +188,7 @@ func (a *App) renderStatusPage(ctx context.Context, target string, dial func(con
 	return domain.ContentPart{Type: "image", Filename: "status.png", ContentType: "image/png", StorageKey: key, Width: cfg.Width, Height: cfg.Height, SizeBytes: int64(len(screenshot))}, nil
 }
 
-var directStatusRequest = regexp.MustCompile(`(?i)状态页.{0,8}(截图|截屏)|(?:截图|截屏).{0,8}状态页|(分组|服务|全站|网站|网页).{0,10}(状态|可用吗|正常吗|挂了|成功率)|(?:group|service|site|system) status|status (?:of|for) (?:the )?(?:group|service|site|system)`)
+var directStatusRequest = regexp.MustCompile(`(?i)状态图|请求成功率|状态页.{0,8}(截图|截屏)|(?:截图|截屏).{0,8}状态页|(分组|服务|全站|网站|网页).{0,10}(状态|可用吗|正常吗|挂了|成功率)|(?:group|service|site|system) status|status (?:of|for) (?:the )?(?:group|service|site|system)`)
 
 func explicitStatusQuestion(question string) bool { return directStatusRequest.MatchString(question) }
 func (a *App) attachStatusPage(ctx context.Context, rt *turnRuntime, group string) error {
@@ -200,10 +200,14 @@ func (a *App) attachStatusPage(ctx context.Context, rt *turnRuntime, group strin
 		}
 		part, err = a.statusPageImage(ctx, rt.settings.LiveData.StatusPageURL)
 	} else {
-		card := statuscard.FromSnapshot(rt.snapshot, rt.question, group)
-		if rt.snapshotStale {
-			card.Title = "服务状态（缓存快照）"
+		status, fetchErr := a.turnStatus(ctx, rt)
+		if fetchErr != nil {
+			return fetchErr
 		}
+		if status.ServiceStatus["hour"] == nil && len(status.Monitors) == 0 {
+			return errors.New("实时服务状态不可用")
+		}
+		card := statuscard.FromSnapshot(*status, rt.question, group)
 		focus := ""
 		if card.Focus != nil {
 			focus = *card.Focus

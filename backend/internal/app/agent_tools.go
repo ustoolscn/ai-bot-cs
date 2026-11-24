@@ -36,6 +36,7 @@ type turnRuntime struct {
 	knowledgeBases   []string
 	embeddings       queryEmbeddings
 	snapshot         newapi.Snapshot
+	liveStatus       *newapi.Snapshot
 	snapshotOK       bool
 	snapshotStale    bool
 	dryRun           bool // evaluation: no side effects
@@ -145,7 +146,11 @@ func (a *App) availableTools(ctx context.Context, rt *turnRuntime) ([]domain.Too
 		if !toolSelected(rt, t.spec.Name) {
 			continue
 		}
-		if t.needsLive && !rt.snapshotOK && !statusPageTool(rt, t.spec.Name) {
+		if isStatusTool(t.spec.Name) {
+			if !rt.settings.LiveData.Enabled && !statusPageTool(rt, t.spec.Name) {
+				continue
+			}
+		} else if t.needsLive && !rt.snapshotOK {
 			continue
 		}
 		if t.needsKB && len(rt.knowledgeBases) == 0 {
@@ -189,12 +194,7 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		if str("scope") == "group" {
 			group = str("name")
 		}
-		if err := a.attachStatusPage(ctx, rt, group); err != nil && !rt.snapshotOK {
-			return "", err
-		}
-		if rt.statusImage != nil && (!rt.snapshotOK || call.Name == "get_service_status" && len(rt.snapshot.ServiceStatus) == 0) {
-			return `{"statusPageScreenshot":true}`, nil
-		}
+		_ = a.attachStatusPage(ctx, rt, group) // Numeric results remain usable if rendering fails.
 	}
 	switch call.Name {
 	case "quote_previous_reply":
@@ -303,10 +303,12 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		if g != "hour" && g != "day" {
 			return "", fmt.Errorf("granularity 必须为 hour 或 day")
 		}
-		w := rt.snapshot.ServiceStatus[g]
-		if !rt.snapshotOK || w == nil || w.Overall == nil {
-			return "", fmt.Errorf("该时间范围的服务状态暂无可用数据")
+		status, err := a.turnStatus(ctx, rt)
+		if err != nil || status.ServiceStatus[g] == nil {
+			return unavailableStatus(rt, "该时间范围的实时服务统计暂不可用")
 		}
+		w := status.ServiceStatus[g]
+
 		recent := 0
 		if v, ok := args["recent"]; ok {
 			n, ok := v.(float64)
@@ -319,21 +321,26 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		if err != nil {
 			return "", err
 		}
-		result["possiblyStale"] = rt.snapshotStale
+		result["queriedAt"] = status.FetchedAt
+		result["possiblyStale"] = time.Since(time.Unix(w.GeneratedAt, 0)) >= 24*time.Hour
 		return jsonString(result), nil
 	case "get_group_status":
-		if !rt.snapshotOK {
-			return "", fmt.Errorf("网站数据暂不可用")
+		status, err := a.turnStatus(ctx, rt)
+		if err != nil || status.Errors["uptime"] != "" {
+			if groups := rt.snapshot.GroupList(); len(groups) > 0 {
+				return jsonString(map[string]any{"groups": groups, "groupsDataTime": rt.snapshot.FetchedAt, "message": "实时分组监控暂不可用", "statusImageAttached": rt.statusImage != nil}), nil
+			}
+			return unavailableStatus(rt, "实时分组监控暂不可用")
 		}
 		g := strings.ToLower(str("group"))
 		var monitors []map[string]any
-		for _, m := range rt.snapshot.Monitors {
+		for _, m := range status.Monitors {
 			if g != "" && !strings.Contains(strings.ToLower(m.Name+" "+m.Category+" "+m.Group), g) {
 				continue
 			}
 			monitors = append(monitors, map[string]any{"category": m.Category, "name": m.Name, "status": newapi.MonitorStatusText(m.Status), "uptime": m.Uptime})
 		}
-		return jsonString(map[string]any{"groups": rt.snapshot.GroupList(), "status": monitors, "dataTime": rt.snapshot.FetchedAt, "possiblyStale": rt.snapshotStale}), nil
+		return jsonString(map[string]any{"groups": rt.snapshot.GroupList(), "status": monitors, "dataTime": status.FetchedAt, "groupsDataTime": rt.snapshot.FetchedAt, "possiblyStale": false}), nil
 	case "get_announcements":
 		if !rt.snapshotOK {
 			return "", fmt.Errorf("网站数据暂不可用")
@@ -464,8 +471,19 @@ func toolSelected(rt *turnRuntime, name string) bool {
 	}
 	return (rt.settings.ToolNames == nil || slices.Contains(rt.settings.ToolNames, name)) && (name != "remember_user_fact" || rt.settings.MemoryEnabled)
 }
+func unavailableStatus(rt *turnRuntime, reason string) (string, error) {
+	if rt.statusImage != nil {
+		return jsonString(map[string]any{"statusImageAttached": true, "message": reason}), nil
+	}
+	return "", fmt.Errorf("%s", reason)
+}
+
+func isStatusTool(name string) bool {
+	return name == "get_service_status" || name == "get_group_status"
+}
+
 func statusPageTool(rt *turnRuntime, name string) bool {
-	if name != "get_group_status" && name != "get_service_status" {
+	if !isStatusTool(name) {
 		return false
 	}
 	switch rt.settings.LiveData.StatusImageStyle {
@@ -474,6 +492,6 @@ func statusPageTool(rt *turnRuntime, name string) bool {
 	case "page":
 		return rt.settings.LiveData.StatusPageURL != ""
 	default:
-		return rt.snapshotOK && (rt.snapshot.ServiceStatus["hour"] != nil || len(rt.snapshot.Monitors) > 0)
+		return rt.settings.LiveData.Enabled && rt.settings.LiveData.BaseURL != ""
 	}
 }

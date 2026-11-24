@@ -35,19 +35,46 @@ func (a *App) liveSnapshot(ctx context.Context, s agent.Settings) (newapi.Snapsh
 	return snap, snapshotStale(snap, lastErr), !snap.FetchedAt.IsZero()
 }
 
-// Only the administrator's manual sync endpoint fetches new data.
-func (a *App) refreshLiveData(ctx context.Context, s agent.Settings) error {
+func (a *App) liveClient(s agent.Settings) (*newapi.Client, error) {
 	token := ""
 	if s.LiveData.AccessTokenEnc != "" {
 		t, err := a.cipher.Decrypt(s.LiveData.AccessTokenEnc)
 		if err != nil {
-			return fmt.Errorf("解密访问令牌失败: %w", err)
+			return nil, fmt.Errorf("解密访问令牌失败: %w", err)
 		}
 		token = t
 	}
+	return newapi.NewClient(s.LiveData.BaseURL, token, s.LiveData.UserID), nil
+}
+
+// A turn shares one reading between its status tools and image renderer.
+func (a *App) turnStatus(ctx context.Context, rt *turnRuntime) (*newapi.Snapshot, error) {
+	if rt.liveStatus != nil {
+		return rt.liveStatus, nil
+	}
+	if !rt.settings.LiveData.Enabled || rt.settings.LiveData.BaseURL == "" {
+		return nil, fmt.Errorf("网站实时状态查询未配置")
+	}
+	client, err := a.liveClient(rt.settings)
+	if err != nil {
+		return nil, err
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	status := client.FetchStatus(fetchCtx)
+	status.SystemName = rt.snapshot.SystemName
+	rt.liveStatus = &status
+	return rt.liveStatus, nil
+}
+
+func (a *App) refreshLiveData(ctx context.Context, s agent.Settings) error {
+	client, err := a.liveClient(s)
+	if err != nil {
+		return err
+	}
 	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	snap, err := newapi.NewClient(s.LiveData.BaseURL, token, s.LiveData.UserID).Fetch(fetchCtx)
+	snap, err := client.Fetch(fetchCtx)
 	if err != nil {
 		_, _ = a.db.Exec(ctx, `INSERT INTO live_data_snapshots(source,last_attempt_at,last_error) VALUES($1,now(),$2)
 			ON CONFLICT(source) DO UPDATE SET last_attempt_at=now(),last_error=EXCLUDED.last_error`, liveSource(s), err.Error())

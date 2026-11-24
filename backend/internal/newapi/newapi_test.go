@@ -65,7 +65,7 @@ func TestFetchToleratesPartialFailure(t *testing.T) {
 		t.Fatalf("snapshot: %+v", s)
 	}
 	summary := s.PromptSummary(false)
-	for _, want := range []string{"新公告", "vip：异常", "get_model_price"} {
+	for _, want := range []string{"新公告", "get_group_status", "get_model_price"} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary missing %q: %s", want, summary)
 		}

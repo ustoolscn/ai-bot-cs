@@ -4,6 +4,7 @@ import (
 	"ai-bot/backend/internal/domain"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,9 +26,14 @@ func TestManualSnapshotMigration(t *testing.T) {
 	ctx := context.Background()
 	pool := newIntegrationSchema(t, ctx, dsn)
 	a := App{db: pool}
-	var hits atomic.Int32
+	var hits, requests atomic.Int32
+	requests.Store(7)
 	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
+		if r.URL.Path == "/api/service-status" {
+			fmt.Fprintf(w, `{"success":true,"data":{"granularity":%q,"generated_at":123,"overall":{"request_count":%d}}}`, r.URL.Query().Get("granularity"), requests.Load())
+			return
+		}
 		if r.URL.Path == "/api/status" {
 			w.Write([]byte(`{"success":true,"data":{"system_name":"new","announcements_enabled":true,"announcements":[{"content":"当前公告"}]}}`))
 			return
@@ -65,6 +71,19 @@ func TestManualSnapshotMigration(t *testing.T) {
 	snap, _, ok = a.liveSnapshot(ctx, s)
 	if !ok || snap.SystemName != "new" || len(snap.Announcements) != 1 || hits.Load() == 0 {
 		t.Fatal("manual sync missing", snap)
+	}
+	for _, g := range []string{"hour", "day"} {
+		if w := snap.ServiceStatus[g]; w == nil || w.Overall.RequestCount != 7 {
+			t.Fatalf("first manual sync %s: %+v", g, w)
+		}
+	}
+	requests.Store(19)
+	check(a.refreshLiveData(ctx, s))
+	snap, _, _ = a.liveSnapshot(ctx, s)
+	for _, g := range []string{"hour", "day"} {
+		if w := snap.ServiceStatus[g]; w == nil || w.Overall.RequestCount != 19 {
+			t.Fatalf("second manual sync %s: %+v", g, w)
+		}
 	}
 	result, err := a.executeTool(ctx, &turnRuntime{settings: agent.DefaultSettings(), snapshotOK: true, snapshot: snap}, domain.ToolCall{Name: "get_announcements"}, nil)
 	check(err)

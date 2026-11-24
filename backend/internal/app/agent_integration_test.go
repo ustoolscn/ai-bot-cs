@@ -277,7 +277,7 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	}
 
 	liveJSON := requestJSON(t, client, http.MethodPost, server.URL+"/api/agent/live-data/refresh", nil, http.StatusOK)
-	if !bytes.Contains(liveJSON, []byte(`"modelCount":1`)) || !bytes.Contains(liveJSON, []byte("vip：异常")) {
+	if !bytes.Contains(liveJSON, []byte(`"modelCount":1`)) || !bytes.Contains(liveJSON, []byte("get_group_status")) {
 		t.Fatalf("live data: %s", liveJSON)
 	}
 	var entries int
@@ -377,7 +377,7 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 			t.Fatalf("missing selected agent prompt %q", want)
 		}
 	}
-	if !strings.Contains(first, "vip 分组") || !strings.Contains(first, "BOB_SECRET") || !strings.Contains(first, "get_model_price") || !strings.Contains(first, "vip：异常") {
+	if !strings.Contains(first, "vip 分组") || !strings.Contains(first, "BOB_SECRET") || !strings.Contains(first, "get_model_price") || strings.Contains(first, "vip：异常") {
 		t.Fatalf("thread context / tools / live snapshot wrong: %s", first)
 	}
 	if !strings.Contains(string(calls[1]), `inputPerMillionTokens\":14`) {

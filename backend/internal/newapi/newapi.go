@@ -112,10 +112,9 @@ type Snapshot struct {
 	Errors        map[string]string         `json:"errors,omitempty"`
 }
 
-// Fetch loads every source; a failing source is recorded in Errors and does
-// not prevent the others from loading. It errors only if all sources fail.
-func (c *Client) Fetch(ctx context.Context) (Snapshot, error) {
-	s := Snapshot{FetchedAt: time.Now().UTC(), Errors: map[string]string{}}
+// FetchStatus reads only the two statistics windows and the uptime monitors.
+func (c *Client) FetchStatus(ctx context.Context) Snapshot {
+	s := Snapshot{Errors: map[string]string{}}
 	type serviceResult struct {
 		granularity string
 		window      *ServiceWindow
@@ -125,6 +124,34 @@ func (c *Client) Fetch(ctx context.Context) (Snapshot, error) {
 	for _, g := range []string{"hour", "day"} {
 		go func(g string) { w, err := c.fetchServiceWindow(ctx, g); results <- serviceResult{g, w, err} }(g)
 	}
+	if body, err := c.get(ctx, "/api/uptime/status"); err != nil {
+		s.Errors["uptime"] = err.Error()
+	} else if monitors, err := ParseUptime(body); err != nil {
+		s.Errors["uptime"] = err.Error()
+	} else {
+		s.Monitors = monitors
+	}
+	for i := 0; i < 2; i++ {
+		r := <-results
+		if r.err != nil {
+			s.Errors["service-status/"+r.granularity] = r.err.Error()
+			continue
+		}
+		if s.ServiceStatus == nil {
+			s.ServiceStatus = map[string]*ServiceWindow{}
+		}
+		s.ServiceStatus[r.granularity] = r.window
+	}
+	s.FetchedAt = time.Now().UTC()
+	return s
+}
+
+// Fetch loads every source; a failing source is recorded in Errors and does
+// not prevent the others from loading. It errors only if all sources fail.
+func (c *Client) Fetch(ctx context.Context) (Snapshot, error) {
+	statusResult := make(chan Snapshot, 1)
+	go func() { statusResult <- c.FetchStatus(ctx) }()
+	s := Snapshot{Errors: map[string]string{}}
 	ok := 0
 	if body, err := c.get(ctx, "/api/notice"); err != nil {
 		s.Errors["notice"] = err.Error()
@@ -142,14 +169,6 @@ func (c *Client) Fetch(ctx context.Context) (Snapshot, error) {
 		s.SystemName, s.Announcements = name, anns
 		ok++
 	}
-	if body, err := c.get(ctx, "/api/uptime/status"); err != nil {
-		s.Errors["uptime"] = err.Error()
-	} else if monitors, err := ParseUptime(body); err != nil {
-		s.Errors["uptime"] = err.Error()
-	} else {
-		s.Monitors = monitors
-		ok++
-	}
 	if body, err := c.get(ctx, "/api/pricing"); err != nil {
 		s.Errors["pricing"] = err.Error()
 	} else if models, ratio, usable, err := ParsePricing(body); err != nil {
@@ -158,18 +177,16 @@ func (c *Client) Fetch(ctx context.Context) (Snapshot, error) {
 		s.Models, s.GroupRatio, s.UsableGroups = models, ratio, usable
 		ok++
 	}
-	for i := 0; i < 2; i++ {
-		r := <-results
-		if r.err != nil {
-			s.Errors["service-status/"+r.granularity] = r.err.Error()
-			continue
-		}
-		if s.ServiceStatus == nil {
-			s.ServiceStatus = map[string]*ServiceWindow{}
-		}
-		s.ServiceStatus[r.granularity] = r.window
+	status := <-statusResult
+	s.ServiceStatus, s.Monitors = status.ServiceStatus, status.Monitors
+	for source, message := range status.Errors {
+		s.Errors[source] = message
+	}
+	ok += len(status.ServiceStatus)
+	if status.Errors["uptime"] == "" {
 		ok++
 	}
+	s.FetchedAt = time.Now().UTC()
 	if len(s.Errors) == 0 {
 		s.Errors = nil
 	}
@@ -231,6 +248,9 @@ func ParseUptime(body []byte) ([]Monitor, error) {
 	e, err := unwrap(body)
 	if err != nil {
 		return nil, err
+	}
+	if !e.Success {
+		return nil, fmt.Errorf("监控接口返回失败")
 	}
 	var groups []struct {
 		CategoryName string `json:"categoryName"`
@@ -305,17 +325,6 @@ func MonitorStatusText(status int) string {
 	}
 }
 
-// Abnormal returns monitors that are not up.
-func (s Snapshot) Abnormal() []Monitor {
-	var out []Monitor
-	for _, m := range s.Monitors {
-		if m.Status != 1 {
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
 // PromptSummary is the short live-data block injected into every prompt.
 func (s Snapshot) PromptSummary(stale bool) string {
 	var b strings.Builder
@@ -338,20 +347,8 @@ func (s Snapshot) PromptSummary(stale bool) string {
 	} else if s.Notice != "" {
 		b.WriteString("站点通知：" + oneLine(s.Notice, 200) + "\n")
 	}
-	if len(s.Monitors) > 0 {
-		abn := s.Abnormal()
-		if len(abn) == 0 {
-			b.WriteString("分组/服务状态：全部正常。\n")
-		} else {
-			b.WriteString("分组/服务状态异常：")
-			for _, m := range abn {
-				fmt.Fprintf(&b, "\n- %s %s：%s", m.Category, m.Name, MonitorStatusText(m.Status))
-			}
-			b.WriteString("\n其余正常。\n")
-		}
-	}
-	if len(s.ServiceStatus) > 0 {
-		b.WriteString("服务成功率、请求数、首个 Token 延迟及趋势请调用 get_service_status 查询。\n")
+	if !s.FetchedAt.IsZero() {
+		b.WriteString("分组监控请调用 get_group_status；成功率、请求数和首个 Token 延迟请调用 get_service_status，以本次查询为准。\n")
 	}
 	if len(s.Models) > 0 {
 		b.WriteString("模型价格请调用 get_model_price 查询，不要凭记忆回答。")

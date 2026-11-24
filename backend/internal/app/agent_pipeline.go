@@ -660,14 +660,25 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 	if rt.snapshotOK && s.LiveData.InjectSnapshot {
 		live = rt.snapshot.PromptSummary(rt.snapshotStale)
 	}
-	if !rt.dryRun && s.ToolsEnabled && statusPageTool(rt, "get_service_status") && (toolSelected(rt, "get_service_status") || toolSelected(rt, "get_group_status")) && explicitStatusQuestion(rt.question) {
-		finish := a.startStage(ctx, rt.messageID, "状态图")
-		err := a.attachStatusPage(ctx, rt, "")
-		finish("", err)
-		if err == nil {
-			live += "\n本轮已准备好管理员配置的状态图，将随回复发送。"
-		} else {
-			live += "\n本轮状态图读取失败，不要声称已发送截图。"
+	if !rt.dryRun && s.ToolsEnabled && explicitStatusQuestion(rt.question) && (toolSelected(rt, "get_service_status") || toolSelected(rt, "get_group_status")) {
+		if s.LiveData.Enabled {
+			status, err := a.turnStatus(ctx, rt)
+			if err == nil && status.ServiceStatus["hour"] != nil && toolSelected(rt, "get_service_status") {
+				w := status.ServiceStatus["hour"]
+				live += "\n本次查询的全站小时统计：" + jsonString(map[string]any{"generated_at": w.GeneratedAt, "overall": w.Overall.ServiceMetrics})
+			} else {
+				live += "\n请通过本轮启用的状态工具核实指标，缺少数据时说明暂不可用。"
+			}
+		}
+		if statusPageTool(rt, "get_service_status") {
+			finish := a.startStage(ctx, rt.messageID, "状态图")
+			err := a.attachStatusPage(ctx, rt, "")
+			finish("", err)
+			if err == nil {
+				live += "\n本轮已准备好管理员配置的状态图，将随回复发送。"
+			} else {
+				live += "\n本轮状态图读取失败，不要声称已发送截图。"
+			}
 		}
 	}
 	systems := agent.BuildSystemPrompt(agent.PromptInput{Settings: s, ConversationType: rt.conversationType, BusinessPrompt: in.businessPrompt,

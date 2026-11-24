@@ -18,6 +18,7 @@
       <h3>注入提示词的内容</h3>
       <div class="content-box">{{ data.promptPreview || '暂无数据' }}</div>
       <h3>全站服务状态</h3>
+      <p class="muted status-note">这里是最近一次同步的结果。群里有人问状态或要状态图时，会当场重新查询。</p>
       <dl v-if="data.serviceStatus?.hour || data.serviceStatus?.day" class="detail-list">
         <template v-for="g in serviceWindows" :key="g.key">
           <div v-if="data.serviceStatus[g.key]">
@@ -117,4 +118,5 @@ h3 { font-size: 14px; font-weight: 600; margin: 20px 0 8px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .gap { margin-bottom: 8px; }
 .muted { color: var(--muted); font-size: 13px; }
+.status-note { margin: -4px 0 8px; }
 </style>

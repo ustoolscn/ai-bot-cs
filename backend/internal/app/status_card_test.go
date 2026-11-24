@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"ai-bot/backend/internal/agent"
-	"ai-bot/backend/internal/newapi"
+
 	"ai-bot/backend/internal/statuscard"
 )
 
@@ -46,12 +46,22 @@ func TestSampleStatusCards(t *testing.T) {
 	}
 }
 
+func TestExplicitStatusRequests(t *testing.T) {
+	for _, q := range []string{"发张状态图", "请求成功率是多少？", "全站状态怎么样？"} {
+		if !explicitStatusQuestion(q) {
+			t.Errorf("missed status request %q", q)
+		}
+	}
+}
+
 func TestStatusImageSelection(t *testing.T) {
 	s := agent.DefaultSettings()
 	if s.LiveData.StatusImageStyle != "brief" {
 		t.Fatal("unexpected default")
 	}
-	rt := turnRuntime{settings: s, snapshotOK: true, snapshot: newapi.Snapshot{Monitors: []newapi.Monitor{{Name: "API", Status: 1}}}}
+	s.LiveData.Enabled = true
+	s.LiveData.BaseURL = "https://site.example"
+	rt := turnRuntime{settings: s}
 	for _, style := range []string{"brief", "table", "heatmap", "night", "off", "page"} {
 		rt.settings.LiveData.StatusImageStyle = style
 		if err := rt.settings.Validate(); err != nil {
