@@ -14,18 +14,39 @@ export interface Bot {
   lastEventAt: string
 }
 
+export type ModelProviderId = 'compatible' | 'deepseek' | 'zhipu'
+export type WebSearchMode = 'disabled' | 'qwen' | 'openai' | 'responses' | 'custom' | 'deepseek' | 'zhipu'
+
+export interface ModelPresetModel {
+  kind: 'chat' | 'embedding' | 'image'
+  model: string
+  label: string
+  supportsWebSearch?: boolean
+  dimension?: number
+}
+
+export interface ModelProviderPreset {
+  id: Exclude<ModelProviderId, 'compatible'>
+  name: string
+  baseUrl: string
+  webSearchMode: WebSearchMode
+  keyUrl?: string
+  models: ModelPresetModel[]
+}
+
 export interface ModelProfile {
   id: string
   name: string
   kind: 'chat' | 'embedding' | 'image'
-  provider: string
+  /** compatible = 第三方 OpenAI 兼容接口；其余为官方预置服务商 */
+  provider: ModelProviderId
   model: string
   baseUrl: string
   maskedKey: string
   status: Status
   latency: number
   dimension?: number
-  webSearchMode: 'disabled' | 'qwen' | 'openai' | 'responses' | 'custom'
+  webSearchMode: WebSearchMode
   reasoningEffort: 'default' | 'none' | 'minimal' | 'low' | 'medium' | 'high'
   extraBody: Record<string, unknown>
   inputPricePerMillion?: number | null
@@ -62,10 +83,18 @@ export type HandoffStatus = 'waiting_human' | 'human_processing' | 'human_closed
 export interface ModelTestInput {
   input: string
   systemPrompt?: string
+  /** 联网测试：要求本次请求带上联网搜索 */
+  webSearch?: boolean
+}
+
+export interface ModelSearchSource {
+  title?: string
+  url: string
+  siteName?: string
 }
 
 export type ModelTestResult =
-  | { kind: 'chat'; model: string; content: string; latencyMs: number; inputTokens: number; outputTokens: number }
+  | { kind: 'chat'; model: string; content: string; latencyMs: number; inputTokens: number; outputTokens: number; searched?: boolean; searchQueries?: string[]; sources?: ModelSearchSource[] }
   | { kind: 'embedding'; model: string; dimensions: number; vectorPreview: number[]; latencyMs: number }
   | { kind: 'image'; model: string; imageUrl?: string; latencyMs: number }
 
