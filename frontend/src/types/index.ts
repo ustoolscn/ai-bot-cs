@@ -64,7 +64,20 @@ export interface ModelProfile {
 export interface ModelProxy {
   id: string
   name: string
+  /** 不含账号密码的地址 */
   address: string
+  username: string
+  hasPassword: boolean
+}
+
+export interface ModelProxyInput {
+  id?: string
+  name: string
+  address: string
+  username: string
+  /** 留空表示保持原密码 */
+  password: string
+  clearPassword: boolean
 }
 
 export interface ProxyTestResult {

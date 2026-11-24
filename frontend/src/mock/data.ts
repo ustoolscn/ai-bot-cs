@@ -79,7 +79,7 @@ export const mockOverview: SystemOverview = {
   queues: { inbox: 3, outbox: 1, knowledge: 6, failed: 2 },
 }
 
-export const mockProxies = [{ id: 'px-1', name: '香港线路', address: 'socks5://10.0.0.8:1080' }, { id: 'px-2', name: '新加坡 HTTP', address: 'http://sg-proxy.internal:3128' }]
+export const mockProxies = [{ id: 'px-1', name: '香港线路', address: 'socks5://10.0.0.8:1080', username: '', hasPassword: false }, { id: 'px-2', name: '新加坡 HTTP', address: 'http://sg-proxy.internal:3128', username: 'bot', hasPassword: true }]
 export const mockHumanOperators = [{ conversationId: 'c2c-1', userOpenId: 'B3F1A9C27D0E4F55A61C8E2D9B7F3A10', name: '小李', enabled: true }, { conversationId: 'c2c-2', userOpenId: '7E2C90D4A1B84C3FAE5D6B2C1F0E9A88', name: 'Miya', enabled: false }]
 
 export const mockCosts: CostSummary = {

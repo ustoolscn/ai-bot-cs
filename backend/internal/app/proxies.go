@@ -1,20 +1,24 @@
 package app
 
 import (
+	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func proxyAddress(address string) (*url.URL, error) {
 	u, err := url.Parse(address)
-	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return nil, errors.New("请输入无认证信息的代理地址")
+	if err != nil || u.Hostname() == "" || u.ForceQuery || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return nil, errors.New("请输入有效的代理地址")
 	}
 	switch u.Scheme {
 	case "http", "https", "socks5":
@@ -29,36 +33,122 @@ var directModelTransport = func() *http.Transport {
 	return tr
 }()
 
-func modelTransport(address string) (*http.Transport, error) {
-	if address == "" {
+// Suppress proxy-supplied diagnostics, which can echo credentials on auth failure.
+type authenticatedProxyTransport struct {
+	*http.Transport
+	redactor *strings.Replacer
+}
+
+func (tr authenticatedProxyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := tr.Transport.RoundTrip(req)
+	if err != nil {
+		if req.Context().Err() != nil {
+			return nil, req.Context().Err()
+		}
+		return nil, errors.New("代理连接失败，请检查地址和认证信息")
+	}
+	if resp.StatusCode == http.StatusProxyAuthRequired {
+		resp.Body.Close()
+		return nil, errors.New("代理认证失败 (HTTP 407)")
+	}
+	return resp, nil
+}
+
+func (a *App) proxyTransport(ctx context.Context, id string) (http.RoundTripper, error) {
+	if id == "" {
 		return directModelTransport, nil
+	}
+	var address, username, encrypted string
+	err := a.db.QueryRow(ctx, "SELECT address,username,password_enc FROM model_proxies WHERE id=$1", id).Scan(&address, &username, &encrypted)
+	if err != nil {
+		return nil, err
 	}
 	u, err := proxyAddress(address)
 	if err != nil {
 		return nil, err
 	}
+	password, err := a.cipher.Decrypt(encrypted)
+	if err != nil {
+		return nil, errors.New("读取代理密码失败")
+	}
+	if username != "" || password != "" {
+		u.User = url.UserPassword(username, password)
+	}
+	return modelTransport(u), nil
+}
+
+func modelTransport(u *url.URL) http.RoundTripper {
 	tr := directModelTransport.Clone()
 	tr.Proxy = http.ProxyURL(u)
-	return tr, nil
+	if u.User != nil {
+		password, _ := u.User.Password()
+		basic := base64.StdEncoding.EncodeToString([]byte(u.User.Username() + ":" + password))
+		replacements := []string{basic, "[REDACTED]"}
+		if password != "" {
+			encoded := strings.TrimPrefix(url.UserPassword("", password).String(), ":")
+			replacements = append(replacements, encoded, "[REDACTED]", password, "[REDACTED]")
+		}
+		return authenticatedProxyTransport{tr, strings.NewReplacer(replacements...)}
+	}
+	return tr
+}
+
+type proxyInput struct {
+	Name, Address, Password string
+	Username                *string
+	ClearPassword           bool
+}
+
+func (in *proxyInput) splitAddress() error {
+	u, err := proxyAddress(strings.TrimSpace(in.Address))
+	if err != nil {
+		return err
+	}
+	if u.User != nil {
+		if in.Username == nil || *in.Username == "" {
+			user := u.User.Username()
+			in.Username = &user
+		}
+		if in.Password == "" {
+			in.Password, _ = u.User.Password()
+		}
+		u.User = nil
+	}
+	in.Address = u.String()
+	return nil
 }
 
 func (a *App) proxyRoutes(r *gin.RouterGroup) {
 	g := r.Group("/system/proxies")
 	g.GET("", func(c *gin.Context) {
-		queryList(c, a, "SELECT id::text,name,address FROM model_proxies ORDER BY name,id")
+		queryList(c, a, `SELECT id::text,name,address,username,password_enc<>'' AS "hasPassword" FROM model_proxies ORDER BY name,id`)
 	})
 	save := func(c *gin.Context) {
-		var in struct{ Name, Address string }
+		var in proxyInput
 		if c.ShouldBindJSON(&in) != nil || strings.TrimSpace(in.Name) == "" {
 			fail(c, 400, "invalid_request", "请填写名称和地址")
 			return
 		}
-		u, err := proxyAddress(strings.TrimSpace(in.Address))
-		if err != nil {
+		if err := in.splitAddress(); err != nil {
 			fail(c, 400, "invalid_address", err.Error())
 			return
 		}
-		saveSupportRecord(c, a, "INSERT INTO model_proxies(name,address) VALUES($1,$2) RETURNING id::text", "UPDATE model_proxies SET name=$1,address=$2 WHERE id=$3 RETURNING id::text", strings.TrimSpace(in.Name), u.String())
+		var passwordEnc *string
+		if in.ClearPassword || in.Password != "" {
+			if in.ClearPassword {
+				in.Password = ""
+			}
+			encrypted, err := a.cipher.Encrypt(in.Password)
+			if err != nil {
+				fail(c, 500, "credential_error", "保存代理密码失败")
+				return
+			}
+			passwordEnc = &encrypted
+		}
+		saveSupportRecord(c, a,
+			`INSERT INTO model_proxies(name,address,username,password_enc) VALUES($1,$2,COALESCE($3,''),COALESCE($4,'')) RETURNING id::text`,
+			`UPDATE model_proxies SET name=$1,address=$2,username=COALESCE($3,username),password_enc=COALESCE($4,password_enc) WHERE id=$5 RETURNING id::text`,
+			strings.TrimSpace(in.Name), in.Address, in.Username, passwordEnc)
 	}
 	g.POST("", save)
 	g.PUT("/:item", save)
@@ -80,29 +170,29 @@ func (a *App) proxyRoutes(r *gin.RouterGroup) {
 		ok(c, gin.H{"deleted": true})
 	})
 	g.POST("/:item/test", func(c *gin.Context) {
-		var address string
-		if err := a.db.QueryRow(c, "SELECT address FROM model_proxies WHERE id=$1", c.Param("item")).Scan(&address); err != nil {
+		start := time.Now()
+		tr, err := a.proxyTransport(c, c.Param("item"))
+		if errors.Is(err, pgx.ErrNoRows) {
 			fail(c, 404, "not_found", "代理不存在")
 			return
 		}
-		start := time.Now()
-		tr, err := modelTransport(address)
-		if err == nil {
-			req, _ := http.NewRequestWithContext(c, http.MethodHead, "https://example.com/", nil)
+		reason := ""
+		if err != nil {
+			reason = "无法读取代理配置"
+		} else {
 			client := http.Client{Transport: tr, Timeout: 8 * time.Second}
-			var resp *http.Response
-			resp, err = client.Do(req)
-			if err == nil {
+			defer client.CloseIdleConnections()
+			req, _ := http.NewRequestWithContext(c.Request.Context(), http.MethodHead, "https://example.com/", nil)
+			resp, requestErr := client.Do(req)
+			if requestErr != nil {
+				reason = "代理连接失败，请检查地址和认证信息"
+			} else {
 				resp.Body.Close()
 				if resp.StatusCode >= 400 {
-					err = errors.New(resp.Status)
+					reason = fmt.Sprintf("HTTP %d", resp.StatusCode)
 				}
 			}
 		}
-		reason := ""
-		if err != nil {
-			reason = err.Error()
-		}
-		ok(c, gin.H{"reachable": err == nil, "latencyMs": time.Since(start).Milliseconds(), "error": reason})
+		ok(c, gin.H{"reachable": reason == "", "latencyMs": time.Since(start).Milliseconds(), "error": reason})
 	})
 }

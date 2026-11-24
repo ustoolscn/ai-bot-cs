@@ -591,9 +591,9 @@ func (a *App) loadModelDetails(ctx context.Context, id string) (*openai.Client, 
 func (a *App) readModelProfile(ctx context.Context, id string, includeDisabled bool) (*openai.Client, string, string, *int, error) {
 	var base, keyEnc, model, kind, webSearchMode, reasoningEffort string
 	var dimension *int
-	var proxy, provider string
+	var proxyID, provider string
 	var extraBodyRaw []byte
-	err := a.db.QueryRow(ctx, "SELECT base_url,api_key_enc,model,kind,dimension,web_search_mode,reasoning_effort,extra_body,provider,COALESCE((SELECT address FROM model_proxies WHERE id=proxy_id),'') FROM model_profiles WHERE id=$1 AND (enabled OR $2)", id, includeDisabled).Scan(&base, &keyEnc, &model, &kind, &dimension, &webSearchMode, &reasoningEffort, &extraBodyRaw, &provider, &proxy)
+	err := a.db.QueryRow(ctx, "SELECT base_url,api_key_enc,model,kind,dimension,web_search_mode,reasoning_effort,extra_body,provider,COALESCE(proxy_id::text,'') FROM model_profiles WHERE id=$1 AND (enabled OR $2)", id, includeDisabled).Scan(&base, &keyEnc, &model, &kind, &dimension, &webSearchMode, &reasoningEffort, &extraBodyRaw, &provider, &proxyID)
 	if err != nil {
 		return nil, "", "", nil, err
 	}
@@ -606,9 +606,12 @@ func (a *App) readModelProfile(ctx context.Context, id string, includeDisabled b
 		return nil, "", "", nil, fmt.Errorf("读取运行时设置失败: %w", err)
 	}
 	client := openai.New(base, key, model, time.Duration(settings.AIRequestTimeoutSeconds)*time.Second)
-	client.HTTP.Transport, err = modelTransport(proxy)
+	client.HTTP.Transport, err = a.proxyTransport(ctx, proxyID)
 	if err != nil {
 		return nil, "", "", nil, err
+	}
+	if proxy, ok := client.HTTP.Transport.(authenticatedProxyTransport); ok {
+		client.RedactProxyCredentials = proxy.redactor
 	}
 	client.Provider = provider
 	client.WebSearchMode = webSearchMode

@@ -20,8 +20,10 @@ type Client struct {
 	ExtraBody               map[string]any
 	Provider, WebSearchMode string
 	UseResponses            bool
-	ReasoningEffort         string
-	HTTP                    *http.Client
+	// Proxies can echo their authentication headers in response diagnostics.
+	RedactProxyCredentials *strings.Replacer
+	ReasoningEffort        string
+	HTTP                   *http.Client
 }
 
 type HTTPError struct {
@@ -66,6 +68,9 @@ func (c *Client) do(ctx context.Context, path string, payload any, out any) erro
 	}
 	if resp.StatusCode/100 != 2 {
 		body := strings.TrimSpace(string(data))
+		if c.RedactProxyCredentials != nil {
+			body = c.RedactProxyCredentials.Replace(body)
+		}
 		if len([]rune(body)) > 2048 {
 			body = string([]rune(body)[:2048]) + "…"
 		}
@@ -73,10 +78,15 @@ func (c *Client) do(ctx context.Context, path string, payload any, out any) erro
 	}
 	if err := json.Unmarshal(data, out); err != nil {
 		snippet := strings.TrimSpace(string(data))
+		contentType := resp.Header.Get("Content-Type")
+		if c.RedactProxyCredentials != nil {
+			snippet = c.RedactProxyCredentials.Replace(snippet)
+			contentType = c.RedactProxyCredentials.Replace(contentType)
+		}
 		if len([]rune(snippet)) > 512 {
 			snippet = string([]rune(snippet)[:512]) + "…"
 		}
-		return fmt.Errorf("模型接口返回非 JSON（Content-Type: %s，解析错误: %v）；响应片段: %q；请检查 Base URL 是否正确，OpenAI 兼容接口通常应包含 /v1", resp.Header.Get("Content-Type"), err, snippet)
+		return fmt.Errorf("模型接口返回非 JSON（Content-Type: %s，解析错误: %v）；响应片段: %q；请检查 Base URL 是否正确，OpenAI 兼容接口通常应包含 /v1", contentType, err, snippet)
 	}
 	return nil
 }

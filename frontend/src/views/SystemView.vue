@@ -26,7 +26,7 @@
         <div class="panel-title"><div class="panel-title-text"><h2>模型代理</h2><p class="panel-sub">海外模型直连访问不了时，在这里添加代理，再到“模型”里为它选择。</p></div><el-button size="small" :icon="Plus" @click="openProxy()">添加代理</el-button></div>
         <div v-if="proxies.length" class="proxy-list">
           <div v-for="p in proxies" :key="p.id" class="proxy-row">
-            <span class="proxy-name"><strong>{{ p.name }}</strong><small class="mono" :title="p.address">{{ p.address }}</small></span>
+            <span class="proxy-name"><strong>{{ p.name }}</strong><small class="proxy-meta"><span class="mono proxy-address" :title="p.address">{{ p.address }}</span><span v-if="p.username || p.hasPassword" class="proxy-auth">{{ p.username ? `用户 ${p.username}` : '无用户名' }}{{ p.hasPassword ? ' · 已设密码' : '' }}</span></small></span>
             <span class="proxy-result" :title="proxyTests[p.id]?.error || ''"><StatusBadge v-if="proxyTests[p.id]" v-bind="proxyBadge(p.id)" /></span>
             <span class="proxy-actions">
               <el-button size="small" :loading="proxyTests[p.id]?.testing" @click="testProxy(p)">测试连通</el-button>
@@ -61,7 +61,17 @@
     <el-dialog v-model="proxyDialog" :title="proxyForm.id ? '编辑代理' : '添加代理'" width="480px">
       <el-form label-position="top" @submit.prevent>
         <el-form-item label="名称"><el-input v-model="proxyForm.name" placeholder="例如：香港线路" maxlength="40" /></el-form-item>
-        <el-form-item label="代理地址"><el-input v-model="proxyForm.address" class="mono-input" placeholder="socks5://127.0.0.1:1080" /><small class="form-tip">支持 http://、https://、socks5://，需要包含端口；暂不支持账号密码。</small></el-form-item>
+        <el-form-item label="代理地址"><el-input v-model="proxyForm.address" class="mono-input" placeholder="socks5://127.0.0.1:1080" /><small class="form-tip">支持 http://、https://、socks5://，需要包含端口。粘贴 user:pass@host 形式会自动拆出账号密码。</small></el-form-item>
+        <div class="proxy-auth-fields">
+          <el-form-item label="用户名"><el-input v-model="proxyForm.username" placeholder="不需要认证就留空" autocomplete="off" /></el-form-item>
+          <el-form-item label="密码">
+            <el-input v-model="proxyForm.password" type="password" show-password autocomplete="new-password" :disabled="proxyForm.clearPassword" :placeholder="proxyForm.clearPassword ? '保存后清除' : proxyForm.hadPassword ? '已设置，留空不修改' : '不需要认证就留空'" />
+          </el-form-item>
+        </div>
+        <p v-if="proxyForm.hadPassword" class="proxy-clear">
+          <template v-if="proxyForm.clearPassword">保存后会清除原密码。<el-button link type="primary" size="small" @click="proxyForm.clearPassword = false">撤销</el-button></template>
+          <el-button v-else link type="danger" size="small" @click="proxyForm.clearPassword = true; proxyForm.password = ''">清除已保存的密码</el-button>
+        </p>
       </el-form>
       <template #footer><el-button @click="proxyDialog = false">取消</el-button><el-button type="primary" :loading="proxySaving" :disabled="!proxyForm.name.trim() || !proxyForm.address.trim()" @click="saveProxy">保存代理</el-button></template>
     </el-dialog>
@@ -104,17 +114,20 @@ function rememberSettings(value: SystemSettings) {
 }
 
 const proxies = ref<ModelProxy[]>([]), proxiesLoaded = ref(true), proxyDialog = ref(false), proxySaving = ref(false)
-const proxyForm = reactive({ id: '', name: '', address: '' })
+const proxyForm = reactive({ id: '', name: '', address: '', username: '', password: '', hadPassword: false, clearPassword: false })
 const proxyTests = reactive<Record<string, Partial<ProxyTestResult> & { testing?: boolean }>>({})
 async function loadProxies() {
   try { proxies.value = await api.system.proxies.list(); proxiesLoaded.value = true }
   catch (error) { proxiesLoaded.value = false; ElMessage.error('代理列表读取失败：' + (error instanceof Error ? error.message : '')) }
 }
-function openProxy(p?: ModelProxy) { Object.assign(proxyForm, p ? { id: p.id, name: p.name, address: p.address } : { id: '', name: '', address: '' }); proxyDialog.value = true }
+function openProxy(p?: ModelProxy) {
+  Object.assign(proxyForm, { id: p?.id || '', name: p?.name || '', address: p?.address || '', username: p?.username || '', password: '', hadPassword: !!p?.hasPassword, clearPassword: false })
+  proxyDialog.value = true
+}
 async function saveProxy() {
   proxySaving.value = true
   try {
-    await api.system.proxies.save({ id: proxyForm.id || undefined, name: proxyForm.name.trim(), address: proxyForm.address.trim() })
+    await api.system.proxies.save({ id: proxyForm.id || undefined, name: proxyForm.name.trim(), address: proxyForm.address.trim(), username: proxyForm.username.trim(), password: proxyForm.clearPassword ? '' : proxyForm.password, clearPassword: proxyForm.clearPassword })
     if (proxyForm.id) delete proxyTests[proxyForm.id]
     proxyDialog.value = false
     await loadProxies()
@@ -167,10 +180,15 @@ useAdminEvents(['system_settings'], async () => {
 .proxy-row:first-child { border-top: 0; padding-top: 0; }
 .proxy-name { display: flex; flex-direction: column; min-width: 0; }
 .proxy-name strong { font-weight: 500; }
-.proxy-name small { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.proxy-meta { display: flex; gap: 8px; min-width: 0; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.proxy-address { overflow: hidden; text-overflow: ellipsis; }
+.proxy-auth { flex: none; }
 .proxy-result { min-width: 0; }
 .proxy-actions { display: flex; align-items: center; gap: 4px; }
 .proxy-actions .el-button + .el-button { margin-left: 4px; }
 .proxy-empty { margin: 0; font-size: 13px; }
+.proxy-auth-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.proxy-clear { margin: -8px 0 0; color: var(--muted); font-size: 12px; }
+@media (max-width: 520px) { .proxy-auth-fields { grid-template-columns: 1fr; } }
 @media (max-width: 640px) { .proxy-row { grid-template-columns: minmax(0, 1fr) auto; } .proxy-actions { grid-column: 1 / -1; } }
 </style>

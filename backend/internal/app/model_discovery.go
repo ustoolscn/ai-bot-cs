@@ -73,22 +73,19 @@ func (a *App) discoverModels(c *gin.Context) {
 			return
 		}
 	}
-	var proxy string
-	if proxyID != "" {
-		if uuid.Validate(proxyID) != nil || a.db.QueryRow(c, "SELECT address FROM model_proxies WHERE id=$1", proxyID).Scan(&proxy) != nil {
-			fail(c, 400, "invalid_proxy", "代理无效或不存在")
-			return
-		}
-	}
-	tr, err := modelTransport(proxy)
-	if err != nil {
-		fail(c, 400, "invalid_proxy", "代理配置无效")
+	if proxyID != "" && uuid.Validate(proxyID) != nil {
+		fail(c, 400, "invalid_proxy", "代理无效或不存在")
 		return
 	}
-	if proxy != "" {
-		defer tr.CloseIdleConnections()
+	tr, err := a.proxyTransport(c, proxyID)
+	if err != nil {
+		fail(c, 400, "invalid_proxy", "代理配置无效或不存在")
+		return
 	}
 	client := &http.Client{Transport: tr, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	if proxyID != "" {
+		defer client.CloseIdleConnections()
+	}
 	models, err := fetchModelIDs(c.Request.Context(), client, target.BaseURL, key, target.Provider)
 	if err != nil {
 		fail(c, 502, "model_discovery_failed", err.Error())

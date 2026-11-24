@@ -2,7 +2,7 @@ import { ApiError, mockFallbackEnabled, request } from './client'
 import { connection } from '@/utils/connection'
 import { modelProviderPresets } from '@/utils/model-providers'
 import { mockBots, mockConversations, mockHumanOperators, mockKnowledgeBases, mockMessages, mockModels, mockOverview, mockProxies, mockCosts } from '@/mock/data'
-import type { ActiveTask, Bot, Conversation, KnowledgeBase, KnowledgeDocument, MessageAttachment, MessageTimeline, MessageRecord, HandoffStatus, HumanOperator, ModelKind, ModelProfile, ModelProviderId, ModelProviderPreset, ModelProxy, WebSearchMode, ModelTestInput, ProxyTestResult, ModelTestResult, CostRange, CostSummary, Status, SystemOverview, SystemSettings } from '@/types'
+import type { ActiveTask, Bot, Conversation, KnowledgeBase, KnowledgeDocument, MessageAttachment, MessageTimeline, MessageRecord, HandoffStatus, HumanOperator, ModelKind, ModelProfile, ModelProviderId, ModelProviderPreset, ModelProxy, ModelProxyInput, WebSearchMode, ModelTestInput, ProxyTestResult, ModelTestResult, CostRange, CostSummary, Status, SystemOverview, SystemSettings } from '@/types'
 import { createEmptyOverview } from '@/utils/overview'
 
 type BackendBot = { id: string; name: string; appId: string; enabled: boolean; status: string; lastEventAt?: string; hasSecret: boolean; callbackUrl?: string }
@@ -189,7 +189,7 @@ export const api = {
     getSettings: () => request<SystemSettings>({ method: 'GET', url: '/system/settings' }),
     proxies: {
       list: () => request<ModelProxy[]>({ url: '/system/proxies' }, mockProxies),
-      save: (proxy: Partial<ModelProxy>) => request<{ id: string }>({ method: proxy.id ? 'PUT' : 'POST', url: proxy.id ? `/system/proxies/${proxy.id}` : '/system/proxies', data: { name: proxy.name, address: proxy.address } }),
+      save: (proxy: ModelProxyInput) => request<{ id: string }>({ method: proxy.id ? 'PUT' : 'POST', url: proxy.id ? `/system/proxies/${proxy.id}` : '/system/proxies', data: { name: proxy.name, address: proxy.address, username: proxy.username, password: proxy.password || undefined, clearPassword: proxy.clearPassword || undefined } }),
       remove: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/system/proxies/${id}` }),
       test: (id: string) => request<ProxyTestResult>({ method: 'POST', url: `/system/proxies/${id}/test`, timeout: 15000 }),
     },
