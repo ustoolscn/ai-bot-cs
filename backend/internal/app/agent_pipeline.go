@@ -15,6 +15,14 @@ import (
 	"ai-bot/backend/internal/openai"
 )
 
+// Use the delivery time for sent replies. A reply still in the outbox also
+// reserves its spot, so two adjacent turns do not enqueue the same report.
+const recentStatusSQL = `SELECT EXISTS(SELECT FROM messages m JOIN outbox_tasks o ON o.message_id=m.id
+ WHERE m.conversation_id=$1 AND m.contains_site_status AND NOT m.context_excluded
+ AND ((m.status='sent' AND o.status='sent' AND o.updated_at>now()-interval '5 minutes')
+ OR (m.status='pending' AND o.status IN ('pending','processing')
+ AND m.event_at>now()-interval '5 minutes' AND (m.reply_deadline IS NULL OR m.reply_deadline>now()))))`
+
 // agentStep is one recorded step of an agent run (shown in the admin UI).
 type agentStep struct {
 	moderated error
@@ -87,6 +95,19 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.finishInbox(ctx, j.TaskID, "skipped", nil)
 	}
 	originalQuestion := segmentText(segments)
+	var recentStatus bool
+	if j.ConversationType == "group" {
+		if err = a.db.QueryRow(ctx, recentStatusSQL, j.ConversationID).Scan(&recentStatus); err != nil {
+			return a.retryInbox(ctx, j, err)
+		}
+		if recentStatus && len(segments) == 1 && explicitStatusQuestion(originalQuestion) {
+			finishCheck("本群近期已有网站状态回复", nil)
+			if err = a.finishInbox(ctx, j.TaskID, "skipped", nil); err != nil {
+				return err
+			}
+			return a.scheduleProcessingAckRetraction(ctx, j.BotID, j.ConversationID, j.PlatformMessageID)
+		}
+	}
 	var descriptions, imageIDs []string
 	for _, part := range segments {
 		sub := j
@@ -222,7 +243,7 @@ func (a *App) processInbox(ctx context.Context) error {
 	}
 
 	ctx = context.WithValue(ctx, usageScopeKey{}, usageScope{run: runID, message: j.MessageID, conversation: j.ConversationID})
-	rt := &turnRuntime{chatProfileID: profileID, question: originalQuestion, settings: settings, botID: j.BotID, conversationID: j.ConversationID, conversationType: j.ConversationType,
+	rt := &turnRuntime{recentStatus: recentStatus, chatProfileID: profileID, question: originalQuestion, settings: settings, botID: j.BotID, conversationID: j.ConversationID, conversationType: j.ConversationType,
 		senderID: senderID, senderName: senderName, messageID: j.MessageID, runID: runID}
 	rt.knowledgeBases = a.conversationKnowledgeBases(ctx, j.ConversationID)
 	if settings.KnowledgeBaseIDs != nil {
@@ -335,7 +356,14 @@ func (a *App) processInbox(ctx context.Context) error {
 	if err = tx.QueryRow(ctx, `SELECT `+visibleContextSQL+`, `+alreadyAnsweredSQL+` FROM messages m WHERE m.id=$1`, j.MessageID).Scan(&visible, &alreadyReplied); err != nil {
 		return a.retryInbox(ctx, j, err)
 	}
-	if !visible || alreadyReplied {
+	containsStatus := !rt.handoff && (rt.statusMetricsUsed || (rt.statusImage != nil && rt.screenshot == nil))
+	var duplicateStatus bool
+	if containsStatus && j.ConversationType == "group" {
+		if err = tx.QueryRow(ctx, recentStatusSQL, j.ConversationID).Scan(&duplicateStatus); err != nil {
+			return a.retryInbox(ctx, j, err)
+		}
+	}
+	if !visible || alreadyReplied || duplicateStatus {
 		_, err = tx.Exec(ctx, `WITH closed AS (UPDATE agent_runs SET status='skipped',completed_at=now() WHERE id=$2)
             UPDATE inbox_tasks SET status='skipped',updated_at=now() WHERE id=$1`, j.TaskID, runID)
 		if err != nil {
@@ -384,7 +412,7 @@ func (a *App) processInbox(ctx context.Context) error {
 		}
 		partsJSON, _ := json.Marshal(mediaParts)
 		var outID string
-		err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,content,parts,reply_to_message_id,status,event_at,reply_deadline,handoff_id) VALUES('qq',$1,$2,'outbound','AI_RESPONSE',$3,$4::jsonb,$5,'pending',now()+($6 * interval '1 millisecond'),$7,(SELECT id FROM handoffs WHERE message_id=$8 ORDER BY created_at DESC LIMIT 1)) RETURNING id::text`, j.BotID, j.ConversationID, part, string(partsJSON), j.PlatformMessageID, i, j.Deadline, j.MessageID).Scan(&outID)
+		err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,content,parts,reply_to_message_id,status,event_at,reply_deadline,contains_site_status,handoff_id) VALUES('qq',$1,$2,'outbound','AI_RESPONSE',$3,$4::jsonb,$5,'pending',now()+($6 * interval '1 millisecond'),$7,$9,(SELECT id FROM handoffs WHERE message_id=$8 ORDER BY created_at DESC LIMIT 1)) RETURNING id::text`, j.BotID, j.ConversationID, part, string(partsJSON), j.PlatformMessageID, i, j.Deadline, j.MessageID, containsStatus && (rt.statusMetricsUsed || i == 0)).Scan(&outID)
 		if err == nil && i == 0 && rt.quoteTarget != "" {
 			_, err = tx.Exec(ctx, "UPDATE messages SET qq_quote_target=$2 WHERE id=$1", outID, rt.quoteTarget)
 		}
@@ -686,6 +714,7 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 		if s.LiveData.Enabled {
 			status, err := a.turnStatus(ctx, rt)
 			if err == nil && status.ServiceStatus["hour"] != nil && toolSelected(rt, "get_service_status") {
+				rt.statusMetricsUsed = true
 				w := status.ServiceStatus["hour"]
 				live += "\n本次查询的全站小时统计：" + jsonString(map[string]any{"generated_at": w.GeneratedAt, "overall": w.Overall.ServiceMetrics})
 			} else {
@@ -706,6 +735,9 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 	systems := agent.BuildSystemPrompt(agent.PromptInput{Settings: s, ConversationType: rt.conversationType, BusinessPrompt: in.businessPrompt,
 		SenderName: rt.senderName, SenderIsStaff: in.senderIsStaff, Now: time.Now().In(chinaLocation), Summary: in.summary, Memories: in.memories,
 		Knowledge: in.knowledge, LiveSnapshot: live, Skills: skills, ToolsAvailable: len(tools) > 0, WebSearchAvailable: in.client.HasWebSearch()})
+	if rt.recentStatus {
+		systems = append(systems, "本群已有近期网站状态答复。若被追问状态，简短提示查看群里的状态消息。不要重复指标、发状态图、调用状态技能或用联网搜索重新查状态。其他问题照常回答。")
+	}
 	if requireSearch {
 		systems = append(systems, "当前消息需要公开实时信息。本轮请使用已开启的联网搜索，依据实际检索结果回答当前问题。")
 	}

@@ -10,6 +10,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -55,7 +56,11 @@ func TestBlacklistIsolationAndOfficialKick(t *testing.T) {
 	}
 	persist := func(eventID, eventType, pid, group, user string) {
 		t.Helper()
-		raw, _ := json.Marshal(map[string]any{"id": eventID, "op": 0, "t": eventType, "d": map[string]any{"id": pid, "group_openid": group, "member_openid": user, "author": map[string]string{"member_openid": user}, "content": "黑名单测试内容"}})
+		author := map[string]string{"member_openid": user}
+		if eventType == "C2C_MESSAGE_CREATE" {
+			author = map[string]string{"user_openid": user}
+		}
+		raw, _ := json.Marshal(map[string]any{"id": eventID, "op": 0, "t": eventType, "d": map[string]any{"id": pid, "group_openid": group, "member_openid": user, "author": author, "content": "黑名单测试内容"}})
 		env, msg, e := qq.Parse(raw, botID)
 		if e != nil {
 			t.Fatal(e)
@@ -195,4 +200,49 @@ func TestBlacklistIsolationAndOfficialKick(t *testing.T) {
 	if !otherExcluded {
 		t.Fatal("bot-wide block did not exclude second group")
 	}
+
+	persist("private1", "C2C_MESSAGE_CREATE", "dm1", "", "private-user")
+	var dmID, dmConv string
+	if err := pool.QueryRow(ctx, "SELECT id::text,conversation_id::text FROM messages WHERE platform_message_id='dm1'").Scan(&dmID, &dmConv); err != nil {
+		t.Fatal(err)
+	}
+	checkSender := func(mid, cid, kind, sender string, ids ...string) {
+		t.Helper()
+		detail := dataMap(t, requestJSON(t, client, "GET", server.URL+"/api/messages/"+mid, nil, 200))
+		var row map[string]any
+		for _, item := range dataSlice(t, requestJSON(t, client, "GET", server.URL+"/api/messages", nil, 200)) {
+			m := item.(map[string]any)
+			if m["id"] == mid {
+				row = m
+				break
+			}
+		}
+		for _, m := range []map[string]any{row, detail} {
+			got, ok := m["senderBlockedIds"].([]any)
+			if m["botId"] != botID || m["conversationId"] != cid || m["conversationType"] != kind || m["senderId"] != sender || !ok || len(got) != len(ids) {
+				t.Fatalf("incorrect sender fields: %#v", m)
+			}
+			for _, id := range ids {
+				if !slices.Contains(got, any(id)) {
+					t.Fatalf("missing block %s in %v", id, got)
+				}
+			}
+		}
+	}
+	checkSender(dmID, dmConv, "private", "private-user")
+	local := dataMap(t, requestJSON(t, client, "POST", server.URL+"/api/blocked-users", input, 200))
+	checkSender(mid, convID, "group", "member", globalID, local["id"].(string))
+	dmBlock := dataMap(t, requestJSON(t, client, "POST", server.URL+"/api/blocked-users", map[string]any{"botId": botID, "conversationId": dmConv, "userId": "private-user", "autoKick": true}, 200))
+	if dmBlock["autoKick"] != false || dmBlock["identityType"] != "user_openid" {
+		t.Fatal(dmBlock)
+	}
+	checkSender(dmID, dmConv, "private", "private-user", dmBlock["id"].(string))
+	persist("private2", "C2C_MESSAGE_CREATE", "dm2", "", "private-user")
+	var suppressed bool
+	if err := pool.QueryRow(ctx, `SELECT context_excluded AND NOT EXISTS(SELECT FROM inbox_tasks WHERE message_id=m.id)
+		AND NOT EXISTS(SELECT FROM blacklist_actions WHERE conversation_id=m.conversation_id) FROM messages m WHERE platform_message_id='dm2'`).Scan(&suppressed); err != nil || !suppressed {
+		t.Fatal("private block did not silence sender", err)
+	}
+	requestJSON(t, client, "DELETE", server.URL+"/api/blocked-users/"+dmBlock["id"].(string), nil, 200)
+	checkSender(dmID, dmConv, "private", "private-user")
 }

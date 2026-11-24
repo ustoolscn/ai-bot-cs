@@ -49,11 +49,22 @@ func (a *App) addBlockedUser(c *gin.Context) {
 		fail(c, 500, "database_error", "保存失败")
 		return
 	}
-	var known bool
-	err = tx.QueryRow(c, `SELECT EXISTS(SELECT 1 FROM conversation_members cm JOIN conversations cc ON cc.id=cm.conversation_id WHERE cc.bot_id=$1 AND cc.type='group' AND cm.platform_user_id=$2 AND ($3='' OR cc.id::text=$3))`, in.BotID, in.UserID, in.ConversationID).Scan(&known)
-	if err != nil || !known {
-		fail(c, 400, "unknown_member", "只能选择本机器人已见过的群成员（member_openid），不能直接输入QQ号或按昵称匹配")
+	var hasGroup, hasPrivate bool
+	err = tx.QueryRow(c, `SELECT count(*) FILTER (WHERE cc.type='group')>0, count(*) FILTER (WHERE cc.type='private')>0
+		FROM conversation_members cm JOIN conversations cc ON cc.id=cm.conversation_id
+		WHERE cc.bot_id=$1 AND cm.platform_user_id=$2 AND ($3='' OR cc.id::text=$3)`, in.BotID, in.UserID, in.ConversationID).Scan(&hasGroup, &hasPrivate)
+	if err != nil {
+		fail(c, 500, "database_error", "读取会话成员失败")
 		return
+	}
+	if !hasGroup && !hasPrivate {
+		fail(c, 400, "unknown_member", "只能选择本机器人在指定范围内已见过的发送者")
+		return
+	}
+	identityType := "member_openid"
+	if !hasGroup {
+		autoKick = false
+		identityType = "user_openid"
 	}
 	var id string
 	err = tx.QueryRow(c, `SELECT id::text FROM blocked_users WHERE bot_id=$1 AND platform_user_id=$2 AND conversation_id IS NOT DISTINCT FROM $3::uuid LIMIT 1`, in.BotID, in.UserID, nullString(in.ConversationID)).Scan(&id)
@@ -94,7 +105,7 @@ func (a *App) addBlockedUser(c *gin.Context) {
 		return
 	}
 	a.audit(c, "blacklist.add", "blocked_user", id, in)
-	ok(c, gin.H{"id": id, "autoKick": autoKick, "identityType": "member_openid"})
+	ok(c, gin.H{"id": id, "autoKick": autoKick, "identityType": identityType})
 }
 
 func (a *App) deleteBlockedUser(c *gin.Context) {

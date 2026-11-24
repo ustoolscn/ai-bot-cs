@@ -22,31 +22,33 @@ import (
 
 // turnRuntime is the per-turn state tools operate on.
 type turnRuntime struct {
-	chatProfileID    string
-	statusFocus      string
-	settings         agent.Settings
-	botID            string
-	conversationID   string
-	conversationType string
-	question         string
-	senderID         string
-	senderName       string
-	messageID        string
-	runID            string
-	knowledgeBases   []string
-	embeddings       queryEmbeddings
-	snapshot         newapi.Snapshot
-	liveStatus       *newapi.Snapshot
-	snapshotOK       bool
-	snapshotStale    bool
-	dryRun           bool // evaluation: no side effects
-	handoff          bool
-	hits             []map[string]any
-	toolsUsed        []string
-	quoteTarget      string
-	screenshot       *domain.ContentPart
-	statusImage      *domain.ContentPart
-	publishedURL     string
+	chatProfileID     string
+	recentStatus      bool
+	statusMetricsUsed bool
+	statusFocus       string
+	settings          agent.Settings
+	botID             string
+	conversationID    string
+	conversationType  string
+	question          string
+	senderID          string
+	senderName        string
+	messageID         string
+	runID             string
+	knowledgeBases    []string
+	embeddings        queryEmbeddings
+	snapshot          newapi.Snapshot
+	liveStatus        *newapi.Snapshot
+	snapshotOK        bool
+	snapshotStale     bool
+	dryRun            bool // evaluation: no side effects
+	handoff           bool
+	hits              []map[string]any
+	toolsUsed         []string
+	quoteTarget       string
+	screenshot        *domain.ContentPart
+	statusImage       *domain.ContentPart
+	publishedURL      string
 }
 
 type builtinTool struct {
@@ -321,6 +323,7 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		if err != nil {
 			return "", err
 		}
+		rt.statusMetricsUsed = true
 		result["queriedAt"] = status.FetchedAt
 		result["possiblyStale"] = time.Since(time.Unix(w.GeneratedAt, 0)) >= 24*time.Hour
 		return jsonString(result), nil
@@ -340,6 +343,7 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 			}
 			monitors = append(monitors, map[string]any{"category": m.Category, "name": m.Name, "status": newapi.MonitorStatusText(m.Status), "uptime": m.Uptime})
 		}
+		rt.statusMetricsUsed = len(monitors) > 0 || rt.statusMetricsUsed
 		return jsonString(map[string]any{"groups": rt.snapshot.GroupList(), "status": monitors, "dataTime": status.FetchedAt, "groupsDataTime": rt.snapshot.FetchedAt, "possiblyStale": false}), nil
 	case "get_announcements":
 		if !rt.snapshotOK {
@@ -463,6 +467,9 @@ func firstNonEmpty(vals ...string) string {
 }
 
 func toolSelected(rt *turnRuntime, name string) bool {
+	if rt.recentStatus && isStatusTool(name) {
+		return false
+	}
 	if name == "quote_previous_reply" && rt.conversationType == "group" {
 		return false
 	}

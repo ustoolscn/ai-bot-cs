@@ -156,8 +156,14 @@ export interface MessageRecord {
   id: string
   time: string
   botName: string
+  botId?: string
   conversationName: string
+  conversationId?: string
+  conversationType?: 'group' | 'private'
   sender: string
+  senderId?: string
+  /** 当前对这个发送者生效的黑名单记录（本群 + 机器人全局），空表示没拉黑 */
+  senderBlockedIds?: string[]
   question: string
   answer: string
   eventType: string

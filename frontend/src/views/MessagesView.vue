@@ -19,7 +19,7 @@
         <el-table-column label="时间" width="168"><template #default="{ row }"><span class="num" style="white-space: nowrap">{{ row.time }}</span></template></el-table-column>
         <el-table-column label="消息" min-width="260"><template #default="{ row }"><div class="message-preview"><strong>{{ row.question }}</strong><span>{{ row.attachments?.length ? `包含 ${row.attachments.length} 个附件 · ` : '' }}{{ row.answer || '未生成回复' }}</span></div></template></el-table-column>
         <el-table-column label="机器人 / 会话" min-width="150"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.botName }}</strong><span>{{ row.conversationName }}</span></div></template></el-table-column>
-        <el-table-column prop="sender" label="发送者" width="96" />
+        <el-table-column label="发送者" width="110"><template #default="{ row }"><div class="sender-cell"><span class="truncate" :title="row.sender">{{ row.sender }}</span><i v-if="row.senderBlockedIds?.length" class="sender-blocked" title="已拉黑" /></div></template></el-table-column>
         <el-table-column label="模型" width="130"><template #default="{ row }"><div class="stacked-cell"><strong class="truncate">{{ row.model || '—' }}</strong><span>{{ row.tokens }} tokens</span></div></template></el-table-column>
         <el-table-column label="知识命中" width="90" align="right"><template #default="{ row }"><span class="num">{{ row.knowledgeHits }}</span></template></el-table-column>
         <el-table-column label="耗时" width="90" align="right"><template #default="{ row }"><span class="num">{{ formatDuration(row.latency) }}</span></template></el-table-column>
@@ -33,7 +33,11 @@
           <div class="md-who">
             <StatusBadge v-bind="messageVerdict(selected)" />
             <strong>{{ selected.sender }}</strong>
-            <span>{{ selected.conversationName }} · {{ selected.botName }}</span>
+            <span class="md-where">{{ selected.conversationName }} · {{ selected.botName }}</span>
+            <Transition name="md-swap" mode="out-in">
+              <span v-if="senderBlocked" key="blocked" class="md-block-state"><span class="pill bad">已拉黑</span><el-button link type="primary" :loading="unblocking" @click="unblockSender">解除</el-button></span>
+              <el-button v-else-if="canBlock" key="block" class="md-block-btn" link type="danger" @click="blockDialog = true">拉黑发送者</el-button>
+            </Transition>
           </div>
           <p v-if="selected.status === 'merged'" class="md-merged">同一个人连续发了几条，这条已合并到后面的消息里，由最后一条一起回复。</p>
           <dl class="md-facts">
@@ -106,6 +110,7 @@
         </el-collapse>
       </div>
     </el-drawer>
+    <BlockUserDialog v-if="selected" v-model="blockDialog" :bot-id="selected.botId || ''" :bot-name="selected.botName" :conversation-id="selected.conversationId || ''" :conversation-name="selected.conversationName" :is-group="selected.conversationType !== 'private'" :user-id="selected.senderId || ''" :display-name="selected.sender" :quote="selected.question" @blocked="refreshSelected" />
   </div>
 </template>
 
@@ -116,7 +121,9 @@ import { CopyDocument, Download, Refresh, Search } from '@element-plus/icons-vue
 import { connection } from '@/utils/connection'
 import StageBars from '@/components/fx/StageBars.vue'
 import EmptyState from '@/components/EmptyState.vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { agentApi } from '@/api/agent'
+import BlockUserDialog from '@/components/conversation/BlockUserDialog.vue'
 import { api } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
@@ -181,6 +188,35 @@ async function open(row: MessageRecord) {
   catch (error) { if (!connection.lost) ElMessage.error(error instanceof Error ? error.message : '读取消息详情失败') }
   finally { detailLoading.value = false }
 }
+// 在消息里直接拉黑发送者：先看他说了什么，再决定要不要拉黑。
+const blockDialog = ref(false)
+const unblocking = ref(false)
+const senderBlocked = computed(() => Boolean(selected.value?.senderBlockedIds?.length))
+const canBlock = computed(() => {
+  const m = selected.value
+  return Boolean(m?.senderId && m.botId && m.conversationId)
+})
+async function refreshSelected() {
+  const id = selected.value?.id
+  if (!id) return
+  try {
+    const detail = await api.messages.detail(id)
+    if (selected.value?.id === id) selected.value = detail
+    await load(true)
+  } catch { /* 列表会随管理事件刷新 */ }
+}
+async function unblockSender() {
+  const m = selected.value
+  const ids = m?.senderBlockedIds || []
+  if (!m || !ids.length) return
+  try {
+    await ElMessageBox.confirm(`解除对“${m.sender}”的拉黑？${ids.length > 1 ? '他同时在本群和机器人范围的黑名单里，会一起解除。' : ''}已被踢出的人不会自动拉回群。`, '解除拉黑', { confirmButtonText: '解除拉黑', cancelButtonText: '取消', type: 'warning' })
+  } catch { return }
+  unblocking.value = true
+  try { await Promise.all(ids.map(id => agentApi.blacklist.remove(id))); ElMessage.success('已解除'); await refreshSelected() }
+  catch (e) { ElMessage.error(e instanceof Error ? e.message : '解除失败') }
+  finally { unblocking.value = false }
+}
 function duration(value: number) { return value > 0 ? formatDuration(value) : '—' }
 function previewUrls(parts?: MessageAttachment[]) { return (parts || []).flatMap(part => part.previewUrl ? [part.previewUrl] : []) }
 function roleText(role: string) { return ({ system: '系统提示', developer: '开发者', user: '用户', assistant: '助手', tool: '工具结果' } as Record<string, string>)[role] || role }
@@ -214,7 +250,7 @@ const cacheRate = computed(() => selected.value?.cacheHitRate != null || selecte
 function formatCost(value: number) { return value >= 0.01 ? value.toFixed(4) : value.toPrecision(2) }
 async function copy(text: string) { try { await navigator.clipboard.writeText(text); ElMessage.success('已复制记录 ID') } catch { ElMessage.error('复制失败') } }
 function exportRows() { const csv = ['时间,机器人,会话,问题,结论,Token', ...filtered.value.map(m => `"${m.time}","${m.botName}","${m.conversationName}","${m.question.replaceAll('"','""')}","${messageVerdict(m).text || statusText(m.status)}","${m.tokens}"`)].join('\n'); const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv'})); a.download='messages.csv'; a.click(); URL.revokeObjectURL(a.href); ElMessage.success('消息记录已导出') }
-useAdminEvents(['messages','message_retractions','agent_runs','model_calls','tool_calls','outbox_tasks','inbox_tasks','message_stages','group_reviews'], async () => {
+useAdminEvents(['messages','message_retractions','agent_runs','model_calls','tool_calls','outbox_tasks','inbox_tasks','message_stages','group_reviews','blocked_users'], async () => {
   await load(true)
   const id = selected.value?.id
   if (drawer.value && id) {
@@ -230,7 +266,13 @@ useAdminEvents(['messages','message_retractions','agent_runs','model_calls','too
 .md-head { display: flex; flex-direction: column; gap: 12px; }
 .md-who { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .md-who strong { font-size: 16px; font-weight: 600; }
-.md-who span:last-child { overflow: hidden; color: var(--muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.md-who .md-where { flex: 1; min-width: 0; overflow: hidden; color: var(--muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.md-block-state { display: inline-flex; flex-shrink: 0; align-items: center; gap: 8px; }
+.md-block-btn { flex-shrink: 0; height: auto; padding: 0; font-size: 13px; }
+.md-swap-enter-active, .md-swap-leave-active { transition: opacity .16s var(--ease), transform .16s var(--ease); }
+.md-swap-enter-from, .md-swap-leave-to { opacity: 0; transform: translateY(-2px); }
+.sender-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sender-blocked { flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--danger); }
 .md-facts { display: grid; grid-template-columns: 1.4fr .8fr 1.2fr .8fr; margin: 0; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .md-facts > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 8px 12px; border-left: 1px solid var(--line); }
 .md-facts > div:first-child { border-left: 0; }
@@ -275,5 +317,5 @@ useAdminEvents(['messages','message_retractions','agent_runs','model_calls','too
 .context-message-item { grid-template-columns: 88px minmax(0, 1fr); }
 .context-message-item > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 640px) { .md-facts, .md-tokens { grid-template-columns: 1fr 1fr; } .md-facts > div:nth-child(3) { border-left: 0; } }
-@media (prefers-reduced-motion: reduce) { .md-meter b { transition: none; } .md-sending { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .md-meter b, .md-swap-enter-active, .md-swap-leave-active { transition: none; } .md-sending { animation: none; } }
 </style>

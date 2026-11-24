@@ -65,23 +65,7 @@
     </el-table>
   </section>
 
-  <el-dialog v-model="blockDialog" :title="`拉黑 ${blockTarget?.displayName || blockTarget?.userId || ''}`" width="460px" append-to-body>
-    <p class="muted" style="margin-bottom: 16px">拉黑后，机器人不再回复他，他的发言也不会进入上下文、记忆和学习。</p>
-    <el-form label-position="top">
-      <el-form-item label="拉黑范围">
-        <el-radio-group v-model="blockForm.scope">
-          <el-radio value="group">只在本群</el-radio>
-          <el-radio value="bot">{{ botName || '这个机器人' }} 所在的所有群</el-radio>
-        </el-radio-group>
-      </el-form-item>
-      <el-form-item label="原因（选填）"><el-input v-model="blockForm.reason" type="textarea" :rows="2" maxlength="1000" placeholder="例如：发广告、骚扰其他群友" /></el-form-item>
-      <div class="setting-row" style="padding: 0">
-        <div><strong>发现时自动踢出群</strong><span>需要群主给机器人开启“移除群成员”权限，没有权限时会在黑名单里显示失败</span></div>
-        <el-switch v-model="blockForm.autoKick" />
-      </div>
-    </el-form>
-    <template #footer><el-button @click="blockDialog = false">取消</el-button><el-button type="danger" :loading="blocking" @click="confirmBlock">确认拉黑</el-button></template>
-  </el-dialog>
+  <BlockUserDialog v-model="blockDialog" :bot-id="botId" :bot-name="botName" :conversation-id="conversationId" :user-id="blockTarget?.userId || ''" :display-name="blockTarget?.displayName" @blocked="onBlocked" />
 
   <el-dialog v-model="memDialog" :title="`${memUser} 的记忆`" width="520px" append-to-body>
     <div class="record-list">
@@ -92,10 +76,11 @@
 
 <script setup lang="ts">
 import { useAdminEvents } from '@/composables/useAdminEvents'
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import BlockUserDialog from './BlockUserDialog.vue'
 import { agentApi, formatTime, type Member, type Memory, type StaffLearning } from '@/api/agent'
 
 const props = defineProps<{ conversationId: string; conversationName: string; isGroup: boolean; botId: string; botName: string }>()
@@ -176,26 +161,16 @@ function openCandidates() {
 }
 
 const blockDialog = ref(false)
-const blocking = ref(false)
 const blockTarget = ref<Member | null>(null)
-const blockForm = reactive({ scope: 'group' as 'group' | 'bot', reason: '', autoKick: true })
 async function reloadMembers() { members.value = await agentApi.members.list(props.conversationId) }
 function openBlock(row: Member) {
   if (!props.botId) { ElMessage.error('找不到这个群所属的机器人，请刷新后再试'); return }
   blockTarget.value = row
-  Object.assign(blockForm, { scope: 'group', reason: '', autoKick: true })
   blockDialog.value = true
 }
-async function confirmBlock() {
-  if (!blockTarget.value || !props.botId) return
-  blocking.value = true
-  try {
-    const res = await agentApi.blacklist.add({ botId: props.botId, conversationId: blockForm.scope === 'group' ? props.conversationId : undefined, userId: blockTarget.value.userId, reason: blockForm.reason.trim() || undefined, autoKick: blockForm.autoKick })
-    ElMessage.success(res.autoKick ? '已拉黑，正在尝试踢出群' : '已拉黑')
-    blockDialog.value = false
-    await reloadMembers()
-    void loadLearning()
-  } catch (e) { ElMessage.error(e instanceof Error ? e.message : '拉黑失败') } finally { blocking.value = false }
+async function onBlocked() {
+  await reloadMembers()
+  void loadLearning()
 }
 async function unblock(row: Member) {
   const ids = row.blockedUserIds || []
