@@ -160,6 +160,7 @@ export const api = {
   },
   conversations: {
     syncName: (id: string) => request<{ name: string }>({ method: 'POST', url: `/conversations/${id}/name/sync`, timeout: 45000 }),
+    remove: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/conversations/${id}` }),
     list: () => loadOrMock(async () => (await request<BackendConversation[]>({ url: '/conversations' })).map(mapConversation), mockConversations),
     detail: (id: string) => request<BackendConversation & { knowledgeBaseIds: string[] }>({ url: `/conversations/${id}` }),
     save: (id: string, data: Partial<Conversation>) => request<{ id: string }>({ method: 'PUT', url: `/conversations/${id}`, data: { name: data.name, enabled: data.triggerMode !== 'disabled', triggerMode: data.triggerMode === 'disabled' ? 'mention_only' : data.triggerMode, contextLimit: data.contextLimit, serviceId: data.serviceId, systemPrompt: data.systemPrompt || '', chatProfileId: data.chatProfileId || '', knowledgeBaseIds: data.knowledgeBaseIds || [] } }, { id }),

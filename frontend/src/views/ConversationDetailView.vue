@@ -3,6 +3,7 @@
     <PageHeader :title="conversation?.name || '会话'" :description="summary" :back="{ label: '群与会话', to: { name: 'conversations' } }">
       <el-button v-if="conversation?.type === 'group'" :icon="Refresh" :loading="syncingName" @click="syncName">同步群名</el-button>
       <el-button :icon="ChatLineSquare" @click="$router.push('/messages')">消息记录</el-button>
+      <el-button v-if="conversation" :icon="Delete" type="danger" plain @click="remove">删除会话</el-button>
     </PageHeader>
 
     <div v-if="conversation" class="detail-layout">
@@ -27,8 +28,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChatLineSquare, Refresh } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ChatLineSquare, Delete, Refresh } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
 import { useAdminEvents } from '@/composables/useAdminEvents'
 import PageHeader from '@/components/PageHeader.vue'
@@ -87,6 +88,19 @@ async function syncName() {
     conversation.value.name = name
     ElMessage.success(`已同步群名：${name}`)
   } catch (e) { ElMessage.error(e instanceof Error ? e.message : '群名同步失败') } finally { syncingName.value = false }
+}
+async function remove() {
+  const c = conversation.value
+  if (!c) return
+  const kind = c.type === 'group' ? '群' : '私聊'
+  try {
+    await ElMessageBox.confirm(`删除后，「${c.name}」的接待设置、消息记录、成员、用户记忆和定时任务里的这个目标都会清除，无法恢复。知识库本身不受影响。机器人之后再收到这个${kind}的消息，会作为新会话重新出现，使用默认设置。`, `删除${kind}「${c.name}」？`, { confirmButtonText: '删除会话', cancelButtonText: '取消', type: 'warning', confirmButtonClass: 'el-button--danger' })
+  } catch { return }
+  try {
+    await api.conversations.remove(c.id)
+    ElMessage.success(`已删除「${c.name}」`)
+    router.replace({ name: 'conversations' })
+  } catch (e) { ElMessage.error(e instanceof Error ? e.message : '删除失败') }
 }
 onMounted(load)
 useAdminEvents(['conversations', 'bots'], load)

@@ -35,7 +35,14 @@
         <el-table-column label="成员" width="90" align="right"><template #default="{ row }"><span class="num">{{ row.memberCount }}</span></template></el-table-column>
         <el-table-column label="消息" width="100" align="right"><template #default="{ row }"><span class="num">{{ row.messageCount.toLocaleString() }}</span></template></el-table-column>
         <el-table-column prop="lastActiveAt" label="最近活跃" width="150" />
-        <el-table-column width="48" fixed="right"><template #default><el-icon class="faint"><ArrowRight /></el-icon></template></el-table-column>
+        <el-table-column width="88" fixed="right" align="right">
+          <template #default="{ row }">
+            <div class="row-tail">
+              <el-tooltip content="删除这个会话" placement="top"><button type="button" class="row-delete" :aria-label="'删除 ' + row.name" @click.stop="remove(row)"><el-icon><Delete /></el-icon></button></el-tooltip>
+              <el-icon class="faint"><ArrowRight /></el-icon>
+            </div>
+          </template>
+        </el-table-column>
       </el-table>
     </section>
   </div>
@@ -45,8 +52,8 @@
 import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowRight, ChatDotRound, Refresh, Search, User } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ArrowRight, ChatDotRound, Delete, Refresh, Search, User } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -63,6 +70,17 @@ const filtered = computed(() => conversations.value.filter(c => (!search.value |
 
 function triggerText(value: string) { return ({ mention_only: '被 @ 时回复', smart: 'AI 判断后回复', always: '每条都回复', disabled: '已停用' } as Record<string, string>)[value] || value }
 function open(row: Conversation) { router.push({ name: 'conversation', params: { id: row.id } }) }
+async function remove(row: Conversation) {
+  const kind = row.type === 'group' ? '群' : '私聊'
+  try {
+    await ElMessageBox.confirm(`删除后，「${row.name}」的接待设置、消息记录、成员、用户记忆和定时任务里的这个目标都会清除，无法恢复。知识库本身不受影响。机器人之后再收到这个${kind}的消息，会作为新会话重新出现，使用默认设置。`, `删除${kind}「${row.name}」？`, { confirmButtonText: '删除会话', cancelButtonText: '取消', type: 'warning', confirmButtonClass: 'el-button--danger' })
+  } catch { return }
+  try {
+    await api.conversations.remove(row.id)
+    conversations.value = conversations.value.filter(c => c.id !== row.id)
+    ElMessage.success(`已删除「${row.name}」`)
+  } catch (e) { ElMessage.error(e instanceof Error ? e.message : '删除失败') }
+}
 async function load() {
   loading.value = true
   try {
@@ -74,3 +92,11 @@ async function load() {
 onMounted(load)
 useAdminEvents(['conversations', 'messages', 'conversation_members', 'bots', 'knowledge_bases', 'conversation_knowledge_bases'], load)
 </script>
+
+<style scoped>
+.row-tail { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.row-delete { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--faint); cursor: pointer; opacity: 0; transition: opacity .12s var(--ease), background .12s var(--ease), color .12s var(--ease); }
+.el-table__row:hover .row-delete, .row-delete:focus-visible { opacity: 1; }
+.row-delete:hover { background: var(--danger-light); color: var(--danger); }
+@media (hover: none) { .row-delete { opacity: 1; } }
+</style>

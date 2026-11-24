@@ -22,7 +22,7 @@
 
     <el-dialog v-model="dialogVisible" :title="form.id ? '配置机器人' : '添加 QQ 机器人'" width="620px">
       <el-form label-position="top"><div class="form-grid"><el-form-item label="机器人名称"><el-input v-model="form.name" placeholder="例如：客服小Q" /></el-form-item><el-form-item label="AppID"><el-input v-model="form.appId" placeholder="QQ 开放平台 AppID" /></el-form-item></div><el-form-item label="AppSecret"><el-input v-model="secret" type="password" show-password :placeholder="form.id ? '留空则不覆盖现有密钥' : '请输入 AppSecret'" /><small class="form-tip">保存后不会再显示。修改时留空表示不变。</small></el-form-item></el-form>
-      <template #footer><el-button @click="dialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存机器人</el-button></template>
+      <template #footer><div class="dialog-foot"><el-button v-if="form.id" type="danger" link :icon="Delete" @click="remove">删除机器人</el-button><span class="spacer" /><el-button @click="dialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存机器人</el-button></div></template>
     </el-dialog>
     <el-dialog v-model="opVisible" :title="`人工客服 · ${opBot?.name || ''}`" width="560px">
       <ol class="op-steps">
@@ -47,9 +47,9 @@
 <script setup lang="ts">
 import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Connection, CopyDocument, Headset, Plus, Refresh } from '@element-plus/icons-vue'
+import { Connection, CopyDocument, Delete, Headset, Plus, Refresh } from '@element-plus/icons-vue'
 import EmptyState from '@/components/EmptyState.vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'; import StatusBadge from '@/components/StatusBadge.vue'
 import type { Bot, HumanOperator, SystemOverview } from '@/types'
@@ -63,6 +63,18 @@ function openCreate() { Object.assign(form, { id: '', name: '', appId: '', enabl
 function edit(bot: Bot) { Object.assign(form, bot); secret.value = ''; dialogVisible.value = true }
 const saving = ref(false)
 async function save() { saving.value = true; try { await api.bots.save(form, secret.value); await load(); dialogVisible.value = false; ElMessage.success('机器人配置已保存') } catch (e) { ElMessage.error(e instanceof Error ? e.message : '保存失败') } finally { saving.value = false } }
+async function remove() {
+  const name = form.name || '这个机器人'
+  try {
+    await ElMessageBox.confirm(`删除后，「${name}」不再接收和回复任何消息，它下面的群与会话、消息记录、专属 AI 客服、记忆和黑名单都会一起清除，无法恢复。共享的模型、知识库和定时任务保留。只想暂时不用的话，关掉列表里的开关即可。`, `删除机器人「${name}」？`, { confirmButtonText: '删除机器人', cancelButtonText: '取消', type: 'warning', confirmButtonClass: 'el-button--danger' })
+  } catch { return }
+  try {
+    await api.bots.remove(String(form.id))
+    dialogVisible.value = false
+    await load()
+    ElMessage.success(`已删除「${name}」`)
+  } catch (e) { ElMessage.error(e instanceof Error ? e.message : '删除失败') }
+}
 const isAbsolute = (url: string) => /^https?:\/\//.test(url)
 function copy(value: string) { navigator.clipboard?.writeText(value); ElMessage.success('回调地址已复制') }
 async function toggle(bot: Bot) { try { await api.bots.save(bot); ElMessage.success(bot.enabled ? '机器人已启用' : '机器人已停用') } catch (e) { bot.enabled = !bot.enabled; ElMessage.error(e instanceof Error ? e.message : '操作失败') } }
@@ -84,6 +96,8 @@ useAdminEvents(['bots','messages','system_alerts'], load)
 </script>
 
 <style scoped>
+.dialog-foot { display: flex; align-items: center; gap: 8px; }
+.dialog-foot .el-button + .el-button { margin-left: 0; }
 .op-steps { display: grid; gap: 6px; margin: 0 0 20px; padding-left: 20px; color: var(--text-2); font-size: 13px; line-height: 1.6; }
 .op-steps code { padding: 1px 5px; border-radius: 4px; background: var(--surface-3); font: 12px var(--font-mono); color: var(--text); }
 .op-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }

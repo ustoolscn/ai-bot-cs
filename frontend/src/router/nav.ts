@@ -22,7 +22,7 @@ export const navGroups: NavGroup[] = [
     { path: '/shared-settings', label: '通用设置', description: '回复长度、上下文与记忆、辅助模型、技能与工具库', icon: icon(Setting), keywords: '技能 工具 记忆 上下文' },
   ] },
   { title: '知识与记忆', items: [
-    { path: '/knowledge', label: '知识库', description: '文档、知识问答、待审核、没答上的问题和反馈', icon: icon(Collection), badge: 'candidates', keywords: '审核 FAQ 文档 上传 缺口' },
+    { path: '/knowledge', label: '知识库', description: '按知识库管理文档、问答和待审核的知识', icon: icon(Collection), badge: 'candidates', keywords: '审核 FAQ 文档 上传 缺口' },
     { path: '/memories', label: '用户记忆', description: '按群聊、私聊和用户查看机器人记住的信息', icon: icon(Reading) },
     { path: '/evaluation', label: '效果评测', description: '用固定问题对比改动前后的回答质量', icon: icon(DataAnalysis) },
   ] },
