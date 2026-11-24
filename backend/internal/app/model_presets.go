@@ -28,6 +28,12 @@ var modelProviderPresets = []providerPreset{
 		{"chat", "glm-5.3", "GLM-5.3", true},
 		{"chat", "glm-5.3-flash", "GLM-5.3-Flash", true},
 	}},
+	{"typesafe", "TypeSafe", "https://api.typesafe.ai/v1", "disabled", "https://console.typesafe.ai/home", []presetModel{
+		{"decision", "jev-latest", "Jev Latest", false},
+		{"decision", "jev-preview", "Jev Preview", false},
+		{"decision", "jev-1.14.0", "Jev 1.14", false},
+		{"decision", "jev-1.13.0", "Jev 1.13", false},
+	}},
 }
 
 func (in *modelInput) applyProvider() error {
@@ -35,6 +41,9 @@ func (in *modelInput) applyProvider() error {
 		in.Provider = "compatible"
 	}
 	if in.Provider == "compatible" {
+		if in.Kind == "decision" {
+			return fmt.Errorf("判断模型仅支持 TypeSafe")
+		}
 		switch in.WebSearchMode {
 		case "", "disabled", "qwen", "openai", "responses", "custom":
 			return nil
@@ -47,10 +56,10 @@ func (in *modelInput) applyProvider() error {
 			continue
 		}
 		if in.Kind == "" {
-			in.Kind = "chat"
+			in.Kind = p.Models[0].Kind
 		}
-		if in.Kind != "chat" {
-			return fmt.Errorf("该服务商仅预置对话模型")
+		if in.Kind != p.Models[0].Kind {
+			return fmt.Errorf("模型类型与服务商不匹配")
 		}
 		in.BaseURL = p.BaseURL
 		if in.Model == "" {

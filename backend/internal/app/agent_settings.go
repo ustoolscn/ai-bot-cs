@@ -114,6 +114,18 @@ func (a *App) auxModel(ctx context.Context, s agent.Settings, fallbackProfile st
 	return cl, id, err
 }
 
+// Only text reply decisions can use a structured decision model. Image judgments
+// and group moderation (which needs a written reason) use the auxiliary chat model.
+func (a *App) auxJSONModel(ctx context.Context, s agent.Settings, fallbackProfile, task string, hasImages bool) (*openai.Client, string, error) {
+	if id := s.DecisionProfileID; id != "" && (task == "reply_decision" || task == "group_moderation") {
+		cl, kind, err := a.loadModel(ctx, id)
+		if err != nil || kind == "chat" || (kind == "decision" && task == "reply_decision" && !hasImages) {
+			return cl, id, err
+		}
+	}
+	return a.auxModel(ctx, s, fallbackProfile)
+}
+
 // embeddingModel returns the profile used for memories and gap clustering.
 func (a *App) embeddingModel(ctx context.Context, s agent.Settings) (*openai.Client, string, bool) {
 	id := s.EmbeddingProfileID

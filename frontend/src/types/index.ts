@@ -14,11 +14,13 @@ export interface Bot {
   lastEventAt: string
 }
 
-export type ModelProviderId = 'compatible' | 'deepseek' | 'zhipu'
+export type ModelProviderId = 'compatible' | 'deepseek' | 'zhipu' | 'typesafe'
+/** decision = 只做判断、不生成文字的模型（目前仅 TypeSafe Jev） */
+export type ModelKind = 'chat' | 'embedding' | 'image' | 'decision'
 export type WebSearchMode = 'disabled' | 'qwen' | 'openai' | 'responses' | 'custom' | 'deepseek' | 'zhipu'
 
 export interface ModelPresetModel {
-  kind: 'chat' | 'embedding' | 'image'
+  kind: ModelKind
   model: string
   label: string
   supportsWebSearch?: boolean
@@ -37,7 +39,7 @@ export interface ModelProviderPreset {
 export interface ModelProfile {
   id: string
   name: string
-  kind: 'chat' | 'embedding' | 'image'
+  kind: ModelKind
   /** compatible = 第三方 OpenAI 兼容接口；其余为官方预置服务商 */
   provider: ModelProviderId
   model: string
@@ -97,6 +99,9 @@ export type ModelTestResult =
   | { kind: 'chat'; model: string; content: string; latencyMs: number; inputTokens: number; outputTokens: number; searched?: boolean; searchQueries?: string[]; sources?: ModelSearchSource[] }
   | { kind: 'embedding'; model: string; dimensions: number; vectorPreview: number[]; latencyMs: number }
   | { kind: 'image'; model: string; imageUrl?: string; latencyMs: number }
+  | { kind: 'decision'; model: string; content: string; decision: ModelDecision; latencyMs: number; inputTokens: number; outputTokens: number }
+
+export interface ModelDecision { reply: boolean; socialOnly: boolean; needsWebSearch: boolean }
 
 export interface Conversation {
   serviceId?: string

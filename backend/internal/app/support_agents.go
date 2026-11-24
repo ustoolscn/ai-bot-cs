@@ -99,7 +99,7 @@ func (a *App) saveBotService(c *gin.Context) {
 			fail(c, 400, "invalid_model", "请选择有效的模型")
 			return
 		}
-		if err := a.db.QueryRow(c, "SELECT EXISTS(SELECT 1 FROM model_profiles WHERE id=$1 AND enabled AND kind=$2)", *pid, kind).Scan(&valid); err != nil {
+		if err := a.db.QueryRow(c, "SELECT EXISTS(SELECT 1 FROM model_profiles WHERE id=$1 AND enabled AND (kind=$2 OR ($3 AND kind='decision')))", *pid, kind, pid == in.DecisionProfileID).Scan(&valid); err != nil {
 			fail(c, 500, "database_error", "读取模型失败")
 			return
 		}

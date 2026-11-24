@@ -117,9 +117,6 @@ func (a *App) reviewGroupMessage(ctx context.Context, mid string) (reviewErr err
 			if err != nil {
 				return err
 			}
-			if s.DecisionProfileID != "" {
-				s.AuxChatProfileID = s.DecisionProfileID
-			}
 			var result struct {
 				Violation *bool
 				Reason    string

@@ -89,7 +89,7 @@ func (a *App) discoverModels(c *gin.Context) {
 		defer tr.CloseIdleConnections()
 	}
 	client := &http.Client{Transport: tr, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	models, err := fetchModelIDs(c.Request.Context(), client, target.BaseURL, key)
+	models, err := fetchModelIDs(c.Request.Context(), client, target.BaseURL, key, target.Provider)
 	if err != nil {
 		fail(c, 502, "model_discovery_failed", err.Error())
 		return
@@ -97,7 +97,7 @@ func (a *App) discoverModels(c *gin.Context) {
 	ok(c, models)
 }
 
-func fetchModelIDs(ctx context.Context, client *http.Client, base, key string) ([]string, error) {
+func fetchModelIDs(ctx context.Context, client *http.Client, base, key, provider string) ([]string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/models", nil)
 	if err != nil {
 		return nil, errors.New("服务地址无效")
@@ -118,20 +118,32 @@ func fetchModelIDs(ctx context.Context, client *http.Client, base, key string) (
 		return nil, errors.New("读取模型列表失败或响应过大")
 	}
 	var list struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if json.Unmarshal(body, &list) != nil || list.Data == nil {
+	if json.Unmarshal(body, &list) != nil || (provider == "typesafe" && list.Models == nil) || (provider != "typesafe" && list.Data == nil) {
 		return nil, errors.New("服务返回的模型列表格式无效")
 	}
 	ids := make([]string, 0, len(list.Data))
 	seen := make(map[string]bool)
-	for _, m := range list.Data {
-		id := strings.TrimSpace(m.ID)
+	add := func(name string) {
+		id := strings.TrimSpace(name)
 		if id != "" && !seen[id] {
 			ids = append(ids, id)
 			seen[id] = true
+		}
+	}
+	if provider == "typesafe" {
+		for _, m := range list.Models {
+			add(m.Name)
+		}
+	} else {
+		for _, m := range list.Data {
+			add(m.ID)
 		}
 	}
 	return ids, nil

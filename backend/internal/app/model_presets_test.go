@@ -5,7 +5,7 @@ import "testing"
 func TestProviderDefaults(t *testing.T) {
 	for _, p := range modelProviderPresets {
 		in := modelInput{Provider: p.ID, APIKey: "key", BaseURL: "https://wrong.example"}
-		if err := in.applyProvider(); err != nil || in.BaseURL != p.BaseURL || in.Model != p.Models[0].Model || in.Name == "" || in.Kind != "chat" || in.WebSearchMode != p.WebSearchMode {
+		if err := in.applyProvider(); err != nil || in.BaseURL != p.BaseURL || in.Model != p.Models[0].Model || in.Name == "" || in.Kind != p.Models[0].Kind || in.WebSearchMode != p.WebSearchMode {
 			t.Fatalf("preset %s: %+v, %v", p.ID, in, err)
 		}
 		in.Model = "custom-model"

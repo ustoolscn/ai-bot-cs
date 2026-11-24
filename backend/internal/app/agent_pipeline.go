@@ -152,10 +152,6 @@ func (a *App) processInbox(ctx context.Context) error {
 	requireWebSearch := false
 	skipKB := len(imageParts) == 0 && socialOnly(j.Content)
 	if j.ConversationType == "group" && (j.TriggerMode == "smart" || j.TriggerMode == "always") {
-		judge := settings
-		if settings.DecisionProfileID != "" {
-			judge.AuxChatProfileID = settings.DecisionProfileID
-		}
 		var decision struct {
 			NeedsWebSearch bool  `json:"needsWebSearch"`
 			Reply          *bool `json:"reply"`
@@ -187,7 +183,7 @@ func (a *App) processInbox(ctx context.Context) error {
 			"含图片附件":      len(imageParts) > 0,
 			"图片来自同一用户上一条未答的消息": priorImage,
 		})
-		err = a.auxJSON(ctx, judge, profileID, "", j.MessageID, "reply_decision", replyDecisionPrompt, string(input), &decision, imageParts...)
+		err = a.auxJSON(ctx, settings, profileID, "", j.MessageID, "reply_decision", replyDecisionPrompt, string(input), &decision, imageParts...)
 		if err == nil && decision.Reply == nil {
 			err = fmt.Errorf("回复判断缺少 reply 字段")
 		}

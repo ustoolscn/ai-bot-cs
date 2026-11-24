@@ -9,6 +9,7 @@ export const mockBots: Bot[] = [
 export const mockModels: ModelProfile[] = [
   { id: 'chat-qwen-plus', name: '通用对话模型', kind: 'chat', provider: 'compatible', model: 'qwen-plus', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', maskedKey: 'sk-••••••••7K2A', status: 'online', latency: 720, webSearchMode: 'qwen', reasoningEffort: 'default', extraBody: {} },
   { id: 'chat-qwen-max', name: '高质量对话模型', kind: 'chat', provider: 'compatible', model: 'qwen-max', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', maskedKey: 'sk-••••••••9M4P', status: 'online', latency: 930, webSearchMode: 'disabled', reasoningEffort: 'default', extraBody: {} },
+  { id: 'decision-jev', name: 'TypeSafe · jev-latest', kind: 'decision', provider: 'typesafe', model: 'jev-latest', baseUrl: 'https://api.typesafe.ai/v1', maskedKey: 'ts-••••••••3QF1', status: 'online', latency: 120, webSearchMode: 'disabled', reasoningEffort: 'default', extraBody: {} },
   { id: 'embedding-v3', name: '知识向量模型', kind: 'embedding', provider: 'compatible', model: 'text-embedding-v3', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', maskedKey: 'sk-••••••••2H8N', status: 'online', latency: 180, dimension: 1024, webSearchMode: 'disabled', reasoningEffort: 'default', extraBody: {} },
 ]
 

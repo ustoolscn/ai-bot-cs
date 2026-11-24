@@ -462,12 +462,16 @@ func (a *App) saveModel(c *gin.Context) {
 		fail(c, 400, "invalid_request", err.Error())
 		return
 	}
-	if in.Name == "" || in.BaseURL == "" || in.Model == "" || (in.Kind != "chat" && in.Kind != "embedding" && in.Kind != "image") {
+	if in.Name == "" || in.BaseURL == "" || in.Model == "" || (in.Kind != "chat" && in.Kind != "embedding" && in.Kind != "image" && in.Kind != "decision") {
 		fail(c, 400, "invalid_request", "模型配置不完整")
 		return
 	}
-	if in.Kind == "image" {
+	if in.Kind == "image" || in.Kind == "decision" {
 		in.Dimension = nil
+	}
+	if in.Kind == "decision" {
+		// TypeSafe reports output tokens for usage but charges only for input.
+		in.OutputPricePerMillion = json.RawMessage("0")
 	}
 	rates := []json.RawMessage{in.InputPricePerMillion, in.OutputPricePerMillion, in.CacheReadPricePerMillion, in.CacheWritePricePerMillion, in.PricePerImage}
 	for _, raw := range rates {
@@ -510,6 +514,17 @@ func (a *App) saveModel(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback(c)
+	if id != "" && in.APIKey == "" {
+		var savedBase string
+		if err := tx.QueryRow(c, "SELECT base_url FROM model_profiles WHERE id=$1 FOR UPDATE", id).Scan(&savedBase); err != nil {
+			fail(c, 400, "invalid_model", "无法读取要更新的模型配置")
+			return
+		}
+		if strings.TrimRight(in.BaseURL, "/") != strings.TrimRight(savedBase, "/") {
+			fail(c, 400, "invalid_request", "更换服务地址时请填写对应的 API Key")
+			return
+		}
+	}
 	if in.IsDefault {
 		_, _ = tx.Exec(c, "UPDATE model_profiles SET is_default=false WHERE kind=$1", in.Kind)
 	}
@@ -649,6 +664,18 @@ func (a *App) testModel(c *gin.Context) {
 		cl.ExtraBody["search_options"] = options
 	}
 	started := time.Now()
+	if kind == "decision" {
+		state := map[string]string{"当前消息": firstNonEmpty(strings.TrimSpace(in.Input), "客服你好，我的订单支付失败了，请帮忙看看。")}
+		res, err := cl.TypeSafeDecision(c, state, replyQuestions)
+		elapsed := time.Since(started).Milliseconds()
+		a.recordModelCall(c, "", "", c.Param("id"), "decision_test", res, elapsed, err)
+		if err != nil {
+			fail(c, 502, "model_error", err.Error())
+			return
+		}
+		ok(c, gin.H{"kind": kind, "model": model, "content": res.Content, "decision": json.RawMessage(res.Content), "inputTokens": res.InputTokens, "outputTokens": res.OutputTokens, "latencyMs": elapsed})
+		return
+	}
 	if kind == "image" {
 		data, typ, err := a.requestImage(c, c.Param("id"), cl, firstNonEmpty(strings.TrimSpace(in.Input), "画一个蓝色圆形，白色背景。"))
 		if err != nil {

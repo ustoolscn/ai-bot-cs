@@ -119,14 +119,19 @@ func (a *App) runJob(ctx context.Context, j agentJob) error {
 
 // auxJSON runs the auxiliary model with a system prompt and decodes JSON output.
 func (a *App) auxJSON(ctx context.Context, s agent.Settings, fallbackProfile, runID, messageID, kind, system, user string, out any, images ...domain.ChatContentPart) error {
-	cl, pid, err := a.auxModel(ctx, s, fallbackProfile)
+	cl, pid, err := a.auxJSONModel(ctx, s, fallbackProfile, kind, len(images) > 0)
 	if err != nil {
 		return fmt.Errorf("辅助模型不可用: %w", err)
 	}
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	started := time.Now()
-	res, err := cl.ChatWith(cctx, []domain.ChatMessage{{Role: "system", Content: system}, {Role: "user", Content: user, Parts: images}}, domain.ChatOptions{DisableWebSearch: true})
+	var res domain.ChatResult
+	if cl.Provider == "typesafe" {
+		res, err = cl.TypeSafeDecision(cctx, json.RawMessage(user), replyQuestions)
+	} else {
+		res, err = cl.ChatWith(cctx, []domain.ChatMessage{{Role: "system", Content: system}, {Role: "user", Content: user, Parts: images}}, domain.ChatOptions{DisableWebSearch: true})
+	}
 	a.recordModelCall(ctx, runID, messageID, pid, kind, res, time.Since(started).Milliseconds(), err)
 	if err != nil {
 		return err

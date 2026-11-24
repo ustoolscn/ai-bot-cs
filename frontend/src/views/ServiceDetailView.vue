@@ -20,7 +20,7 @@
             <div class="setting-row"><div><strong>辅助模型</strong><span>改写、摘要、记忆提取</span></div>
               <el-select v-model="form.simpleProfileId" clearable :value-on-clear="''" placeholder="跟随通用设置"><el-option v-for="m in chatModels" :key="m.id" :value="m.id" :label="m.name" :disabled="m.status === 'offline'" /></el-select></div>
             <div class="setting-row"><div><strong>群消息判断模型</strong><span>判断群消息要不要接话</span></div>
-              <el-select v-model="form.decisionProfileId" clearable :value-on-clear="''" placeholder="跟随通用设置"><el-option v-for="m in chatModels" :key="m.id" :value="m.id" :label="m.name" :disabled="m.status === 'offline'" /></el-select></div>
+              <el-select v-model="form.decisionProfileId" clearable :value-on-clear="''" placeholder="跟随通用设置"><el-option v-for="m in decisionCandidates" :key="m.id" :value="m.id" :label="m.kind === 'decision' ? `${m.name} · 判断模型` : m.name" :disabled="m.status === 'offline'" /></el-select></div>
             <div class="setting-row"><div><strong>生图模型</strong><span>“生成图片”技能用哪个模型，在“模型”页添加</span></div>
               <el-select v-model="form.imageProfileId" clearable :value-on-clear="''" :placeholder="imageModels.length ? '不使用生图' : '还没有生图模型'"><el-option v-for="m in imageModels" :key="m.id" :value="m.id" :label="m.name + ' · ' + m.model" :disabled="m.status === 'offline'" /></el-select></div>
           </div>
@@ -182,6 +182,8 @@ const clearToken = ref(false)
 const activeSection = ref('basic')
 const livePanel = ref<InstanceType<typeof LiveDataPanel> | null>(null)
 const chatModels = computed(() => models.value.filter(m => m.kind === 'chat'))
+// 群消息判断可以用对话模型，也可以用只做判断的模型（如 TypeSafe Jev），判断模型排在前面
+const decisionCandidates = computed(() => [...models.value.filter(m => m.kind === 'decision'), ...chatModels.value])
 const imageModels = computed(() => models.value.filter(m => m.kind === 'image'))
 const live = computed(() => form.value!.settings.liveData)
 // 旧配置没有样式字段：填过状态页地址的沿用截网页，否则默认简报

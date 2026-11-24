@@ -25,6 +25,19 @@ export const modelProviderPresets: ModelProviderPreset[] = [
       { kind: 'chat', model: 'glm-5.3-flash', label: 'GLM-5.3 Flash', supportsWebSearch: true },
     ],
   },
+  {
+    id: 'typesafe',
+    name: 'TypeSafe',
+    baseUrl: 'https://api.typesafe.ai/v1',
+    webSearchMode: 'disabled',
+    keyUrl: 'https://console.typesafe.ai/home',
+    models: [
+      { kind: 'decision', model: 'jev-latest', label: 'Jev（最新）' },
+      { kind: 'decision', model: 'jev-preview', label: 'Jev Preview' },
+      { kind: 'decision', model: 'jev-1.14.0', label: 'Jev 1.14.0' },
+      { kind: 'decision', model: 'jev-1.13.0', label: 'Jev 1.13.0' },
+    ],
+  },
 ]
 
 export const providerLabel = (id: ModelProviderId | undefined, presets: ModelProviderPreset[] = modelProviderPresets) =>

@@ -46,8 +46,8 @@
           <div class="settings-card">
             <div class="setting-row"><div><strong>简单辅助模型</strong><span>建议选便宜、快的模型。不选则使用接待客服的对话模型</span></div>
               <el-select v-model="settings.auxChatProfileId" clearable placeholder="跟随接待客服的对话模型"><el-option v-for="m in chatModels" :key="m.id" :label="`${m.name} · ${m.model}`" :value="m.id" /></el-select></div>
-            <div class="setting-row"><div><strong>群消息判断模型</strong><span>逐条判断群消息是否需要回复，留空使用简单辅助模型</span></div>
-              <el-select v-model="settings.decisionProfileId" clearable placeholder="使用简单辅助模型"><el-option v-for="m in chatModels" :key="m.id" :label="m.name" :value="m.id" :disabled="m.status === 'offline'" /></el-select></div>
+            <div class="setting-row"><div><strong>群消息判断模型</strong><span>逐条判断群消息是否需要回复，留空使用简单辅助模型。带图片的消息始终由辅助模型判断</span></div>
+              <el-select v-model="settings.decisionProfileId" clearable placeholder="使用简单辅助模型"><el-option v-for="m in decisionCandidates" :key="m.id" :label="m.kind === 'decision' ? `${m.name} · 判断模型` : m.name" :value="m.id" :disabled="m.status === 'offline'" /></el-select></div>
             <div class="setting-row"><div><strong>Embedding 模型</strong><span>用于记忆召回和“没答上的问题”归类</span></div>
               <el-select v-model="settings.embeddingProfileId" clearable placeholder="使用默认 Embedding 配置"><el-option v-for="m in embeddingModels" :key="m.id" :label="`${m.name} · ${m.model}`" :value="m.id" /></el-select></div>
           </div>
@@ -108,6 +108,8 @@ const saving = ref(false)
 const loadError = ref('')
 const activeSection = ref('length')
 const chatModels = computed(() => models.value.filter(m => m.kind === 'chat'))
+// 群消息判断可以用对话模型，也可以用只做判断的模型（如 TypeSafe Jev），判断模型排在前面
+const decisionCandidates = computed(() => [...models.value.filter(m => m.kind === 'decision'), ...chatModels.value])
 const embeddingModels = computed(() => models.value.filter(m => m.kind === 'embedding'))
 
 const dirty = computed(() => !!settings.value && (JSON.stringify(settings.value) !== snapshot.value))
