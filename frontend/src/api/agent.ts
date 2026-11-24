@@ -35,6 +35,8 @@ export interface AgentSettings {
   toolsEnabled: boolean
   maxToolSteps: number
   handoffPauseMinutes: number
+  replyQuietSeconds?: number
+  replyMaxWaitSeconds?: number
   evaluationEnabled: boolean
   staffMiningEnabled: boolean
   autoPublishStaff: boolean

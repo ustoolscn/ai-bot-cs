@@ -17,6 +17,10 @@ export interface ServiceSettings {
   autoPublishMinConfidence: number
   learningKnowledgeBaseId: string
   handoffPauseMinutes: number
+  /** 最后一条消息后静默多少秒再回复 */
+  replyQuietSeconds: number
+  /** 从第一条起最多等多少秒 */
+  replyMaxWaitSeconds: number
   liveData: LiveDataSettings
 }
 export interface BotService {
@@ -35,7 +39,7 @@ const mockService: BotService = {
   id: 'svc-demo', name: '网站 A 客服', instructions: '回答网站 A 的接入、价格和分组问题', chatProfileId: '', simpleProfileId: '', decisionProfileId: '',
   settings: {
     stylePrompt: '像熟练的真人客服一样说话，先给结论，一般 1～3 句话。', examples: [], toolsEnabled: true, maxToolSteps: 4, skillIds: null, toolNames: null, knowledgeBaseIds: null,
-    evaluationEnabled: true, staffMiningEnabled: true, autoPublishStaff: false, autoPublishMinConfidence: 0.85, learningKnowledgeBaseId: '', handoffPauseMinutes: 30,
+    evaluationEnabled: true, staffMiningEnabled: true, autoPublishStaff: false, autoPublishMinConfidence: 0.85, learningKnowledgeBaseId: '', handoffPauseMinutes: 30, replyQuietSeconds: 6, replyMaxWaitSeconds: 20,
     liveData: { enabled: true, baseUrl: 'https://example.com', hasAccessToken: false, userId: '', injectSnapshot: true, priceNote: '', statusPageUrl: '' },
   },
 }

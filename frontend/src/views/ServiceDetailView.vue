@@ -42,6 +42,14 @@
           </div>
         </section>
 
+        <section id="timing" class="settings-section">
+          <header><h2>连续消息合并</h2></header>
+          <div class="settings-card">
+            <div class="setting-row"><div><strong>等对方说完</strong><span>最后一条之后这么久没有新消息，才把几段合起来回复</span></div><span><el-input-number v-model="form.settings.replyQuietSeconds" :min="1" :max="form.settings.replyMaxWaitSeconds" /><span class="unit-label">秒</span></span></div>
+            <div class="setting-row"><div><strong>最多等待</strong><span>从第一条算起，到时间就回复</span></div><span><el-input-number v-model="form.settings.replyMaxWaitSeconds" :min="form.settings.replyQuietSeconds" :max="120" /><span class="unit-label">秒</span></span></div>
+          </div>
+        </section>
+
         <section id="live" class="settings-section">
           <header><h2>网站实时数据</h2></header>
           <div class="settings-card">
@@ -147,6 +155,7 @@ const router = useRouter()
 const sections = [
   { id: 'basic', label: '基本信息' },
   { id: 'persona', label: '人设与风格' },
+  { id: 'timing', label: '连续消息合并' },
   { id: 'live', label: '网站实时数据' },
   { id: 'knowledge', label: '知识库' },
   { id: 'skills', label: '技能与工具' },
@@ -190,6 +199,8 @@ const liveBlockedReason = computed(() => {
 
 function apply(value: BotService) {
   value.settings.examples = value.settings.examples || []
+  value.settings.replyQuietSeconds = value.settings.replyQuietSeconds || 6
+  value.settings.replyMaxWaitSeconds = value.settings.replyMaxWaitSeconds || 20
   value.settings.liveData.statusPageUrl = value.settings.liveData.statusPageUrl || ''
   form.value = value
   snapshot.value = JSON.stringify(value)
@@ -218,7 +229,7 @@ async function load() {
           stylePrompt: defaults.stylePrompt, examples: structuredClone(defaults.examples || []), toolsEnabled: defaults.toolsEnabled, maxToolSteps: defaults.maxToolSteps,
           skillIds: null, toolNames: null, knowledgeBaseIds: null, evaluationEnabled: defaults.evaluationEnabled, staffMiningEnabled: defaults.staffMiningEnabled,
           autoPublishStaff: defaults.autoPublishStaff, autoPublishMinConfidence: defaults.autoPublishMinConfidence, learningKnowledgeBaseId: defaults.learningKnowledgeBaseId,
-          handoffPauseMinutes: defaults.handoffPauseMinutes, liveData: { ...defaults.liveData, enabled: false, baseUrl: '', hasAccessToken: false, userId: '', statusPageUrl: '' },
+          handoffPauseMinutes: defaults.handoffPauseMinutes, replyQuietSeconds: defaults.replyQuietSeconds || 6, replyMaxWaitSeconds: defaults.replyMaxWaitSeconds || 20, liveData: { ...defaults.liveData, enabled: false, baseUrl: '', hasAccessToken: false, userId: '', statusPageUrl: '' },
         },
       })
     } else {
