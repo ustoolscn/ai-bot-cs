@@ -589,7 +589,7 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	}
 	eventually(t, 35*time.Second, "one generated scheduled post delivered", func() (bool, error) {
 		var n, sent int
-		err := pool.QueryRow(ctx, "SELECT count(*),count(*) FILTER(WHERE status='sent' AND reply_to_message_id IS NULL AND (content='查证后的测试资讯' OR parts->0->>'contentType'='image/png')) FROM messages WHERE event_type='SCHEDULED_POST' AND conversation_id=$1", convID).Scan(&n, &sent)
+		err := pool.QueryRow(ctx, "SELECT count(*),count(*) FILTER(WHERE status='sent' AND reply_to_message_id IS NULL AND (content LIKE '【%】' || chr(10) || chr(10) || '查证后的测试资讯' OR (content='' AND parts->0->>'contentType'='image/png'))) FROM messages WHERE event_type='SCHEDULED_POST' AND conversation_id=$1", convID).Scan(&n, &sent)
 		if sent == 0 {
 			var reason string
 			_ = pool.QueryRow(ctx, "SELECT COALESCE(last_error,'') FROM agent_jobs WHERE kind='scheduled_post' LIMIT 1").Scan(&reason)
@@ -599,7 +599,19 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 		}
 		return n == 1 && sent == 1, err
 	})
-	if browserPath() != "" {
+	if format == "image" {
+		found := false
+		for _, payload := range mock.Sends() {
+			if payload["msg_type"] == float64(7) && payload["msg_id"] == nil {
+				if _, ok := payload["content"]; ok {
+					t.Fatalf("scheduled image carried a caption: %v", payload)
+				}
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("missing active scheduled image")
+		}
 		postQQWebhook(t, client, hook, botSecret, groupEventBody(t, "image-skill", "GROUP_AT_MESSAGE_CREATE", "m8", "visitor", "用户", "把说明发成网页截图"))
 		eventually(t, 30*time.Second, "HTML tool replied with QQ image", func() (bool, error) {
 			var count int

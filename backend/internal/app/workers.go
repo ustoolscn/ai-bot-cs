@@ -414,6 +414,9 @@ func (a *App) processOutbox(ctx context.Context) error {
 		j.Text = agent.PlainLinks(j.Text)
 	}
 	format := ""
+	if j.EventType == "SCHEDULED_POST" && hasContentPart(j.Parts, "image") {
+		format = "image-only" // Also suppress captions on previously queued images.
+	}
 	if j.EventType == "AI_RESPONSE" && !hasContentPart(j.Parts, "image") {
 		format = "markdown"
 	}

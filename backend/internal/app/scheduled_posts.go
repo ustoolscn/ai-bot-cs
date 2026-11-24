@@ -122,6 +122,9 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 		persona, style = s.PersonaName, s.StylePrompt
 	}
 	system := fmt.Sprintf("你是%s。%s\n职责：%s\n当前任务日期（北京时间）：%s。按管理员指令生成可直接发布到 QQ 群的成稿。", persona, style, role, day.Format("2006-01-02"))
+	if format == "text" {
+		system += "\n第一行用 # 加空格写本期短标题。正文按主题分段，段间空一行；小标题用 ## 加空格，并列要点用短横线列表。重点词用「」突出。来源单独成行，写来源名和完整网址。只使用上述排版，不编造链接。"
+	}
 	if format == "link" {
 		system += "\n第一行写一句能独立说明本期内容的中文标题，标题不放链接，再写详细正文。"
 	}
@@ -152,7 +155,7 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 	parts := []domain.ContentPart{}
 	var pageID, document string
 	if format == "image" || format == "link" {
-		layoutPrompt := "将给定成稿排版为一张 1000px 宽的中文网页长图。只输出静态 HTML 和内联 CSS。完整保留标题、正文、日期与来源，来源用可见文字。高度随内容自然增长。"
+		layoutPrompt := "将给定成稿排版为一张 1000px 宽的中文网页长图。只输出静态 HTML 和内联 CSS。完整保留标题、正文、日期与来源，来源用可见文字。高度随内容自然增长。不要添加自动发布说明或页脚署名。"
 		if format == "link" {
 			layoutPrompt = "将给定成稿排版成适合手机阅读的中文网页。只输出静态 HTML 和内联 CSS，保留标题、日期和完整正文，将原文提供的来源链接做成可点击的超链接，不补造来源。"
 		}
@@ -175,8 +178,11 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 				return e
 			}
 			parts = append(parts, pic)
-			text = "定时推送"
+			text = ""
 		}
+	}
+	if format == "text" {
+		text = scheduledGroupText(text, name)
 	}
 	text = agent.PlainLinks(text)
 	raw, _ := json.Marshal(parts)
@@ -195,6 +201,35 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
        INSERT INTO scheduled_web_pages(id,document) SELECT $5::uuid,$6::text WHERE $5::uuid IS NOT NULL AND EXISTS(SELECT FROM marked)
     ) INSERT INTO outbox_tasks(message_id,msg_seq) SELECT id,1 FROM marked`, jobID, text, string(raw), deadline, nullString(pageID), document)
 	return err
+}
+
+// Render the small heading/list vocabulary requested from the model for QQ text messages.
+func scheduledGroupText(draft, name string) string {
+	lines := strings.Split(strings.TrimSpace(draft), "\n")
+	title := firstNonEmpty(name, "本期简报")
+	if heading, ok := strings.CutPrefix(strings.TrimSpace(lines[0]), "# "); ok {
+		title = strings.TrimSpace(heading)
+		lines = lines[1:]
+	}
+	out := []string{"【" + title + "】", ""}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "":
+			if out[len(out)-1] == "" {
+				continue
+			}
+		case strings.HasPrefix(line, "## "):
+			if out[len(out)-1] != "" {
+				out = append(out, "")
+			}
+			line = "◆ " + strings.TrimSpace(line[3:])
+		case strings.HasPrefix(line, "- "), strings.HasPrefix(line, "* "):
+			line = "• " + strings.TrimSpace(line[2:])
+		}
+		out = append(out, line)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
 func scheduledLinkCaption(draft, name string) string {

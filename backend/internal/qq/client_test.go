@@ -216,6 +216,17 @@ func TestClientSendGroupImage(t *testing.T) {
 	if media["file_info"] != "uploaded-file-info" {
 		t.Fatalf("unexpected media body: %#v", media)
 	}
+	messageBody = nil
+	_, err = c.Send(context.Background(), domain.OutboundMessage{
+		ConversationType: "group", ConversationID: "group", Format: "image-only", Text: "定时推送",
+		Parts: []domain.ContentPart{{Type: "image", URL: "https://example.com/result.png"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, caption := messageBody["content"]; caption || messageBody["msg_type"] != float64(7) || messageBody["media"] == nil {
+		t.Fatalf("unexpected image-only payload: %#v", messageBody)
+	}
 }
 
 func TestClientSendLocalImageData(t *testing.T) {

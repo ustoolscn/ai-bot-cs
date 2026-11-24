@@ -120,7 +120,9 @@ func (c *Client) SendWithReceipt(ctx context.Context, m domain.OutboundMessage) 
 		}
 		payload["msg_type"] = 7
 		payload["media"] = map[string]any{"file_info": fileInfo}
-		if strings.TrimSpace(m.Text) == "" {
+		if m.Format == "image-only" {
+			delete(payload, "content")
+		} else if strings.TrimSpace(m.Text) == "" {
 			payload["content"] = "图片"
 		}
 		delete(payload, "markdown")
