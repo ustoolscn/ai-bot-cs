@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"ai-bot/backend/internal/domain"
 	"ai-bot/backend/internal/openai"
@@ -20,7 +21,7 @@ func (a *App) generateImage(ctx context.Context, profile, prompt string) (domain
 	if err != nil || kind != "image" {
 		return empty, errors.New("客服未选择可用的生图模型")
 	}
-	data, contentType, err := a.requestImage(ctx, cl, prompt)
+	data, contentType, err := a.requestImage(ctx, profile, cl, prompt)
 	if err != nil {
 		return empty, err
 	}
@@ -32,7 +33,8 @@ func (a *App) generateImage(ctx context.Context, profile, prompt string) (domain
 	return domain.ContentPart{Type: "image", Filename: name, ContentType: contentType, StorageKey: stored, SizeBytes: int64(len(data))}, nil
 }
 
-func (a *App) requestImage(ctx context.Context, cl *openai.Client, prompt string) ([]byte, string, error) {
+func (a *App) requestImage(ctx context.Context, profile string, cl *openai.Client, prompt string) ([]byte, string, error) {
+	started := time.Now()
 	if prompt == "" {
 		return nil, "", errors.New("请提供生图描述")
 	}
@@ -74,6 +76,9 @@ func (a *App) requestImage(ctx context.Context, cl *openai.Client, prompt string
 		return nil, "", errors.New("生图接口未返回图片")
 	}
 	item := result.Data[0]
+	if item.Base64 != "" || item.URL != "" {
+		a.recordModelCall(ctx, "", "", profile, "image", domain.ChatResult{}, time.Since(started).Milliseconds(), nil)
+	}
 	var data []byte
 	if item.Base64 != "" {
 		data, err = base64.StdEncoding.DecodeString(item.Base64)

@@ -376,8 +376,14 @@ func responsesContent(message domain.ChatMessage) []map[string]any {
 }
 
 func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	vectors, _, err := c.EmbedWithUsage(ctx, texts)
+	return vectors, err
+}
+
+func (c *Client) EmbedWithUsage(ctx context.Context, texts []string) ([][]float32, domain.ChatResult, error) {
 	var resp struct {
-		Data []struct {
+		Usage tokenUsage `json:"usage"`
+		Data  []struct {
 			Index     int       `json:"index"`
 			Embedding []float32 `json:"embedding"`
 		} `json:"data"`
@@ -387,8 +393,10 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 		payload["dimensions"] = c.Dimensions
 	}
 	if err := c.do(ctx, "/embeddings", payload, &resp); err != nil {
-		return nil, err
+		return nil, domain.ChatResult{}, err
 	}
+	usage := resp.Usage.result()
+	usage.CachedInputTokens, usage.CacheWriteTokens = 0, 0
 	out := make([][]float32, len(texts))
 	for _, d := range resp.Data {
 		if d.Index >= 0 && d.Index < len(out) {
@@ -397,10 +405,10 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 	}
 	for i := range out {
 		if len(out[i]) == 0 {
-			return nil, fmt.Errorf("missing embedding %d", i)
+			return nil, usage, fmt.Errorf("missing embedding %d", i)
 		}
 	}
-	return out, nil
+	return out, usage, nil
 }
 
 type cacheUsage struct {

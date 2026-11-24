@@ -48,7 +48,7 @@ func (a *App) overview(c *gin.Context) {
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents WHERE status='ready'").Scan(&readyDocuments)
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents WHERE status='failed'").Scan(&failedDocuments)
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents").Scan(&totalDocuments)
-	_ = a.db.QueryRow(c, `SELECT (SELECT count(*) FROM inbox_tasks WHERE status='failed')+(SELECT count(*) FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE t.status='failed' AND m.event_type<>'PROCESSING_ACK')+(SELECT count(*) FROM knowledge_documents WHERE status='failed')`).Scan(&failedTasks)
+	_ = a.db.QueryRow(c, `SELECT (SELECT count(*) FROM inbox_tasks WHERE status='failed' AND dismissed_at IS NULL)+(SELECT count(*) FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE t.status='failed' AND t.dismissed_at IS NULL AND m.event_type<>'PROCESSING_ACK')+(SELECT count(*) FROM knowledge_documents WHERE status='failed' AND dismissed_at IS NULL)`).Scan(&failedTasks)
 
 	var active, stages json.RawMessage
 	err := a.db.QueryRow(c, `SELECT coalesce(jsonb_agg(to_jsonb(q)),'[]') FROM (
@@ -187,7 +187,7 @@ func deliveryOverviewStatus(status string) string {
 }
 
 func (a *App) overviewAlerts(c *gin.Context) []map[string]any {
-	rows, err := a.db.Query(c, `SELECT id,time,bot,content,impact FROM (SELECT t.id::text AS id,t.updated_at AS time,b.name AS bot,'入口处理失败：'||COALESCE(t.last_error,'未知错误') AS content,'消息未生成回复' AS impact FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN bots b ON b.id=m.bot_id WHERE t.status='failed' UNION ALL SELECT t.id::text,t.updated_at,b.name,'QQ 投递失败：'||COALESCE(t.last_error,'未知错误'),'回复未送达' FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN bots b ON b.id=m.bot_id WHERE t.status IN ('failed','expired') AND m.event_type<>'PROCESSING_ACK' UNION ALL SELECT d.id::text,d.updated_at,'知识索引',d.name||'：'||COALESCE(d.last_error,'索引失败'),'知识检索可能不完整' FROM knowledge_documents d WHERE d.status='failed') failures ORDER BY time DESC LIMIT 8`)
+	rows, err := a.db.Query(c, `SELECT id,time,bot,content,impact FROM (SELECT t.id::text AS id,t.updated_at AS time,b.name AS bot,'入口处理失败：'||COALESCE(t.last_error,'未知错误') AS content,'消息未生成回复' AS impact FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN bots b ON b.id=m.bot_id WHERE t.status='failed' AND t.dismissed_at IS NULL UNION ALL SELECT t.id::text,t.updated_at,b.name,'QQ 投递失败：'||COALESCE(t.last_error,'未知错误'),'回复未送达' FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN bots b ON b.id=m.bot_id WHERE t.status IN ('failed','expired') AND t.dismissed_at IS NULL AND m.event_type<>'PROCESSING_ACK' UNION ALL SELECT d.id::text,d.updated_at,'知识索引',d.name||'：'||COALESCE(d.last_error,'索引失败'),'知识检索可能不完整' FROM knowledge_documents d WHERE d.status='failed' AND d.dismissed_at IS NULL) failures ORDER BY time DESC LIMIT 8`)
 	if err != nil {
 		return []map[string]any{}
 	}

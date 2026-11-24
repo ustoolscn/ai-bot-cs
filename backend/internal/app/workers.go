@@ -258,7 +258,7 @@ func (a *App) processDocument(ctx context.Context) error {
 		if end > len(chunks) {
 			end = len(chunks)
 		}
-		v, e := client.Embed(ctx, chunks[start:end])
+		v, e := a.embed(ctx, client, j.ProfileID, "embedding_index", chunks[start:end])
 		if e != nil {
 			return a.retryDocumentJob(ctx, j, fmt.Errorf("生成 Embedding 失败（批次 %d-%d，共 %d 个分块）: %w", start+1, end, len(chunks), e))
 		}

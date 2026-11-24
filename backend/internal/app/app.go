@@ -147,6 +147,9 @@ func (a *App) Router() http.Handler {
 	auth.GET("/system/overview", a.overview)
 	auth.GET("/system/settings", a.getSystemSettings)
 	auth.PUT("/system/settings", a.putSystemSettings)
+	auth.GET("/system/costs", a.costs)
+	auth.POST("/system/dismiss-failed", a.dismissFailed)
+	auth.POST("/system/dismiss-failed/:id", a.dismissFailed)
 	auth.POST("/system/retry-failed", a.retryFailedTasks)
 	auth.GET("/system/alerts", a.listAlerts)
 	auth.POST("/system/alerts/ack", a.ackAlerts)
@@ -407,6 +410,7 @@ func (a *App) deleteBot(c *gin.Context) {
 
 type modelInput struct {
 	ProxyID                   json.RawMessage `json:"proxyId"`
+	PricePerImage             json.RawMessage `json:"pricePerImage"`
 	InputPricePerMillion      json.RawMessage `json:"inputPricePerMillion"`
 	OutputPricePerMillion     json.RawMessage `json:"outputPricePerMillion"`
 	CacheReadPricePerMillion  json.RawMessage `json:"cacheReadPricePerMillion"`
@@ -425,7 +429,7 @@ type modelInput struct {
 }
 
 func (a *App) listModels(c *gin.Context) {
-	queryList(c, a, `SELECT id::text,proxy_id::text AS "proxyId",name,kind,base_url AS "baseUrl",model,dimension,enabled,is_default AS "isDefault",api_key_enc<>'' AS "hasApiKey",web_search_mode AS "webSearchMode",reasoning_effort AS "reasoningEffort",extra_body AS "extraBody",input_price AS "inputPricePerMillion",output_price AS "outputPricePerMillion",cache_read_price AS "cacheReadPricePerMillion",cache_write_price AS "cacheWritePricePerMillion",created_at AS "createdAt" FROM model_profiles ORDER BY kind,name`)
+	queryList(c, a, `SELECT id::text,proxy_id::text AS "proxyId",name,kind,base_url AS "baseUrl",model,dimension,enabled,is_default AS "isDefault",api_key_enc<>'' AS "hasApiKey",web_search_mode AS "webSearchMode",reasoning_effort AS "reasoningEffort",extra_body AS "extraBody",price_per_image AS "pricePerImage",input_price AS "inputPricePerMillion",output_price AS "outputPricePerMillion",cache_read_price AS "cacheReadPricePerMillion",cache_write_price AS "cacheWritePricePerMillion",created_at AS "createdAt" FROM model_profiles ORDER BY kind,name`)
 }
 func (a *App) saveModel(c *gin.Context) {
 	var in modelInput
@@ -436,7 +440,7 @@ func (a *App) saveModel(c *gin.Context) {
 	if in.Kind == "image" {
 		in.Dimension = nil
 	}
-	rates := []json.RawMessage{in.InputPricePerMillion, in.OutputPricePerMillion, in.CacheReadPricePerMillion, in.CacheWritePricePerMillion}
+	rates := []json.RawMessage{in.InputPricePerMillion, in.OutputPricePerMillion, in.CacheReadPricePerMillion, in.CacheWritePricePerMillion, in.PricePerImage}
 	for _, raw := range rates {
 		var price *float64
 		if raw != nil && (json.Unmarshal(raw, &price) != nil || (price != nil && *price < 0)) {
@@ -508,14 +512,15 @@ func (a *App) saveModel(c *gin.Context) {
 			return
 		}
 	}
-	var savedRates [4]*float64
+	var savedRates [5]*float64
 	if err == nil {
 		err = tx.QueryRow(c, `UPDATE model_profiles SET
 			input_price=(coalesce($2::jsonb,to_jsonb(input_price)) #>> '{}')::float8,
 			output_price=(coalesce($3::jsonb,to_jsonb(output_price)) #>> '{}')::float8,
 			cache_read_price=(coalesce($4::jsonb,to_jsonb(cache_read_price)) #>> '{}')::float8,
-			cache_write_price=(coalesce($5::jsonb,to_jsonb(cache_write_price)) #>> '{}')::float8
-			WHERE id=$1 RETURNING input_price,output_price,cache_read_price,cache_write_price`, id, rates[0], rates[1], rates[2], rates[3]).Scan(&savedRates[0], &savedRates[1], &savedRates[2], &savedRates[3])
+			cache_write_price=(coalesce($5::jsonb,to_jsonb(cache_write_price)) #>> '{}')::float8,
+			price_per_image=(coalesce($6::jsonb,to_jsonb(price_per_image)) #>> '{}')::float8
+			WHERE id=$1 RETURNING input_price,output_price,cache_read_price,cache_write_price,price_per_image`, id, rates[0], rates[1], rates[2], rates[3], rates[4]).Scan(&savedRates[0], &savedRates[1], &savedRates[2], &savedRates[3], &savedRates[4])
 	}
 	if err != nil {
 		fail(c, 500, "database_error", "保存模型失败")
@@ -525,7 +530,7 @@ func (a *App) saveModel(c *gin.Context) {
 		fail(c, 500, "database_error", "保存模型失败")
 		return
 	}
-	ok(c, gin.H{"id": id, "inputPricePerMillion": savedRates[0], "outputPricePerMillion": savedRates[1], "cacheReadPricePerMillion": savedRates[2], "cacheWritePricePerMillion": savedRates[3]})
+	ok(c, gin.H{"id": id, "inputPricePerMillion": savedRates[0], "outputPricePerMillion": savedRates[1], "cacheReadPricePerMillion": savedRates[2], "cacheWritePricePerMillion": savedRates[3], "pricePerImage": savedRates[4]})
 }
 func (a *App) deleteModel(c *gin.Context) {
 	_, err := a.db.Exec(c, "DELETE FROM model_profiles WHERE id=$1", c.Param("id"))
@@ -599,7 +604,7 @@ func (a *App) testModel(c *gin.Context) {
 	}
 	started := time.Now()
 	if kind == "image" {
-		data, typ, err := a.requestImage(c, cl, firstNonEmpty(strings.TrimSpace(in.Input), "画一个蓝色圆形，白色背景。"))
+		data, typ, err := a.requestImage(c, c.Param("id"), cl, firstNonEmpty(strings.TrimSpace(in.Input), "画一个蓝色圆形，白色背景。"))
 		if err != nil {
 			fail(c, 502, "model_error", err.Error())
 			return
@@ -612,7 +617,7 @@ func (a *App) testModel(c *gin.Context) {
 			in.Input = "连接测试"
 		}
 		var vectors [][]float32
-		vectors, err = cl.Embed(c, []string{in.Input})
+		vectors, err = a.embed(c, cl, c.Param("id"), "embedding", []string{in.Input})
 		if err == nil && len(vectors) != 1 {
 			err = fmt.Errorf("Embedding 接口返回向量数量异常：期望 1，实际 %d", len(vectors))
 		}
@@ -640,6 +645,7 @@ func (a *App) testModel(c *gin.Context) {
 		messages = append(messages, domain.ChatMessage{Role: "user", Content: in.Input})
 		var result domain.ChatResult
 		result, err = cl.Chat(c, messages)
+		a.recordModelCall(c, "", "", c.Param("id"), "chat_test", result, time.Since(started).Milliseconds(), err)
 		if err != nil {
 			fail(c, 502, "model_error", err.Error())
 			return
@@ -717,8 +723,8 @@ func (a *App) updateConversation(c *gin.Context) {
 
 const messageUsageJoin = `LEFT JOIN LATERAL (
 	SELECT sum(input_tokens) AS inputs,sum(output_tokens) AS outputs,sum(cached_input_tokens) AS reads,sum(cache_write_tokens) AS writes,
-	CASE WHEN count(*)=count(estimated_cost) THEN sum(estimated_cost) END AS cost
-	FROM model_calls WHERE message_id=m.id) usage ON true`
+	sum(cost) AS cost
+	FROM priced_model_calls WHERE message_id=m.id) usage ON true`
 const messageUsageColumns = `coalesce(usage.inputs,0) AS "inputTokens",coalesce(usage.outputs,0) AS "outputTokens",
 	coalesce(usage.reads,0) AS "cachedInputTokens",coalesce(usage.writes,0) AS "cacheWriteTokens",
 	coalesce(usage.reads::float8/nullif(usage.inputs,0),0) AS "cacheHitRate",usage.cost AS "estimatedCost"`
@@ -803,8 +809,8 @@ func (a *App) getMessage(c *gin.Context) {
 	decorateMessageParts(msg)
 	runs, _ := a.db.Query(c, `SELECT r.id::text,r.status,r.context_messages AS "contextMessages",r.rewritten_query AS "rewrittenQuery",r.steps,r.evaluation,r.retrieved_chunks AS "retrievedChunks",
 		r.context_latency_ms AS "contextLatencyMs",r.retrieval_latency_ms AS "retrievalLatencyMs",r.error,r.started_at AS "startedAt",r.completed_at AS "completedAt",
-		COALESCE(json_agg(json_build_object('kind',mc.kind,'profileName',COALESCE(mp.name,mp.model,''),'model',COALESCE(mp.model,''),'inputTokens',mc.input_tokens,'outputTokens',mc.output_tokens,'cachedInputTokens',mc.cached_input_tokens,'cacheWriteTokens',mc.cache_write_tokens,'cacheHitRate',coalesce(mc.cached_input_tokens::float8/nullif(mc.input_tokens,0),0),'estimatedCost',mc.estimated_cost,'latencyMs',mc.latency_ms,'error',mc.error) ORDER BY mc.created_at) FILTER(WHERE mc.id IS NOT NULL),'[]') AS calls
-	FROM agent_runs r LEFT JOIN model_calls mc ON mc.agent_run_id=r.id LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
+		COALESCE(json_agg(json_build_object('kind',mc.kind,'profileName',COALESCE(mp.name,mp.model,''),'model',COALESCE(mp.model,''),'inputTokens',mc.input_tokens,'outputTokens',mc.output_tokens,'cachedInputTokens',mc.cached_input_tokens,'cacheWriteTokens',mc.cache_write_tokens,'cacheHitRate',coalesce(mc.cached_input_tokens::float8/nullif(mc.input_tokens,0),0),'images',mc.images,'estimatedCost',mc.cost,'latencyMs',mc.latency_ms,'error',mc.error) ORDER BY mc.created_at) FILTER(WHERE mc.id IS NOT NULL),'[]') AS calls
+	FROM agent_runs r LEFT JOIN priced_model_calls mc ON mc.agent_run_id=r.id LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
 	WHERE r.message_id=$1 GROUP BY r.id ORDER BY r.started_at DESC`, c.Param("id"))
 	rd, _ := rowsJSON(runs)
 	msg["agentRuns"] = rd
@@ -904,7 +910,7 @@ func (a *App) uploadDocument(c *gin.Context) {
 	created(c, gin.H{"id": id, "status": "pending"})
 }
 func (a *App) retryDocument(c *gin.Context) {
-	_, err := a.db.Exec(c, "UPDATE knowledge_documents SET status='pending',attempts=0,next_attempt_at=now(),last_error=NULL,updated_at=now() WHERE id=$1 AND knowledge_base_id=$2", c.Param("documentId"), c.Param("id"))
+	_, err := a.db.Exec(c, "UPDATE knowledge_documents SET dismissed_at=NULL,status='pending',attempts=0,next_attempt_at=now(),last_error=NULL,updated_at=now() WHERE id=$1 AND knowledge_base_id=$2", c.Param("documentId"), c.Param("id"))
 	if err != nil {
 		fail(c, 500, "database_error", "重试失败")
 		return
@@ -984,7 +990,7 @@ func (a *App) searchKB(c *gin.Context) {
 		fail(c, 400, "model_error", "Embedding 配置不可用")
 		return
 	}
-	vs, err := cl.Embed(c, []string{in.Query})
+	vs, err := a.embed(c, cl, pid, "embedding", []string{in.Query})
 	if err != nil {
 		fail(c, 502, "model_error", err.Error())
 		return
@@ -1005,18 +1011,18 @@ func (a *App) retryFailedTasks(c *gin.Context) {
 	}
 	defer tx.Rollback(c)
 	inbox, err := tx.Exec(c, `UPDATE inbox_tasks t SET status='pending',attempts=0,next_attempt_at=now(),locked_at=NULL,last_error=NULL,updated_at=now()
-		FROM messages m WHERE t.message_id=m.id AND t.status='failed' AND m.context_excluded=false`)
+		FROM messages m WHERE t.message_id=m.id AND t.status='failed' AND t.dismissed_at IS NULL AND m.context_excluded=false`)
 	if err != nil {
 		fail(c, 500, "database_error", "重新入队失败")
 		return
 	}
 	outbox, err := tx.Exec(c, `UPDATE outbox_tasks t SET status='pending',attempts=0,next_attempt_at=now(),locked_at=NULL,last_error=NULL,updated_at=now()
-		FROM messages m WHERE t.message_id=m.id AND t.status='failed' AND m.event_type<>'PROCESSING_ACK' AND (m.event_type<>'HUMAN_REPLY' OR m.handoff_id IS NULL OR EXISTS(SELECT FROM handoffs h WHERE h.id=m.handoff_id AND h.status='processing'))`)
+		FROM messages m WHERE t.message_id=m.id AND t.status='failed' AND t.dismissed_at IS NULL AND m.event_type<>'PROCESSING_ACK' AND (m.event_type<>'HUMAN_REPLY' OR m.handoff_id IS NULL OR EXISTS(SELECT FROM handoffs h WHERE h.id=m.handoff_id AND h.status='processing'))`)
 	if err != nil {
 		fail(c, 500, "database_error", "重新入队失败")
 		return
 	}
-	documents, err := tx.Exec(c, "UPDATE knowledge_documents SET status='pending',attempts=0,next_attempt_at=now(),last_error=NULL,updated_at=now() WHERE status='failed'")
+	documents, err := tx.Exec(c, "UPDATE knowledge_documents SET status='pending',attempts=0,next_attempt_at=now(),last_error=NULL,updated_at=now() WHERE status='failed' AND dismissed_at IS NULL")
 	if err == nil && tx.Commit(c) == nil {
 		ok(c, gin.H{"queued": inbox.RowsAffected() + outbox.RowsAffected() + documents.RowsAffected()})
 		return

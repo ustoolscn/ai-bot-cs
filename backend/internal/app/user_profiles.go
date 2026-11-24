@@ -66,7 +66,7 @@ func (a *App) applyExtractedMemory(ctx context.Context, ev evaluation, previous,
 					break
 				}
 				if m.Content != "" && !privateMemory(m.Content) && len([]rune(m.Content)) <= 300 && (m.Action == "" || m.Action == "add" || m.Action == "update") {
-					if v, err := cl.Embed(ctx, []string{m.Content}); err == nil && len(v) == 1 {
+					if v, err := a.embed(ctx, cl, pid, "embedding", []string{m.Content}); err == nil && len(v) == 1 {
 						vectors[i] = vectorLiteral(v[0])
 						embeddingProfile = pid
 					}

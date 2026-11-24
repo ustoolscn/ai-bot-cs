@@ -195,7 +195,7 @@ func TestImageGenerationConfigurationAndTool(t *testing.T) {
 		t.Fatal("implicit image model", err)
 	}
 	proxy := createdID(t, requestJSON(t, client, "POST", api+"/system/proxies", map[string]string{"name": "image-test", "address": provider.URL}, 200))
-	profileBody := map[string]any{"name": "image-test", "kind": "image", "model": "gpt-image-2.6-flare", "baseUrl": "http://images.invalid/v1", "apiKey": "image-secret", "proxyId": proxy}
+	profileBody := map[string]any{"name": "image-test", "kind": "image", "model": "gpt-image-2.6-flare", "baseUrl": "http://images.invalid/v1", "apiKey": "image-secret", "proxyId": proxy, "pricePerImage": 0.25}
 	viaProxy := createdID(t, requestJSON(t, client, "POST", api+"/model-profiles", profileBody, 200))
 	delete(profileBody, "apiKey")
 	requestJSON(t, client, "PUT", api+"/model-profiles/"+viaProxy, profileBody, 200)
@@ -224,6 +224,16 @@ func TestImageGenerationConfigurationAndTool(t *testing.T) {
 	raw = requestJSON(t, client, "POST", api+"/model-profiles/"+viaProxy+"/test", map[string]string{"input": "蓝色的山"}, 200)
 	if !bytes.Contains(raw, []byte(`"contentType":"image/png"`)) || !bytes.Contains(raw, []byte("data:image/png;base64,")) || calls != 2 {
 		t.Fatal("image profile test failed", string(raw))
+	}
+	costs := dataMap(t, requestJSON(t, client, "GET", api+"/system/costs", nil, 200))
+	if costs["total"] != 0.25 {
+		t.Fatalf("image test usage %v", costs)
+	}
+	profileBody["pricePerImage"] = 0.5
+	requestJSON(t, client, "PUT", api+"/model-profiles/"+viaProxy, profileBody, 200)
+	costs = dataMap(t, requestJSON(t, client, "GET", api+"/system/costs", nil, 200))
+	if costs["total"] != 0.5 {
+		t.Fatalf("repriced image usage %v", costs)
 	}
 	requestJSON(t, client, "DELETE", api+"/model-profiles/"+viaProxy, nil, 200)
 	requestJSON(t, client, "PUT", bots+"/"+svc, map[string]string{"name": "image-service", "imageProfileId": ""}, 200)

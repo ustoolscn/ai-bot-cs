@@ -21,7 +21,7 @@ func (a *App) loadMemories(ctx context.Context, s agent.Settings, botID, convers
 		err := a.db.QueryRow(ctx, `SELECT EXISTS(SELECT FROM user_memories WHERE bot_id=$1 AND conversation_id=$2 AND platform_user_id=$3 AND status='active'
 			AND (expires_at IS NULL OR expires_at>now()) AND embedding IS NOT NULL AND embedding_profile_id=$4)`, botID, conversationID, userID, pid).Scan(&searchable)
 		if searchable || err != nil {
-			if v, err := embeddings.get(ctx, cl, pid, query); err == nil {
+			if v, err := embeddings.get(a, ctx, cl, pid, query); err == nil {
 				rowsSQL = `SELECT kind,to_char(coalesce(event_at,created_at) AT TIME ZONE 'UTC','YYYY-MM-DD') || ' · ' || content FROM user_memories WHERE bot_id=$1 AND conversation_id=$2 AND platform_user_id=$3 AND status='active' AND (expires_at IS NULL OR expires_at>now())
 				ORDER BY pinned DESC, CASE WHEN embedding IS NOT NULL AND embedding_profile_id=$5 AND vector_dims(embedding)=$7 THEN embedding <=> $6::vector ELSE 1 END, updated_at DESC LIMIT $4`
 				args = append(args, pid, vectorLiteral(v), len(v))
@@ -100,7 +100,7 @@ func (a *App) saveMemory(ctx context.Context, s agent.Settings, botID, conversat
 	}
 	var embedding, profile any
 	if cl, pid, ok := a.embeddingModel(ctx, s); ok {
-		if v, err := cl.Embed(ctx, []string{content}); err == nil && len(v) == 1 {
+		if v, err := a.embed(context.WithValue(ctx, usageScopeKey{}, usageScope{conversation: conversationID, message: messageID}), cl, pid, "embedding", []string{content}); err == nil && len(v) == 1 {
 			// Skip near-duplicates of an existing memory.
 			var dup bool
 			_ = a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM user_memories WHERE bot_id=$1 AND conversation_id=$2 AND platform_user_id=$3 AND status='active' AND embedding IS NOT NULL AND embedding_profile_id=$4 AND vector_dims(embedding)=$6 AND 1-(embedding <=> $5::vector) > 0.93)`, botID, conversationID, userID, pid, vectorLiteral(v[0]), len(v[0])).Scan(&dup)

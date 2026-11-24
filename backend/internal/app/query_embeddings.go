@@ -15,12 +15,12 @@ type queryEmbeddingKey struct {
 // another consumer, and a rewritten query gets its own vector.
 type queryEmbeddings map[queryEmbeddingKey][]float32
 
-func (cache *queryEmbeddings) get(ctx context.Context, cl *openai.Client, profile, text string) ([]float32, error) {
+func (cache *queryEmbeddings) get(a *App, ctx context.Context, cl *openai.Client, profile, text string) ([]float32, error) {
 	key := queryEmbeddingKey{profile, cl.BaseURL, cl.Model, text, cl.Dimensions}
 	if vector, ok := (*cache)[key]; ok {
 		return vector, nil
 	}
-	vectors, err := cl.Embed(ctx, []string{text})
+	vectors, err := a.embed(ctx, cl, profile, "embedding", []string{text})
 	if err != nil {
 		return nil, err
 	}

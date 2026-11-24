@@ -206,6 +206,7 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.retryInbox(ctx, j, err)
 	}
 
+	ctx = context.WithValue(ctx, usageScopeKey{}, usageScope{run: runID, message: j.MessageID, conversation: j.ConversationID})
 	rt := &turnRuntime{chatProfileID: profileID, question: originalQuestion, settings: settings, botID: j.BotID, conversationID: j.ConversationID, conversationType: j.ConversationType,
 		senderID: senderID, senderName: senderName, messageID: j.MessageID, runID: runID}
 	rt.knowledgeBases = a.conversationKnowledgeBases(ctx, j.ConversationID)
@@ -593,22 +594,15 @@ func (a *App) rewriteQuery(ctx context.Context, s agent.Settings, profileID, run
 }
 
 func (a *App) recordModelCall(ctx context.Context, runID, messageID, profileID, kind string, res domain.ChatResult, latency int64, err error) {
-	var run any
-	if runID != "" {
-		run = runID
+	scope, _ := ctx.Value(usageScopeKey{}).(usageScope)
+	images := 0
+	if kind == "image" && err == nil {
+		images = 1
 	}
-	var profile any
-	if profileID != "" {
-		profile = profileID
-	}
-	_, recordErr := a.db.Exec(ctx, `INSERT INTO model_calls(agent_run_id,profile_id,kind,input_tokens,output_tokens,latency_ms,error,cached_input_tokens,cache_write_tokens,message_id,estimated_cost)
-	SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,coalesce(nullif($10,'')::uuid,(SELECT message_id FROM agent_runs WHERE id=$1)),(
-		SELECT CASE WHEN num_nonnulls(input_price,output_price,cache_read_price,cache_write_price)>0 THEN
-			(CASE WHEN $4::int-$8::int-$9::int=0 THEN 0 ELSE ($4-$8-$9)*input_price END +
-			 CASE WHEN $5::int=0 THEN 0 ELSE $5*output_price END +
-			 CASE WHEN $8=0 THEN 0 ELSE $8*cache_read_price END +
-			 CASE WHEN $9=0 THEN 0 ELSE $9*cache_write_price END)/1000000 END
-		FROM model_profiles WHERE id=$2)`, run, profile, kind, res.InputTokens, res.OutputTokens, latency, errorText(err), res.CachedInputTokens, res.CacheWriteTokens, messageID)
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_, recordErr := a.db.Exec(writeCtx, `INSERT INTO model_calls(agent_run_id,profile_id,kind,input_tokens,output_tokens,latency_ms,error,cached_input_tokens,cache_write_tokens,message_id,images,conversation_id)
+ SELECT nullif($1,'')::uuid,nullif($2,'')::uuid,$3,$4,$5,$6,$7,$8,$9,coalesce(nullif($10,'')::uuid,(SELECT message_id FROM agent_runs WHERE id=nullif($1,'')::uuid)),$11,nullif($12,'')::uuid`, firstNonEmpty(runID, scope.run), profileID, kind, res.InputTokens, res.OutputTokens, latency, errorText(err), res.CachedInputTokens, res.CacheWriteTokens, firstNonEmpty(messageID, scope.message), images, scope.conversation)
 	if recordErr != nil {
 		a.log.Error("record model usage", "kind", kind, "error", recordErr)
 	}
@@ -799,7 +793,7 @@ func (a *App) retrieve(ctx context.Context, kbIDs []string, query string, embedd
 			lastErr = e
 			continue
 		}
-		v, e := embeddings.get(ctx, cl, *pid, query)
+		v, e := embeddings.get(a, ctx, cl, *pid, query)
 		if e != nil {
 			lastErr = e
 			continue

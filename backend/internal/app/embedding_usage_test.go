@@ -35,7 +35,7 @@ func TestEmbeddingRequestCounts(t *testing.T) {
 			t.Errorf("unexpected endpoint %s", r.URL.Path)
 		}
 		calls.Add(1)
-		fmt.Fprint(w, `{"data":[{"index":0,"embedding":[1,0,0]}]}`)
+		fmt.Fprint(w, `{"usage":{"input_tokens":9,"output_tokens":2},"data":[{"index":0,"embedding":[1,0,0]}]}`)
 	}))
 	defer model.Close()
 	count := func(stage string, want int32) {
@@ -109,5 +109,10 @@ func TestEmbeddingRequestCounts(t *testing.T) {
 		t.Fatal("missing hits in fresh turn")
 	}
 	count("fresh turn with two profiles", 2)
+	var requests, inputs, outputs int
+	check(db.QueryRow(ctx, "SELECT count(*),sum(input_tokens),sum(output_tokens) FROM model_calls WHERE kind='embedding'").Scan(&requests, &inputs, &outputs))
+	if requests != 5 || inputs != 45 || outputs != 10 {
+		t.Fatalf("recorded embedding requests=%d input=%d output=%d", requests, inputs, outputs)
+	}
 
 }

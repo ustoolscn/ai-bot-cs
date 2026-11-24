@@ -99,6 +99,7 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 	if err != nil {
 		return err
 	}
+	ctx = context.WithValue(ctx, usageScopeKey{}, usageScope{conversation: cid})
 	if time.Now().After(deadline) {
 		return fmt.Errorf("已超过本次发送时间窗口")
 	}

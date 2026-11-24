@@ -184,6 +184,7 @@ func (a *App) jobEvaluate(ctx context.Context, runID, messageID, profileID strin
 		Scan(&botID, &convID, &convType, &senderID, &senderName, &question, &platformID, &eventAt); err != nil {
 		return nil // message deleted
 	}
+	ctx = context.WithValue(ctx, usageScopeKey{}, usageScope{run: runID, message: messageID, conversation: convID})
 	s, _, _, err := a.conversationAgent(ctx, convID, a.agentSettings(ctx))
 	if err != nil {
 		return err
@@ -276,7 +277,7 @@ func (a *App) recordGap(ctx context.Context, s agent.Settings, question, message
 	question = agent.TruncateRunes(strings.TrimSpace(question), 200)
 	cl, pid, ok := a.embeddingModel(ctx, s)
 	if ok {
-		if v, err := cl.Embed(ctx, []string{question}); err == nil && len(v) == 1 {
+		if v, err := a.embed(ctx, cl, pid, "embedding", []string{question}); err == nil && len(v) == 1 {
 			lit := vectorLiteral(v[0])
 			var id string
 			err := a.db.QueryRow(ctx, `SELECT id::text FROM knowledge_gaps WHERE status IN ('open','candidate') AND embedding IS NOT NULL AND embedding_profile_id=$1 AND vector_dims(embedding)=$4 AND 1-(embedding <=> $2::vector) >= $3 ORDER BY embedding <=> $2::vector LIMIT 1`, pid, lit, s.GapSimilarity, len(v[0])).Scan(&id)
@@ -355,7 +356,7 @@ func (a *App) jobSummarize(ctx context.Context, conversationID, scope, until, pr
 	out := summary
 	if len(lines) > 0 {
 		input := "已有摘要：\n" + firstNonEmpty(summary, "（无）") + "\n\n新增对话：\n" + strings.Join(lines, "\n")
-		out, err = a.auxText(ctx, s, profileID, "summarize", agent.SummaryPrompt, input)
+		out, err = a.auxText(context.WithValue(ctx, usageScopeKey{}, usageScope{conversation: conversationID}), s, profileID, "summarize", agent.SummaryPrompt, input)
 		if openai.IsHTTPStatus(err, 403) {
 			return a.quarantineBackground(ctx, latest)
 		}
@@ -512,7 +513,7 @@ func (a *App) jobIndexEntry(ctx context.Context, entryID string) error {
 	if err != nil || kind != "embedding" {
 		return setErr(fmt.Errorf("Embedding 模型不可用"))
 	}
-	v, err := cl.Embed(ctx, []string{text})
+	v, err := a.embed(ctx, cl, *pid, "embedding_index", []string{text})
 	if err != nil {
 		return setErr(err)
 	}
