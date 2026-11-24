@@ -85,3 +85,19 @@ func TestSocialOnlyRequiresWholeMessage(t *testing.T) {
 		}
 	}
 }
+
+func TestDirectNameCall(t *testing.T) {
+	if directNameCall("小花你在吗", []decisionTurn{{Name: "小花", Role: "群成员"}}, "小花") {
+		t.Error("ambiguous call to a same-named group member must go to the judge")
+	}
+	for _, text := range []string{"小花你在吗？", "小花，帮我看下", "小花 你好！", "客服小Q，在不在？"} {
+		if !directNameCall(text, nil, "小花", "客服小q") {
+			t.Errorf("missed direct call %q", text)
+		}
+	}
+	for _, text := range []string{"你在吗", "小花猫，你在吗", "我问过小花你在吗", "小花今天在线吗", "小花，你在吗是他问的", "“小花，帮我看下”", "谁能转告小花？"} {
+		if directNameCall(text, nil, "", "小花") {
+			t.Errorf("unexpected forced reply to %q", text)
+		}
+	}
+}

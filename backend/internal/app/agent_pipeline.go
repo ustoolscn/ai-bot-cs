@@ -52,10 +52,10 @@ func (a *App) processInbox(ctx context.Context) error {
 		return a.retryInbox(ctx, j, err)
 	}
 
-	var senderID, senderName string
+	var senderID, senderName, botName string
 	var eventAt time.Time
 	var isStaff bool
-	err = a.db.QueryRow(ctx, `SELECT m.sender_id,m.sender_name,m.event_at,COALESCE(cm.is_staff,false) FROM messages m LEFT JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id WHERE m.id=$1`, j.MessageID).Scan(&senderID, &senderName, &eventAt, &isStaff)
+	err = a.db.QueryRow(ctx, `SELECT m.sender_id,m.sender_name,m.event_at,COALESCE(cm.is_staff,false),b.name FROM messages m JOIN bots b ON b.id=m.bot_id LEFT JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id WHERE m.id=$1`, j.MessageID).Scan(&senderID, &senderName, &eventAt, &isStaff, &botName)
 	if err != nil {
 		finishCheck("", err)
 		return a.retryInbox(ctx, j, err)
@@ -160,7 +160,14 @@ func (a *App) processInbox(ctx context.Context) error {
 			finish("", err)
 			return a.retryInbox(ctx, j, err)
 		}
+		// Only override a negative judgment for an unambiguous call in the user's own text.
+		// Quotes, mentions of others and other QQ elements stay with the contextual judge.
+		calledByName := j.Content == strings.TrimSpace(originalQuestion) && directNameCall(originalQuestion, recent, settings.PersonaName, botName)
 		input, _ := json.Marshal(map[string]any{
+			"客服称呼":       settings.PersonaName,
+			"QQ机器人名称":    botName,
+			"人设性格":       settings.StylePrompt,
+			"命中直接点名短句":   calledByName,
 			"客服职责":       instructions,
 			"群说明":        j.SystemPrompt,
 			"近期群聊":       recent,
@@ -175,6 +182,9 @@ func (a *App) processInbox(ctx context.Context) error {
 		err = a.auxJSON(ctx, judge, profileID, "", j.MessageID, "reply_decision", replyDecisionPrompt, string(input), &decision, imageParts...)
 		if err == nil && decision.Reply == nil {
 			err = fmt.Errorf("回复判断缺少 reply 字段")
+		}
+		if err == nil && calledByName {
+			*decision.Reply = true
 		}
 		decisionText := "需要回复"
 		if decision.Reply != nil && !*decision.Reply {

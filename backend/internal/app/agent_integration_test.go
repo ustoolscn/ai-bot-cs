@@ -116,6 +116,9 @@ func (m *agentMock) handleChat(w http.ResponseWriter, body []byte) {
 	case bytes.Contains(body, []byte("判断这条群消息")):
 		aux("reply_decision")
 		var input struct {
+			BotName string         `json:"QQ机器人名称"`
+			Persona string         `json:"客服称呼"`
+			Style   string         `json:"人设性格"`
 			Current string         `json:"当前消息"`
 			History []decisionTurn `json:"近期群聊"`
 		}
@@ -127,7 +130,7 @@ func (m *agentMock) handleChat(w http.ResponseWriter, body []byte) {
 				aliceAskedAboutVIP = true
 			}
 		}
-		if (strings.Contains(input.Current, "那价格多少") && aliceAskedAboutVIP) || strings.Contains(input.Current, "发成网页截图") || strings.Contains(input.Current, "我要人工") {
+		if (strings.Contains(input.Current, "那价格多少") && aliceAskedAboutVIP && input.BotName == "小花" && input.Persona == "接入小助手" && input.Style == "使用更新后的表达习惯") || strings.Contains(input.Current, "发成网页截图") || strings.Contains(input.Current, "我要人工") {
 			reply(`{"reply":true}`, nil)
 		} else {
 			reply(`{"reply":false}`, nil)
@@ -250,7 +253,7 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	}, http.StatusOK))
 	const botSecret = "agent-bot-secret"
 	botID := createdID(t, requestJSON(t, client, http.MethodPost, server.URL+"/api/bots", map[string]any{
-		"name": "agent bot", "appId": "app", "appSecret": botSecret, "modelProfileId": chatID, "enabled": true,
+		"name": "小花", "appId": "app", "appSecret": botSecret, "modelProfileId": chatID, "enabled": true,
 	}, http.StatusCreated))
 	kbID := createdID(t, requestJSON(t, client, http.MethodPost, server.URL+"/api/knowledge-bases", map[string]any{
 		"name": "FAQ", "embeddingProfileId": embID,
@@ -633,6 +636,19 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	results := requestJSON(t, client, http.MethodGet, server.URL+"/api/eval/runs/"+runID+"/results", nil, http.StatusOK)
 	if !bytes.Contains(results, []byte("get_model_price")) {
 		t.Fatalf("eval results: %s", results)
+	}
+	// The mock judge returns reply:false for both messages.
+	for _, tc := range []struct{ id, text, status string }{
+		{"named-call", "小花你在吗？", "completed"},
+		{"named-report", "刚才有人问小花在不在", "skipped"},
+	} {
+		postQQWebhook(t, client, hook, botSecret, groupEventBody(t, "event-"+tc.id, "GROUP_MESSAGE_CREATE", tc.id, "caller", "群友", tc.text))
+		eventually(t, 8*time.Second, tc.text, func() (bool, error) {
+			var status string
+			var sent bool
+			err := pool.QueryRow(ctx, `SELECT t.status,EXISTS(SELECT FROM messages r WHERE r.conversation_id=m.conversation_id AND r.reply_to_message_id=m.platform_message_id AND r.event_type='AI_RESPONSE' AND r.status='sent') FROM messages m JOIN inbox_tasks t ON t.message_id=m.id WHERE m.platform_message_id=$1`, tc.id).Scan(&status, &sent)
+			return status == tc.status && sent == (tc.id == "named-call"), err
+		})
 	}
 }
 
