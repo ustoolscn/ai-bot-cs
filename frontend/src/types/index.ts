@@ -32,6 +32,8 @@ export interface ModelProfile {
   outputPricePerMillion?: number | null
   cacheReadPricePerMillion?: number | null
   cacheWritePricePerMillion?: number | null
+  /** 生图模型：每张价格（元） */
+  pricePerImage?: number | null
   /** null 表示直连 */
   proxyId?: string | null
 }
