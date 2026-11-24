@@ -13,7 +13,7 @@
 
     <div class="dash-top">
       <section class="panel dash-card">
-        <header><h2>任务状态</h2><el-button v-if="activeAlerts.length" text type="danger" @click="$router.push('/system')">{{ activeAlerts.length }} 条告警</el-button></header>
+        <header><h2>任务状态</h2><span class="head-actions"><el-button v-if="activeAlerts.length" text type="danger" @click="$router.push('/system')">{{ activeAlerts.length }} 条告警</el-button><el-button v-if="overview.queues.failed" text :loading="dismissing" @click="dismissFailed">忽略失败</el-button></span></header>
         <QueueFlow :nodes="queueNodes" />
       </section>
 
@@ -46,6 +46,8 @@
         </div>
       </section>
     </div>
+
+    <CostPanel ref="costPanel" class="dash-cost" />
 
     <div class="dash-bottom">
       <section class="panel dash-card">
@@ -93,6 +95,8 @@ import { Refresh } from '@element-plus/icons-vue'
 import { api } from '@/api'
 import { agentApi, type LearningStats } from '@/api/agent'
 import EmptyState from '@/components/EmptyState.vue'
+import CostPanel from '@/components/CostPanel.vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import CountUp from '@/components/fx/CountUp.vue'
 import LiveDot from '@/components/fx/LiveDot.vue'
 import QueueFlow from '@/components/fx/QueueFlow.vue'
@@ -106,6 +110,18 @@ import { useShellStore } from '@/stores/shell'
 const overview = ref<SystemOverview>(createEmptyOverview())
 const stats = ref<LearningStats | null>(null)
 const loading = ref(false)
+const dismissing = ref(false)
+const costPanel = ref<InstanceType<typeof CostPanel>>()
+
+// 403 这类重试也不会好的失败，忽略后不再计入失败数，记录仍保留
+async function dismissFailed() {
+  const n = overview.value.queues.failed
+  try { await ElMessageBox.confirm(`把 ${n} 个失败任务标记为已忽略？忽略后不再计入失败，也不会被“重试失败任务”重新执行，记录仍会保留。`, '忽略失败任务', { confirmButtonText: '忽略', cancelButtonText: '取消', type: 'warning' }) } catch { return }
+  dismissing.value = true
+  try { const { dismissed } = await api.system.dismissFailed(); ElMessage.success(`已忽略 ${dismissed} 个失败任务`); await load(true) }
+  catch (e) { ElMessage.error(e instanceof Error ? e.message : '忽略失败') }
+  finally { dismissing.value = false }
+}
 const shell = useShellStore()
 const auth = useAuthStore()
 
@@ -176,6 +192,7 @@ async function load(background: unknown = false) {
   const [overviewResult, statsResult] = await Promise.allSettled([api.overview(), agentApi.learning.stats()])
   if (overviewResult.status === 'fulfilled') overview.value = overviewResult.value
   if (statsResult.status === 'fulfilled') stats.value = statsResult.value
+  costPanel.value?.refresh(background !== true)
   shell.refreshCounts(true)
   loading.value = false
 }
@@ -198,6 +215,9 @@ useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_c
 .dash-card { display: flex; flex-direction: column; gap: 14px; padding: 16px 20px; }
 .dash-card > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; }
 .dash-card h2 { font-size: 15px; font-weight: 600; }
+.head-actions { display: flex; gap: 4px; }
+.head-actions .el-button + .el-button { margin-left: 0; }
+.dash-cost { margin-top: 16px; }
 .dash-card header .muted { font-size: 12px; }
 
 .big-num { display: flex; align-items: baseline; gap: 4px; }

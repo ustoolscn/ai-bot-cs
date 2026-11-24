@@ -250,3 +250,15 @@ export interface SystemSettings {
   messageRetentionDays: number
   updatedAt?: string
 }
+
+export type CostRange = 'today' | '7d' | '30d' | 'all'
+export interface CostSummary {
+  /** 北京时间当天，按当前价格估算（元） */
+  today: number | null
+  /** 累计，按当前价格估算（元） */
+  total: number | null
+  byKind: Array<{ kind: 'chat' | 'embedding' | 'image'; cost: number; inputTokens: number; outputTokens: number; images: number }>
+  byConversation: Array<{ id: string; name: string; cost: number }>
+  byBot: Array<{ id: string; name: string; cost: number }>
+  unpricedModels: string[]
+}

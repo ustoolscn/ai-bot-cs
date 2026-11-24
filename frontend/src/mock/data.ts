@@ -1,4 +1,4 @@
-import type { AlertItem, Bot, Conversation, KnowledgeBase, MessageRecord, ModelProfile, SystemOverview } from '@/types'
+import type { AlertItem, Bot, Conversation, KnowledgeBase, MessageRecord, CostSummary, ModelProfile, SystemOverview } from '@/types'
 
 export const mockBots: Bot[] = [
   { id: 'bot-qq-service', name: '客服小Q', appId: '102*******31', status: 'online', enabled: true, callbackPath: '/callbacks/qq/bot-qq-service', callbackUrl: 'https://bot.example.com/callbacks/qq/bot-qq-service', lastEventAt: '刚刚' },
@@ -79,3 +79,27 @@ export const mockOverview: SystemOverview = {
 
 export const mockProxies = [{ id: 'px-1', name: '香港线路', address: 'socks5://10.0.0.8:1080' }, { id: 'px-2', name: '新加坡 HTTP', address: 'http://sg-proxy.internal:3128' }]
 export const mockHumanOperators = [{ conversationId: 'c2c-1', userOpenId: 'B3F1A9C27D0E4F55A61C8E2D9B7F3A10', name: '小李', enabled: true }, { conversationId: 'c2c-2', userOpenId: '7E2C90D4A1B84C3FAE5D6B2C1F0E9A88', name: 'Miya', enabled: false }]
+
+export const mockCosts: CostSummary = {
+  today: 3.4821,
+  total: 186.2093,
+  byKind: [
+    { kind: 'chat', cost: 152.31, inputTokens: 48_210_000, outputTokens: 3_920_000, images: 0 },
+    { kind: 'embedding', cost: 6.8993, inputTokens: 13_798_600, outputTokens: 0, images: 0 },
+    { kind: 'image', cost: 27, inputTokens: 0, outputTokens: 0, images: 135 },
+  ],
+  byConversation: [
+    { id: 'c1', name: '产品交流 1 群', cost: 74.12 },
+    { id: 'c2', name: '售后服务群', cost: 51.06 },
+    { id: 'c3', name: '新用户答疑', cost: 30.4 },
+    { id: 'knowledge-index', name: '知识库索引', cost: 5.62 },
+    { id: 'system', name: '系统任务', cost: 2.1 },
+  ],
+  byBot: [
+    { id: 'b1', name: '客服小助手', cost: 128.4 },
+    { id: 'b2', name: '售后机器人', cost: 50.09 },
+    { id: 'knowledge-index', name: '知识库索引', cost: 5.62 },
+    { id: 'system', name: '系统任务', cost: 2.1 },
+  ],
+  unpricedModels: ['高质量对话模型'],
+}

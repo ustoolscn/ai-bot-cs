@@ -7,7 +7,7 @@
         <div class="service-list"><div v-for="service in services" :key="service.name"><span class="entity-icon small"><el-icon><component :is="service.icon" /></el-icon></span><span><strong>{{ service.name }}</strong><small>{{ service.detail }}</small></span><StatusBadge :status="connection.lost ? 'warning' : service.status" :text="connection.lost ? '未连接' : undefined" /></div></div>
       </section>
       <section class="settings-panel">
-        <div class="panel-title"><h2>任务队列</h2><el-button size="small" :disabled="!overview.queues.failed" @click="retryFailed">重试失败任务</el-button></div>
+        <div class="panel-title"><h2>任务队列</h2><span><el-button size="small" :disabled="!overview.queues.failed" @click="dismissFailed">忽略失败任务</el-button><el-button size="small" :disabled="!overview.queues.failed" @click="retryFailed">重试失败任务</el-button></span></div>
         <div class="queue-metrics" style="grid-template-columns: repeat(2, 1fr)"><div><span>待处理消息</span><strong>{{ overview.queues.inbox }}</strong></div><div><span>待发送回复</span><strong>{{ overview.queues.outbox }}</strong></div><div><span>待索引文档</span><strong>{{ overview.queues.knowledge }}</strong></div><div><span>失败任务</span><strong :class="{ 'danger-text': overview.queues.failed }">{{ overview.queues.failed }}</strong></div></div>
         
       </section>
@@ -143,6 +143,7 @@ const password=reactive({current:'',next:'',confirm:''})
 onMounted(load)
 async function load(){loading.value=true;settingsError.value='';const [overviewResult,settingsResult]=await Promise.allSettled([api.overview(),api.system.getSettings(),loadProxies()]);if(overviewResult.status==='fulfilled')overview.value=overviewResult.value;if(settingsResult.status==='fulfilled'){rememberSettings(settingsResult.value);settingsLoaded.value=true}else{settingsLoaded.value=false;settingsError.value=settingsResult.reason instanceof Error?settingsResult.reason.message:'无法读取系统设置';ElMessage.error('系统参数读取失败：'+settingsError.value)}loading.value=false}
 async function saveSettings(){if(!settingsLoaded.value||saving.value)return;saving.value=true;settingsError.value='';try{const saved=await api.system.updateSettings({...settings,publicBaseUrl:savedBase.value});rememberSettings(saved);ElMessage.success('已保存，无需重启')}catch(error){settingsError.value=error instanceof Error?error.message:'保存系统设置失败';ElMessage.error(settingsError.value)}finally{saving.value=false}}
+async function dismissFailed(){try{await ElMessageBox.confirm(`把 ${overview.value.queues.failed} 个失败任务标记为已忽略？适合 403 这类重试也不会好的失败。忽略后不再计入失败、不会被重试，记录仍保留。`,'忽略失败任务',{confirmButtonText:'忽略',cancelButtonText:'取消',type:'warning'})}catch{return}const result=await api.system.dismissFailed();await load();ElMessage.success(`已忽略 ${result.dismissed} 个失败任务`)}
 async function retryFailed(){const result=await api.system.retryFailed();await load();ElMessage.success(`已重新入队 ${result.queued} 个任务`)}
 function formatUpdatedAt(value:string){const date=new Date(value);return Number.isNaN(date.getTime())?value:date.toLocaleString('zh-CN',{hour12:false})}
 async function changePassword(){if(password.next.length<8){ElMessage.error('新密码至少 8 位');return}if(password.next!==password.confirm){ElMessage.error('两次输入的新密码不一致');return}await api.auth.changePassword(password.current,password.next);Object.assign(password,{current:'',next:'',confirm:''});ElMessage.success('管理员密码已更新')}

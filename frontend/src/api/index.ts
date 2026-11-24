@@ -1,7 +1,7 @@
 import { ApiError, mockFallbackEnabled, request } from './client'
 import { connection } from '@/utils/connection'
-import { mockBots, mockConversations, mockHumanOperators, mockKnowledgeBases, mockMessages, mockModels, mockOverview, mockProxies } from '@/mock/data'
-import type { ActiveTask, Bot, Conversation, KnowledgeBase, KnowledgeDocument, MessageAttachment, MessageTimeline, MessageRecord, HandoffStatus, HumanOperator, ModelProfile, ModelProxy, ModelTestInput, ProxyTestResult, ModelTestResult, Status, SystemOverview, SystemSettings } from '@/types'
+import { mockBots, mockConversations, mockHumanOperators, mockKnowledgeBases, mockMessages, mockModels, mockOverview, mockProxies, mockCosts } from '@/mock/data'
+import type { ActiveTask, Bot, Conversation, KnowledgeBase, KnowledgeDocument, MessageAttachment, MessageTimeline, MessageRecord, HandoffStatus, HumanOperator, ModelProfile, ModelProxy, ModelTestInput, ProxyTestResult, ModelTestResult, CostRange, CostSummary, Status, SystemOverview, SystemSettings } from '@/types'
 import { createEmptyOverview } from '@/utils/overview'
 
 type BackendBot = { id: string; name: string; appId: string; enabled: boolean; status: string; lastEventAt?: string; hasSecret: boolean; callbackUrl?: string }
@@ -180,6 +180,8 @@ export const api = {
   },
   system: {
     retryFailed: () => request<{ queued: number }>({ method: 'POST', url: '/system/retry-failed' }, { queued: 0 }),
+    dismissFailed: (id?: string) => request<{ dismissed: number }>({ method: 'POST', url: id ? `/system/dismiss-failed/${id}` : '/system/dismiss-failed' }, { dismissed: 0 }),
+    costs: (range: CostRange = 'all') => loadOrMock(() => request<CostSummary>({ url: '/system/costs', params: { range } }), mockCosts),
     getSettings: () => request<SystemSettings>({ method: 'GET', url: '/system/settings' }),
     proxies: {
       list: () => request<ModelProxy[]>({ url: '/system/proxies' }, mockProxies),
