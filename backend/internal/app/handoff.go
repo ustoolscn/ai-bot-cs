@@ -45,6 +45,12 @@ func (a *App) handoffTurn(ctx context.Context, bot, conv, user, name, mid, reaso
 	}
 	defer tx.Rollback(ctx)
 	handled, err := linkHandoffTurn(ctx, tx, bot, conv, user, name, mid, reason, idleMinutes)
+	if _, closed := err.(hoursClosed); closed {
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			return false, commitErr
+		}
+		return false, err
+	}
 	if err != nil {
 		return false, err
 	}
@@ -71,6 +77,14 @@ func linkHandoffTurn(ctx context.Context, tx pgx.Tx, bot, conv, user, name, mid,
 	if errors.Is(err, pgx.ErrNoRows) {
 		if idleMinutes == 0 {
 			return false, nil
+		}
+		var hours handoffHours
+		err = tx.QueryRow(ctx, "SELECT coalesce(s.handoff_hours,'{}'::jsonb) FROM conversations c LEFT JOIN bot_services s ON s.id=c.service_id WHERE c.id=$1", conv).Scan(&hours)
+		if err != nil {
+			return false, err
+		}
+		if !hours.open(time.Now()) {
+			return false, hours.notice()
 		}
 		err = tx.QueryRow(ctx, `INSERT INTO handoffs(bot_id,conversation_id,platform_user_id,display_name,message_id,reason,paused_until,idle_minutes) VALUES($1,$2,$3,$4,$5,$6,now()+$7::int*interval '1 minute',$7) RETURNING id::text`, bot, conv, user, name, mid, reason, idleMinutes).Scan(&id)
 	}

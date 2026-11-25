@@ -108,7 +108,7 @@
         </section>
 
         <section id="learning" class="settings-section">
-          <header><h2>学习与转人工</h2><p>自动质检、从官方客服学习，以及转人工后机器人安静多久。</p></header>
+          <header><h2>学习与转人工</h2><p>自动质检、从官方客服学习、转人工后机器人安静多久，以及几点到几点可以转人工。</p></header>
           <div class="settings-card">
             <div class="setting-row"><div><strong>每轮自动质检</strong></div><el-switch v-model="form.settings.evaluationEnabled" /></div>
             <div class="setting-row"><div><strong>从官方客服的回答里学习</strong></div><el-switch v-model="form.settings.staffMiningEnabled" /></div>
@@ -117,6 +117,16 @@
             <div class="setting-row"><div><strong>候选知识发布到</strong></div>
               <el-select v-model="form.settings.learningKnowledgeBaseId" clearable placeholder="选择知识库"><el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" /></el-select></div>
             <div class="setting-row"><div><strong>转人工后安静</strong></div><span><el-input-number v-model="form.settings.handoffPauseMinutes" :min="1" :max="1440" /><span class="unit-label">分钟</span></span></div>
+            <div class="setting-row"><div><strong>只在人工服务时间内转人工</strong><p>北京时间，每天相同。时间外不会转人工，机器人会告诉用户人工的在线时间；已经转人工的对话不受影响。</p></div><el-switch v-model="hours.enabled" /></div>
+            <Transition name="hours-row">
+              <div v-if="hours.enabled" class="setting-row"><div><strong>人工服务时间</strong><p v-if="overnight">结束早于开始，表示跨过午夜到第二天。</p></div>
+                <span class="hours-range">
+                  <el-time-select v-model="hours.start" start="00:00" end="23:30" step="00:30" :clearable="false" aria-label="开始时间" />
+                  <span class="unit-label">至</span>
+                  <el-time-select v-model="hours.end" start="00:00" end="23:30" step="00:30" :clearable="false" aria-label="结束时间" />
+                </span>
+              </div>
+            </Transition>
           </div>
         </section>
 
@@ -147,7 +157,7 @@ import LiveDataPanel from '@/components/agent/LiveDataPanel.vue'
 import StatusStylePicker from '@/components/agent/StatusStylePicker.vue'
 import { api } from '@/api'
 import { agentApi, type Skill, type StatusImageStyle } from '@/api/agent'
-import { botServices, type BotService } from '@/api/support'
+import { botServices, type BotService, type HandoffHours } from '@/api/support'
 import type { KnowledgeBase, ModelProfile } from '@/types'
 
 const props = defineProps<{ botId: string; serviceId: string }>()
@@ -170,6 +180,11 @@ const toolLabels: Record<string, string> = {
 const isNew = computed(() => props.serviceId === 'new')
 const form = ref<BotService | null>(null)
 const snapshot = ref('')
+const hours = ref<HandoffHours>({ enabled: false, start: '09:00', end: '18:00' })
+const hoursSnapshot = ref(JSON.stringify(hours.value))
+const hoursDirty = computed(() => JSON.stringify(hours.value) !== hoursSnapshot.value)
+const overnight = computed(() => hours.value.end < hours.value.start)
+function applyHours(value: HandoffHours) { hours.value = { ...value }; hoursSnapshot.value = JSON.stringify(hours.value) }
 const botName = ref('')
 const models = ref<ModelProfile[]>([])
 const knowledgeBases = ref<KnowledgeBase[]>([])
@@ -192,7 +207,7 @@ const statusStyle = computed({
   set: (value: StatusImageStyle) => { live.value.statusImageStyle = value },
 })
 const liveSource = computed(() => botServices(props.botId).liveData(props.serviceId))
-const dirty = computed(() => !!form.value && (isNew.value || JSON.stringify(form.value) !== snapshot.value || !!accessToken.value.trim() || clearToken.value))
+const dirty = computed(() => !!form.value && (isNew.value || JSON.stringify(form.value) !== snapshot.value || hoursDirty.value || !!accessToken.value.trim() || clearToken.value))
 const liveBlockedReason = computed(() => {
   if (dirty.value) return '先保存修改再同步。'
   if (!JSON.parse(snapshot.value || '{}')?.settings?.liveData?.enabled) return '启用并保存后才能同步。'
@@ -238,6 +253,7 @@ async function load() {
       const found = list.find(s => s.id === props.serviceId)
       if (!found) { loadError.value = '找不到这个 AI 客服，可能已被删除。'; return }
       apply(found)
+      applyHours(await botServices(props.botId).handoffHours(found.id).get())
     }
     nextTick(observeSections)
   } catch (error) {
@@ -245,14 +261,16 @@ async function load() {
   }
 }
 
-function discard() { if (snapshot.value) apply(JSON.parse(snapshot.value)) }
+function discard() { if (snapshot.value) apply(JSON.parse(snapshot.value)); applyHours(JSON.parse(hoursSnapshot.value)) }
 async function save() {
   if (!form.value || !form.value.name.trim()) return
+  if (hours.value.enabled && hours.value.start === hours.value.end) { ElMessage.error('人工服务的开始和结束时间不能相同'); return }
   saving.value = true
   try {
     const record = { ...form.value, settings: { ...form.value.settings, examples: form.value.settings.examples.filter(e => e.question.trim() && e.answer.trim()) } }
     const token = accessToken.value.trim() ? accessToken.value.trim() : clearToken.value ? '' : undefined
     const { id } = await botServices(props.botId).save(record, token)
+    if (isNew.value || hoursDirty.value) applyHours(await botServices(props.botId).handoffHours(id || form.value.id).save(hours.value))
     ElMessage.success(isNew.value ? '客服已创建' : '设置已保存')
     snapshot.value = JSON.stringify(form.value)
     if (isNew.value) { await router.replace({ name: 'bot-service', params: { id: props.botId, serviceId: id } }); return }
@@ -295,4 +313,10 @@ onBeforeUnmount(() => { observer?.disconnect(); window.removeEventListener('befo
 .pick-name { font-size: 13px; }
 .token-field { display: flex; align-items: center; gap: 12px; }
 .token-field .el-input { width: 280px; }
+.setting-row p { margin: 2px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.hours-range { display: inline-flex; align-items: center; gap: 8px; }
+.hours-range .el-select { width: 112px; }
+.hours-row-enter-active, .hours-row-leave-active { transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.hours-row-enter-from, .hours-row-leave-to { opacity: 0; transform: translateY(-4px); }
+@media (prefers-reduced-motion: reduce) { .hours-row-enter-active, .hours-row-leave-active { transition: none; } }
 </style>

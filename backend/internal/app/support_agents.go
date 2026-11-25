@@ -21,6 +21,8 @@ func (a *App) supportRoutes(r *gin.RouterGroup) {
 	r.GET("/support-agents", func(c *gin.Context) {
 		queryList(c, a, `SELECT id::text,name,instructions,personality_id::text AS "personalityId" FROM support_agents ORDER BY name,id`)
 	})
+	r.GET("/bots/:id/services/:item/handoff-hours", a.handoffHoursAPI)
+	r.PUT("/bots/:id/services/:item/handoff-hours", a.handoffHoursAPI)
 	r.GET("/bots/:id/services", a.listServices)
 	r.GET("/bots/:id/services/:item/live-data", a.getLiveData)
 	r.POST("/bots/:id/services/:item/live-data/refresh", a.refreshLiveDataNow)

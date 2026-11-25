@@ -843,6 +843,11 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 				_, _ = a.db.Exec(ctx, "INSERT INTO tool_calls(agent_run_id,tool_name,arguments,result,error) VALUES($1,$2,$3::jsonb,$4::jsonb,$5)", rt.runID, call.Name, args, resultJSON, errorText(terr))
 			}
 			messages = append(messages, domain.ChatMessage{Role: "tool", ToolCallID: call.ID, Content: agent.TruncateRunes(result, 6000)})
+			if closed, ok := terr.(hoursClosed); ok {
+				out.content = closed.Error()
+				out.messages = messages
+				return out
+			}
 			if quota, ok := terr.(imageLimitError); ok {
 				out.content = quota.Error()
 				out.messages = messages

@@ -44,6 +44,8 @@ const mockService: BotService = {
   },
 }
 
+export interface HandoffHours { enabled: boolean; start: string; end: string }
+
 export function botServices(botId: string) {
   const base = '/bots/' + botId + '/services'
   return {
@@ -52,6 +54,11 @@ export function botServices(botId: string) {
       url: record.id ? base + '/' + record.id : base,
       method: record.id ? 'PUT' : 'POST',
       data: liveDataAccessToken === undefined ? record : { ...record, liveDataAccessToken },
+    }),
+    // 人工服务时间（北京时间，每天同一段，可跨午夜）。时间外不会转人工，机器人会告诉用户人工在线时间。
+    handoffHours: (id: string) => ({
+      get: () => request<HandoffHours>({ url: `${base}/${id}/handoff-hours` }, { enabled: false, start: '09:00', end: '18:00' }),
+      save: (hours: HandoffHours) => request<HandoffHours>({ method: 'PUT', url: `${base}/${id}/handoff-hours`, data: hours }),
     }),
     liveData: (id: string) => ({
       get: () => request<LiveData>({ url: `${base}/${id}/live-data` }, mockLiveData),
