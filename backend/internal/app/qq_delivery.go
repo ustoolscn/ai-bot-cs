@@ -244,6 +244,9 @@ func (a *App) qqQueue(c *gin.Context) {
 		id = private
 		kind = "private"
 	}
+	if in.Kind == "text" && strings.TrimSpace(in.Text) != "" {
+		in.Text = "【人工客服】" + strings.TrimPrefix(in.Text, "【人工客服】")
+	}
 	p, e := in.payload(kind)
 	if e != nil {
 		fail(c, 400, "invalid", e.Error())

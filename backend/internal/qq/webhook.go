@@ -193,6 +193,7 @@ func Parse(body []byte, botID string) (Envelope, *domain.InboundMessage, error) 
 	if ct == "private" {
 		conversationName = senderName
 	}
+	d.Content = displayFaces(d.Content)
 	parts := make([]domain.ContentPart, 0, len(d.Attachments)+1)
 	if text := strings.TrimSpace(d.Content); text != "" {
 		parts = append(parts, domain.ContentPart{Type: "text", Text: text})

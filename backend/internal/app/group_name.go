@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 
 	"ai-bot/backend/internal/qq"
@@ -45,4 +46,30 @@ func (a *App) syncGroupName(c *gin.Context) {
 		return
 	}
 	ok(c, gin.H{"name": info.Name, "info": info})
+}
+
+const missingGroupName = `(c.name='' OR c.name=c.platform_id OR c.name LIKE 'QQ 群聊 · %')`
+
+func (a *App) refreshMissingGroupName(ctx context.Context, id string) error {
+	var group, appID, encrypted string
+	err := a.db.QueryRow(ctx, `SELECT c.platform_id,b.app_id,b.app_secret_enc FROM conversations c JOIN bots b ON b.id=c.bot_id WHERE c.id=$1 AND c.type='group' AND NOT c.bot_removed AND `+missingGroupName, id).Scan(&group, &appID, &encrypted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	secret, err := a.cipher.Decrypt(encrypted)
+	if err != nil {
+		return err
+	}
+	info, err := qq.NewClient(appID, secret, a.cfg.QQAPIBaseURL, a.cfg.QQTokenURL).GroupInfo(ctx, group)
+	if errors.Is(err, qq.ErrGroupInfoPermission) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = a.db.Exec(ctx, `UPDATE conversations c SET name=$2,qq_group_info=qq_group_info||$3::jsonb WHERE id=$1 AND `+missingGroupName, id, info.Name, info)
+	return err
 }

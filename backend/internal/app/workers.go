@@ -557,7 +557,7 @@ func (a *App) handleOutbox(ctx context.Context, j outboxJob) error {
 	defer tx.Rollback(ctx)
 	_, err = tx.Exec(ctx, "UPDATE outbox_tasks SET status='sent',platform_message_id=$1,updated_at=now() WHERE id=$2", receipt.ID, j.TaskID)
 	if err == nil {
-		_, err = tx.Exec(ctx, "UPDATE messages SET status='sent',platform_message_id=$1,qq_ref_idx=$3,qq_sent_at=$4 WHERE id=$2", nullString(receipt.ID), j.MessageID, receipt.Ext.Index, parseQQTime(receipt.Timestamp))
+		_, err = tx.Exec(ctx, "UPDATE messages SET status='sent',platform_message_id=$1,qq_ref_idx=$3,qq_sent_at=$4,qq_delivered_text=CASE WHEN event_type='HUMAN_REPLY' THEN $5::text END WHERE id=$2", nullString(receipt.ID), j.MessageID, receipt.Ext.Index, parseQQTime(receipt.Timestamp), j.Text)
 	}
 
 	if err == nil && j.EventType == "AI_RESPONSE" {

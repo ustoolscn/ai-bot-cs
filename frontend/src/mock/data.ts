@@ -114,10 +114,12 @@ export function mockChat(conversationId: string): ChatPage {
     { id: 'c1', direction: 'inbound', role: 'user', senderName: '林晓', content: '有人知道新出的绘图模型怎么调用吗', attachments: [], at: minutesAgo(48), messageId: 'msg-001' },
     { id: 'c2', direction: 'inbound', role: 'user', senderName: '小川', content: '<@bot-openid> 帮我画一只在键盘上睡觉的橘猫', mentionNames: { 'bot-openid': '客服小Q' }, attachments: [], at: minutesAgo(46), messageId: 'msg-002', quotable: true },
     { id: 'c3', direction: 'outbound', role: 'bot', content: '画好啦，橘猫已经在键盘上睡着了。', attachments: [], at: minutesAgo(45), status: 'sent', replyToId: 'c2' },
-    { id: 'c4', direction: 'outbound', role: 'system', content: '欢迎新成员 周周 加入本群', attachments: [], at: minutesAgo(20) },
+    { id: 'c4', direction: 'outbound', role: 'bot', kind: 'welcome', content: '欢迎新成员 周周 加入本群', attachments: [], at: minutesAgo(20) },
+    { id: 'c4b', direction: 'outbound', role: 'bot', kind: 'scheduled', content: '【今日资讯】绘图模型已支持 2K 输出，调用方式见群公告。', attachments: [], at: minutesAgo(12), status: 'sent' },
+    { id: 'c4c', direction: 'inbound', role: 'user', senderName: '林晓', content: '收到<faceType=1,faceId="13",ext="eyJ0ZXh0Ijoi5ZGy54mZIn0=">', attachments: [], at: minutesAgo(11), messageId: 'msg-003' },
     { id: 'c5', direction: 'inbound', role: 'user', senderName: '周周', content: '<@bot-openid> 充值 200 还没到账，找人工', mentionNames: { 'bot-openid': '客服小Q' }, attachments: [], at: minutesAgo(6), messageId: 'msg-h01', canReply: true, quotable: true },
     { id: 'c6', direction: 'outbound', role: 'bot', content: '已为您转接人工客服，请稍等。', attachments: [], at: minutesAgo(6), status: 'sent', replyToId: 'c5' },
-    { id: 'c7', direction: 'outbound', role: 'human', senderName: '阿杰', content: '您好，已经帮您查到了，是支付渠道延迟，5 分钟内会到账。', attachments: [], at: minutesAgo(2), status: 'processing' },
+    { id: 'c7', direction: 'outbound', role: 'human', senderName: '阿杰', content: '【人工客服】您好，已经帮您查到了，是支付渠道延迟，5 分钟内会到账。', attachments: [], at: minutesAgo(2), status: 'processing' },
   ]
   return { items: conversationId ? items : [], nextBefore: null }
 }

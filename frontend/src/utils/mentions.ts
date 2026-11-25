@@ -32,9 +32,39 @@ function lookup(id: string) {
   timer ??= setTimeout(flush, 30)
 }
 
+// QQ 表情：<faceType=1,faceId="13",ext="base64({"text":"[呲牙]"})">，以及 <emoji:128512> 这类写法。
+// 解不出名字时显示 [表情]，不露出代码。
+const FACE = /<faceType=(\d+),\s*faceId="?([^",>]*)"?(?:,\s*ext="?([^">]*)"?)?\s*>/g
+const EMOJI = /<emoji:(\d+)>/g
+const faceCache = new Map<string, string>()
+function decodeExt(ext: string) {
+  if (faceCache.has(ext)) return faceCache.get(ext)!
+  let name = ''
+  try {
+    const bytes = Uint8Array.from(atob(ext.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))
+    const data = JSON.parse(new TextDecoder().decode(bytes)) as { text?: string }
+    name = typeof data.text === 'string' ? data.text.trim() : ''
+  } catch { /* 不是合法的 ext */ }
+  faceCache.set(ext, name)
+  return name
+}
+function fromCodePoint(id: string) {
+  const n = Number(id)
+  return Number.isInteger(n) && n > 0x2000 && n <= 0x10ffff ? String.fromCodePoint(n) : ''
+}
+export function formatFaces(text: string): string {
+  return text
+    .replace(FACE, (_, _type: string, id: string, ext?: string) => {
+      const name = ext ? decodeExt(ext) : ''
+      if (name) return /^\[.*\]$/.test(name) ? name : `[${name}]`
+      return fromCodePoint(id) || '[表情]'
+    })
+    .replace(EMOJI, (_, id: string) => fromCodePoint(id) || '[表情]')
+}
+
 export function formatMentions(text: string | null | undefined, names?: Record<string, string> | null): string {
   if (!text) return text || ''
-  return text.replace(MENTION, (_, id: string) => {
+  return formatFaces(text).replace(MENTION, (_, id: string) => {
     const name = names?.[id] || known.get(id)
     if (!name) lookup(id)
     return `@${name || '群成员'}`

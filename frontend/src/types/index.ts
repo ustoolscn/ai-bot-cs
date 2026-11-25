@@ -136,6 +136,8 @@ export interface Conversation {
   systemPrompt: string
   lastActiveAt: string
   enabled: boolean
+  /** 群头像（群聊）或对方头像（私聊），没有时为空 */
+  avatar?: string
   /** 最后一条消息，用于聊天列表预览 */
   lastMessage?: ChatPreview | null
   /** 这个群每人每天最多生成几张图；null 表示跟随通用设置 */
@@ -157,6 +159,10 @@ export interface ChatItem {
   role: 'user' | 'bot' | 'human' | 'system'
   senderId?: string
   senderName?: string
+  /** 发言人头像；出站消息是机器人头像 */
+  senderAvatar?: string
+  /** 机器人消息的来源：AI 回复、定时任务、日报、通知、入群欢迎 */
+  kind?: 'reply' | 'scheduled' | 'report' | 'notice' | 'welcome' | 'manual' | 'message' | string
   content: string
   mentionNames?: Record<string, string>
   attachments: MessageAttachment[]

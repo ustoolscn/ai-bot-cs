@@ -14,6 +14,7 @@ import (
 var ErrGroupInfoPermission = errors.New("当前机器人没有获取群基本信息的权限（11253），请向 QQ 平台运营申请")
 
 type GroupInfo struct {
+	Avatar  string `json:"group_avatar,omitempty"`
 	Code    int
 	Name    string   `json:"group_name"`
 	Group   string   `json:"group_openid"`

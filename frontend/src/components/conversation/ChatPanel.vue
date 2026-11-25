@@ -11,14 +11,14 @@
       <TransitionGroup name="msg" tag="div" class="feed-list">
         <template v-for="(m, i) in items" :key="m.id">
           <div v-if="showTime(i)" :key="m.id + '-t'" class="feed-time">{{ timeLabel(m.at) }}</div>
-          <div v-if="m.role === 'system'" :key="m.id + '-s'" class="feed-system">{{ $at(m.content, m.mentionNames) || '系统消息' }}</div>
-          <div v-else :key="m.id + '-m'" class="feed-row" :class="[m.direction, 'is-' + m.role, { target: m.id === target?.id }]">
-            <span class="avatar" :title="whoOf(m)">{{ initialOf(m) }}</span>
+          <div v-if="isEvent(m)" :key="m.id + '-s'" class="feed-system">{{ $at(m.content, m.mentionNames) || '系统消息' }}</div>
+          <div v-else :key="m.id + '-m'" class="feed-row" :class="[m.direction, { target: m.id === target?.id }]">
+            <AvatarImage class="feed-avatar" :src="m.senderAvatar" :name="whoOf(m)" :tone="m.direction === 'outbound' ? 'primary' : ''" />
             <div class="feed-body">
-              <small class="feed-who">{{ whoOf(m) }}</small>
-              <div v-if="m.replyToId && byId.get(m.replyToId)" class="feed-quote">{{ whoOf(byId.get(m.replyToId)!) }}：{{ $at(byId.get(m.replyToId)!.content, byId.get(m.replyToId)!.mentionNames) || '[图片]' }}</div>
+              <small class="feed-who"><span>{{ whoOf(m) }}</span><em v-for="t in tagsOf(m)" :key="t" class="feed-tag" :class="{ human: t.startsWith('人工') }">{{ t }}</em></small>
+              <div v-if="m.replyToId && byId.get(m.replyToId)" class="feed-quote">{{ whoOf(byId.get(m.replyToId)!) }}：{{ textOf(byId.get(m.replyToId)!) || '[图片]' }}</div>
               <div class="feed-bubble">
-                <span v-if="m.content">{{ $at(m.content, m.mentionNames) }}</span>
+                <span v-if="m.content">{{ textOf(m) }}</span>
                 <div v-if="images(m).length" class="feed-images">
                   <el-image v-for="(img, k) in images(m)" :key="k" :src="img.previewUrl" :preview-src-list="images(m).map(x => x.previewUrl!)" :initial-index="k" fit="cover" preview-teleported />
                 </div>
@@ -50,7 +50,7 @@
       <Transition name="fade">
         <div v-if="target" class="composer-target">
           <el-icon><ChatLineSquare /></el-icon>
-          <span>回复 {{ whoOf(target) }}：{{ $at(target.content, target.mentionNames) || '[图片]' }}</span>
+          <span>回复 {{ whoOf(target) }}：{{ textOf(target) || '[图片]' }}</span>
           <button type="button" class="target-clear" aria-label="取消回复" @click="target = undefined"><el-icon><Close /></el-icon></button>
         </div>
       </Transition>
@@ -77,6 +77,8 @@ import { ElMessage } from 'element-plus'
 import { api } from '@/api'
 import { useAdminEvents } from '@/composables/useAdminEvents'
 import EmptyState from '@/components/EmptyState.vue'
+import AvatarImage from '@/components/AvatarImage.vue'
+import { formatMentions } from '@/utils/mentions'
 import type { ChatItem, Conversation, MessageAttachment } from '@/types'
 
 const props = defineProps<{ conversation: Conversation }>()
@@ -94,12 +96,22 @@ const scroller = ref<HTMLElement>()
 const filePicker = ref<HTMLInputElement>()
 const byId = computed(() => new Map(items.value.map(m => [m.id, m])))
 
-const roleName: Record<string, string> = { bot: '机器人', human: '管理员' }
+// 机器人发出的所有消息（AI 回复、定时任务、通知、人工在后台发的）都用机器人的身份和气泡；
+// 只有入群、退群这类事件才居中显示成系统提示
+const isEvent = (m: ChatItem) => m.role === 'system'
 function whoOf(m: ChatItem) {
-  if (m.direction === 'inbound') return m.senderName || '群成员'
-  return m.role === 'human' ? (m.senderName ? `${m.senderName}（人工）` : '管理员') : (props.conversation.botName || roleName.bot)
+  if (m.direction === 'inbound') return m.senderName || (props.conversation.type === 'group' ? '群成员' : props.conversation.name)
+  return props.conversation.botName || '机器人'
 }
-function initialOf(m: ChatItem) { return m.direction === 'outbound' && m.role === 'bot' ? '机' : Array.from(whoOf(m))[0] || '?' }
+const kindName: Record<string, string> = { scheduled: '定时任务', report: '日报', notice: '通知', welcome: '入群欢迎' }
+function tagsOf(m: ChatItem) {
+  if (m.direction !== 'outbound') return []
+  if (m.role === 'human') return [m.senderName ? `人工 · ${m.senderName}` : '人工']
+  const k = m.kind && kindName[m.kind]
+  return k ? [k] : []
+}
+// 后端返回的是 QQ 里实际发出的文字（人工消息已带【人工客服】前缀）
+const textOf = (m: ChatItem) => formatMentions(m.content, m.mentionNames)
 const images = (m: ChatItem) => m.attachments.filter((a: MessageAttachment) => a.type === 'image' && a.previewUrl)
 const files = (m: ChatItem) => m.attachments.filter((a: MessageAttachment) => !(a.type === 'image' && a.previewUrl))
 const friendly = (v: string) => v.replace(/^[a-z_]+:\s*/, '')
@@ -237,17 +249,16 @@ useAdminEvents(['messages', 'outbox_tasks', 'handoffs'], refreshLatest)
 
 .feed-row { display: grid; grid-template-columns: 32px minmax(0, auto) auto; align-items: start; gap: 10px; max-width: min(78%, 680px); }
 .feed-row.outbound { grid-template-columns: auto minmax(0, auto) 32px; align-self: flex-end; }
-.feed-row.outbound .avatar { grid-column: 3; grid-row: 1; }
+.feed-row.outbound .feed-avatar { grid-column: 3; grid-row: 1; }
 .feed-row.outbound .feed-body { grid-column: 2; grid-row: 1; align-items: flex-end; }
 .feed-row.outbound .feed-actions { grid-column: 1; grid-row: 1; }
-.feed-row .avatar { width: 32px; height: 32px; font-size: 13px; background: var(--surface-3); color: var(--text-2); }
-.feed-row.is-bot .avatar { background: var(--primary); color: #fff; }
-.feed-row.is-human .avatar { background: var(--success); color: #fff; }
 .feed-body { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
-.feed-who { overflow: hidden; max-width: 100%; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.feed-who { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.feed-who > span { overflow: hidden; min-width: 0; text-overflow: ellipsis; }
+.feed-tag { flex: none; padding: 0 6px; border-radius: var(--radius-xs); background: var(--surface-3); color: var(--text-2); font-size: 11px; font-style: normal; line-height: 18px; }
+.feed-tag.human { background: var(--warning-light); color: var(--warning); }
 .feed-bubble { display: flex; flex-direction: column; gap: 6px; max-width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: 4px var(--radius-md) var(--radius-md); background: var(--surface); font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
 .feed-row.outbound .feed-bubble { border-radius: var(--radius-md) 4px var(--radius-md) var(--radius-md); background: var(--primary-light); border-color: var(--primary-soft); }
-.feed-row.is-human .feed-bubble { background: var(--success-light); border-color: #c9e4d5; }
 .feed-row.target .feed-bubble { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
 .feed-quote { overflow: hidden; max-width: 100%; padding: 2px 8px; border-left: 2px solid var(--line-strong); color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .feed-images { display: flex; flex-wrap: wrap; gap: 6px; }

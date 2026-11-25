@@ -12,9 +12,9 @@
         </div>
         <div v-loading="loading && !conversations.length" class="inbox-items">
           <button v-for="c in filtered" :key="c.id" type="button" class="inbox-item conv-item" :class="{ active: c.id === props.id, off: c.triggerMode === 'disabled' }" @click="open(c)">
-            <span class="conv-avatar" :class="c.type"><el-icon><component :is="c.type === 'group' ? ChatDotRound : User" /></el-icon></span>
+            <AvatarImage :src="c.avatar" :name="c.name" :size="36" :tone="c.type" />
             <span class="conv-text">
-              <span class="inbox-item-top"><strong>{{ c.name }}</strong><time>{{ shortTime(c.lastMessage?.at) }}</time></span>
+              <span class="inbox-item-top"><em class="conv-type" :class="c.type">{{ c.type === 'group' ? '群聊' : '私聊' }}</em><strong>{{ c.name }}</strong><time>{{ shortTime(c.lastMessage?.at) }}</time></span>
               <p>{{ preview(c) }}</p>
               <small>{{ c.botName }}<template v-if="c.triggerMode === 'disabled'"> · 已停用</template><template v-else-if="c.type === 'group' && c.triggerMode === 'smart' && !c.hasFullMessageEvents"> · <b class="danger-text">未收到群全量消息</b></template></small>
             </span>
@@ -26,7 +26,7 @@
       <section class="inbox-detail">
         <template v-if="current">
           <header class="inbox-detail-head">
-            <span class="conv-avatar" :class="current.type"><el-icon><component :is="current.type === 'group' ? ChatDotRound : User" /></el-icon></span>
+            <AvatarImage :src="current.avatar" :name="current.name" :size="32" :tone="current.type" />
             <div>
               <h2>{{ current.name }}</h2>
               <p>{{ summary }}</p>
@@ -75,12 +75,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChatDotRound, ChatLineSquare, Delete, MoreFilled, Refresh, Search, Setting, User } from '@element-plus/icons-vue'
+import { ChatLineSquare, Delete, MoreFilled, Refresh, Search, Setting } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
 import { useAdminEvents } from '@/composables/useAdminEvents'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import AvatarImage from '@/components/AvatarImage.vue'
 import ChatPanel from '@/components/conversation/ChatPanel.vue'
 import ConversationSettings from '@/components/conversation/ConversationSettings.vue'
 import MembersPanel from '@/components/conversation/MembersPanel.vue'
@@ -195,9 +196,9 @@ useAdminEvents(['conversations', 'messages', 'conversation_members', 'bots', 'kn
 .conv-item { display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: center; gap: 10px; padding: 10px 14px; }
 .conv-item.off { opacity: .62; }
 .conv-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.conv-avatar { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: 50%; background: var(--primary-light); color: var(--primary-text); font-size: 17px; }
-.conv-avatar.c2c { background: var(--success-light); color: var(--success); }
-.inbox-detail-head .conv-avatar { width: 32px; height: 32px; font-size: 15px; }
+.conv-type { flex: none; padding: 0 5px; border-radius: var(--radius-xs); font-size: 11px; font-style: normal; font-weight: 500; line-height: 17px; }
+.conv-type.group { background: var(--primary-light); color: var(--primary-text); }
+.conv-type.c2c { background: var(--success-light); color: var(--success); }
 .inbox-detail-head .head-actions { display: flex; gap: 8px; }
 .inbox-detail-head .head-actions .el-button + .el-button { margin-left: 0; }
 .danger-text { color: var(--danger); font-weight: 400; }

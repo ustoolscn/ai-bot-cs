@@ -15,9 +15,11 @@ func (a *App) chatHistory(c *gin.Context) {
 		return
 	}
 	rows, err := a.db.Query(c, `SELECT m.id::text,m.direction,
- CASE WHEN m.direction='inbound' THEN 'user' WHEN m.event_type IN ('QQ_ADMIN_SEND','HUMAN_REPLY','QQ_MEDIA_SEND') THEN 'human' WHEN m.event_type='AI_RESPONSE' THEN 'bot' ELSE 'system' END AS role,
- m.sender_id AS "senderId",coalesce(nullif(m.sender_name,''),nullif(cm.display_name,''),CASE WHEN m.direction='inbound' THEN 'QQ用户' WHEN m.event_type IN ('QQ_ADMIN_SEND','HUMAN_REPLY','QQ_MEDIA_SEND') THEN '客服' ELSE b.name END) AS "senderName",
- m.content,message_mention_names(m,m.content) AS "mentionNames",m.parts,m.event_at AS at,
+ CASE WHEN m.event_type IN ('GROUP_MEMBER_ADD','GROUP_MEMBER_REMOVE','GROUP_ADD_ROBOT','GROUP_DEL_ROBOT') THEN 'system' WHEN m.direction='inbound' THEN 'user' WHEN m.event_type IN ('QQ_ADMIN_SEND','HUMAN_REPLY','QQ_MEDIA_SEND') THEN 'human' ELSE 'bot' END AS role,
+ CASE WHEN m.event_type='AI_RESPONSE' THEN 'reply' WHEN m.event_type='SCHEDULED_POST' THEN 'scheduled' WHEN m.event_type='DAILY_REPORT' THEN 'report' WHEN m.event_type IN ('HANDOFF_NOTICE','HANDOFF_UPDATE','OPERATOR_ACK') THEN 'notice' WHEN m.event_type='WELCOME' THEN 'welcome' WHEN m.event_type IN ('HUMAN_REPLY','QQ_ADMIN_SEND','QQ_MEDIA_SEND') THEN 'manual' ELSE 'message' END AS kind,
+ CASE WHEN m.direction='inbound' THEN coalesce(nullif(cm.qq_avatar,''),m.raw_event#>>'{d,author,avatar}','') ELSE '' END AS "senderAvatar",
+ m.sender_id AS "senderId",coalesce(nullif(nullif(m.sender_name,''),m.sender_id),nullif(nullif(cm.display_name,''),m.sender_id),nullif(nullif(cm.qq_username,''),m.sender_id),CASE WHEN m.direction='inbound' THEN 'QQ用户' WHEN m.event_type IN ('QQ_ADMIN_SEND','HUMAN_REPLY','QQ_MEDIA_SEND') THEN '客服' ELSE b.name END) AS "senderName",
+ CASE WHEN m.qq_delivered_text IS NOT NULL THEN m.qq_delivered_text WHEN m.event_type='HUMAN_REPLY' AND m.content NOT LIKE '【人工客服】%' THEN '【人工客服】'||m.content ELSE m.content END AS content,message_mention_names(m,m.content) AS "mentionNames",m.parts,m.event_at AS at,
  CASE WHEN m.direction='outbound' THEN CASE WHEN coalesce(t.status,m.status) IN ('failed','expired') THEN 'failed' ELSE coalesce(t.status,m.status) END END AS status,coalesce(t.last_error,nullif(m.delivery_error,'')) AS error,
  ref.id::text AS "replyToId",CASE WHEN m.direction='inbound' THEN m.id::text END AS "messageId",
  coalesce(m.direction='inbound' AND NOT m.context_excluded AND m.status<>'retracted' AND m.platform_message_id IS NOT NULL AND m.reply_deadline>now(),false) AS "canReply",

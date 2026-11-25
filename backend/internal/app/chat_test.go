@@ -31,6 +31,8 @@ func TestChatCursorAndReplyFlags(t *testing.T) {
 	check(pool.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,platform_message_id,qq_ref_idx,reply_deadline,sender_id,sender_name,content) VALUES('qq',$1,$2,'inbound','platform','idx',now()+interval '1 hour','u','小明','<@u>') RETURNING id::text`, bot, cid).Scan(&mid))
 	_, err := pool.Exec(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,reply_to_message_id,status) VALUES('qq',$1,$2,'outbound','QQ_ADMIN_SEND','platform','pending')`, bot, cid)
 	check(err)
+	_, err = pool.Exec(ctx, `INSERT INTO conversation_members(conversation_id,platform_user_id,display_name,qq_avatar) VALUES($1,'u','小明','https://example.org/avatar')`, cid)
+	check(err)
 	r := gin.New()
 	r.GET("/conversations/:id/chat", a.chatHistory)
 	r.POST("/mention-names", a.mentionNames)
@@ -50,13 +52,19 @@ func TestChatCursorAndReplyFlags(t *testing.T) {
 	path := "/conversations/" + cid + "/chat?limit=1"
 	first := fetch("GET", path, "")
 	row := first["items"].([]any)[0].(map[string]any)
-	if row["role"] != "human" || row["status"] != "pending" || row["replyToId"] != mid || row["canReply"] != false {
+	if row["kind"] != "manual" || row["role"] != "human" || row["status"] != "pending" || row["replyToId"] != mid || row["canReply"] != false {
 		t.Fatal(row)
 	}
 	last := fetch("GET", path+"&before="+first["nextBefore"].(string), "")
 	row = last["items"].([]any)[0].(map[string]any)
-	if row["id"] != mid || row["canReply"] != true || row["quotable"] != true || last["nextBefore"] != nil {
+	if row["senderAvatar"] != "https://example.org/avatar" || row["senderName"] != "小明" || row["id"] != mid || row["canReply"] != true || row["quotable"] != true || last["nextBefore"] != nil {
 		t.Fatal(last)
+	}
+	_, err = pool.Exec(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,content) VALUES('qq',$1,$2,'outbound','SCHEDULED_POST','公告')`, bot, cid)
+	check(err)
+	scheduled := fetch("GET", path, "")["items"].([]any)[0].(map[string]any)
+	if scheduled["role"] != "bot" || scheduled["kind"] != "scheduled" || scheduled["senderAvatar"] != "" {
+		t.Fatal(scheduled)
 	}
 	names := fetch("POST", "/mention-names", `{"ids":["u","unknown"]}`)
 	if len(names) != 1 || names["u"] != "小明" {
