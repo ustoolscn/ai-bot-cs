@@ -191,6 +191,8 @@ code, kbd, pre, .mono { font-family: var(--font-mono); }
 .detail-body > *, .settings-sections > * { animation: rise var(--dur-slow) var(--ease) backwards; }
 .detail-body > :nth-child(2), .settings-sections > :nth-child(2) { animation-delay: 40ms; }
 .detail-body > :nth-child(n+3), .settings-sections > :nth-child(n+3) { animation-delay: 80ms; }
+/* 弹窗、抽屉的遮罩层挂在页面容器里时不参与分区入场，否则自身淡入结束后会再淡入一次，看起来闪一下 */
+.content-page > .el-overlay, .detail-body > .el-overlay, .settings-sections > .el-overlay { animation: none; }
 
 /* 表格、列表的行依次滑入；之后新到的行同样滑入 */
 .el-table__body tr { animation: row-in var(--dur-slow) var(--ease) backwards; }
