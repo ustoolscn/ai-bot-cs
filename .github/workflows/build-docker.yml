@@ -13,7 +13,8 @@ permissions:
 
 jobs:
   test-and-build:
-    runs-on: ubuntu-latest
+    # Chromium screenshot tests require unprivileged user namespaces.
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
       - name: Checkout
