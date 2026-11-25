@@ -36,7 +36,7 @@ func (a *App) syncGroupName(c *gin.Context) {
 		fail(c, 502, "qq_group_info_failed", err.Error())
 		return
 	}
-	result, err := a.db.Exec(ctx, `UPDATE conversations SET name=$2,qq_group_info=$4 WHERE id=$1 AND name=$3`, id, info.Name, previousName, info)
+	result, err := a.db.Exec(ctx, `UPDATE conversations SET name=$2,qq_group_info=qq_group_info||$4::jsonb,qq_group_info_checked_at=now() WHERE id=$1 AND name=$3`, id, info.Name, previousName, info)
 	if err != nil {
 		fail(c, 500, "database_error", "保存群名失败")
 		return
@@ -50,9 +50,11 @@ func (a *App) syncGroupName(c *gin.Context) {
 
 const missingGroupName = `(c.name='' OR c.name=c.platform_id OR c.name LIKE 'QQ 群聊 · %')`
 
-func (a *App) refreshMissingGroupName(ctx context.Context, id string) error {
+const needsGroupInfo = `(c.qq_group_info_checked_at IS NULL OR c.qq_group_info_checked_at < now()-interval '1 day') AND (` + missingGroupName + ` OR coalesce(c.qq_group_info->>'group_avatar','')='')`
+
+func (a *App) refreshMissingGroupInfo(ctx context.Context, id string) error {
 	var group, appID, encrypted string
-	err := a.db.QueryRow(ctx, `SELECT c.platform_id,b.app_id,b.app_secret_enc FROM conversations c JOIN bots b ON b.id=c.bot_id WHERE c.id=$1 AND c.type='group' AND NOT c.bot_removed AND `+missingGroupName, id).Scan(&group, &appID, &encrypted)
+	err := a.db.QueryRow(ctx, `SELECT c.platform_id,b.app_id,b.app_secret_enc FROM conversations c JOIN bots b ON b.id=c.bot_id WHERE c.id=$1 AND c.type='group' AND NOT c.bot_removed AND `+needsGroupInfo, id).Scan(&group, &appID, &encrypted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -65,11 +67,12 @@ func (a *App) refreshMissingGroupName(ctx context.Context, id string) error {
 	}
 	info, err := qq.NewClient(appID, secret, a.cfg.QQAPIBaseURL, a.cfg.QQTokenURL).GroupInfo(ctx, group)
 	if errors.Is(err, qq.ErrGroupInfoPermission) {
-		return nil
+		_, err = a.db.Exec(ctx, "UPDATE conversations SET qq_group_info_checked_at=now() WHERE id=$1", id)
+		return err
 	}
 	if err != nil {
 		return err
 	}
-	_, err = a.db.Exec(ctx, `UPDATE conversations c SET name=$2,qq_group_info=qq_group_info||$3::jsonb WHERE id=$1 AND `+missingGroupName, id, info.Name, info)
+	_, err = a.db.Exec(ctx, `UPDATE conversations c SET name=CASE WHEN `+missingGroupName+` THEN $2 ELSE c.name END,qq_group_info=qq_group_info||$3::jsonb,qq_group_info_checked_at=now() WHERE id=$1 AND NOT c.bot_removed AND `+needsGroupInfo, id, info.Name, info)
 	return err
 }

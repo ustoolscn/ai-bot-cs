@@ -1223,8 +1223,8 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 	if err != nil {
 		return err
 	}
-	if msg.ConversationType == "group" && msg.ConversationName == "" {
-		_, err = tx.Exec(ctx, `INSERT INTO agent_jobs(kind,payload,dedupe_key) SELECT 'qq_group_identity',jsonb_build_object('conversationId',c.id),'qq_group_identity:'||c.id::text FROM conversations c WHERE c.id=$1 AND `+missingGroupName+` ON CONFLICT DO NOTHING`, cid)
+	if msg.ConversationType == "group" {
+		_, err = tx.Exec(ctx, `INSERT INTO agent_jobs(kind,payload,dedupe_key) SELECT 'qq_group_identity',jsonb_build_object('conversationId',c.id),'qq_group_identity:'||c.id::text FROM conversations c WHERE c.id=$1 AND NOT c.bot_removed AND `+needsGroupInfo+` ON CONFLICT DO NOTHING`, cid)
 		if err != nil {
 			return err
 		}

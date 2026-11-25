@@ -61,7 +61,7 @@ func TestGroupRosterAndGuard(t *testing.T) {
 				fmt.Fprint(w, `{"code":11253}`)
 				return
 			}
-			fmt.Fprint(w, `{"group_openid":"g","group_name":"QQ 测试群"}`)
+			fmt.Fprint(w, `{"group_openid":"g","group_name":"QQ 测试群","group_avatar":"https://example.org/g.png"}`)
 		case "/v2/groups/g/join_request_list":
 			if r.URL.Query().Get("limit") != "50" {
 				t.Error("missing application page size")
@@ -146,6 +146,12 @@ func TestGroupRosterAndGuard(t *testing.T) {
 	var bot, cid string
 	check(pool.QueryRow(ctx, `INSERT INTO bots(name,app_id,app_secret_enc) VALUES('guard','app',$1) RETURNING id::text`, secret).Scan(&bot))
 	check(pool.QueryRow(ctx, `INSERT INTO conversations(channel,type,bot_id,platform_id,name) VALUES('qq','group',$1,'g','test') RETURNING id::text`, bot).Scan(&cid))
+	check(a.refreshMissingGroupInfo(ctx, cid))
+	var name, avatar string
+	check(pool.QueryRow(ctx, `SELECT name,qq_group_info->>'group_avatar' FROM conversations WHERE id=$1`, cid).Scan(&name, &avatar))
+	if name != "test" || avatar != "https://example.org/g.png" {
+		t.Fatalf("unexpected group display name %q and avatar %q", name, avatar)
+	}
 	_, err = pool.Exec(ctx, `INSERT INTO model_profiles(name,kind,base_url,api_key_enc,model,enabled,is_default) VALUES('decision','chat',$1,$2,'mock',true,true)`, upstream.URL+"/v1", secret)
 	check(err)
 	server := httptest.NewServer(a.Router())
