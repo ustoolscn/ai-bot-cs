@@ -292,18 +292,18 @@ func (a *App) recordGap(ctx context.Context, s agent.Settings, question, message
 		if v, err := a.embed(ctx, cl, pid, "embedding", []string{question}); err == nil && len(v) == 1 {
 			lit := vectorLiteral(v[0])
 			var id string
-			err := a.db.QueryRow(ctx, `SELECT id::text FROM knowledge_gaps WHERE status IN ('open','candidate') AND embedding IS NOT NULL AND embedding_profile_id=$1 AND vector_dims(embedding)=$4 AND 1-(embedding <=> $2::vector) >= $3 ORDER BY embedding <=> $2::vector LIMIT 1`, pid, lit, s.GapSimilarity, len(v[0])).Scan(&id)
+			err := a.db.QueryRow(ctx, `SELECT id::text FROM knowledge_gaps WHERE status IN ('open','candidate') AND embedding IS NOT NULL AND embedding_profile_id=$1 AND knowledge_base_id IS NOT DISTINCT FROM (SELECT knowledge_base_id FROM messages WHERE id=$5) AND vector_dims(embedding)=$4 AND 1-(embedding <=> $2::vector) >= $3 ORDER BY embedding <=> $2::vector LIMIT 1`, pid, lit, s.GapSimilarity, len(v[0]), messageID).Scan(&id)
 			if err == nil {
 				_, _ = a.db.Exec(ctx, `UPDATE knowledge_gaps SET occurrences=occurrences+1,last_seen_at=now(),sample_message_ids=CASE WHEN jsonb_array_length(sample_message_ids)<10 THEN sample_message_ids || to_jsonb($2::text) ELSE sample_message_ids END WHERE id=$1`, id, messageID)
 				return
 			}
-			_, _ = a.db.Exec(ctx, `INSERT INTO knowledge_gaps(question,embedding,embedding_profile_id,sample_message_ids) VALUES($1,$2::vector,$3,jsonb_build_array($4::text))`, question, lit, pid, messageID)
+			_, _ = a.db.Exec(ctx, `INSERT INTO knowledge_gaps(question,embedding,embedding_profile_id,sample_message_ids,knowledge_base_id) VALUES($1,$2::vector,$3,jsonb_build_array($4::text),(SELECT knowledge_base_id FROM messages WHERE id=$4::text::uuid))`, question, lit, pid, messageID)
 			return
 		}
 	}
-	tag, _ := a.db.Exec(ctx, `UPDATE knowledge_gaps SET occurrences=occurrences+1,last_seen_at=now() WHERE status IN ('open','candidate') AND question=$1`, question)
+	tag, _ := a.db.Exec(ctx, `UPDATE knowledge_gaps SET occurrences=occurrences+1,last_seen_at=now() WHERE status IN ('open','candidate') AND question=$1 AND knowledge_base_id IS NOT DISTINCT FROM (SELECT knowledge_base_id FROM messages WHERE id=$2)`, question, messageID)
 	if tag.RowsAffected() == 0 {
-		_, _ = a.db.Exec(ctx, `INSERT INTO knowledge_gaps(question,sample_message_ids) VALUES($1,jsonb_build_array($2::text))`, question, messageID)
+		_, _ = a.db.Exec(ctx, `INSERT INTO knowledge_gaps(question,sample_message_ids,knowledge_base_id) VALUES($1,jsonb_build_array($2::text),(SELECT knowledge_base_id FROM messages WHERE id=$2::text::uuid))`, question, messageID)
 	}
 }
 

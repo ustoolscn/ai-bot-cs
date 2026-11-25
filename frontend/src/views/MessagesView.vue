@@ -17,7 +17,7 @@
           <EmptyState v-else title="还没有消息" description="机器人在群里被 @ 或收到私聊后，消息会出现在这里。" />
         </template>
         <el-table-column label="时间" width="112"><template #default="{ row }"><div class="stacked-cell num"><strong>{{ String(row.time).split(' ')[1] || row.time }}</strong><span>{{ String(row.time).split(' ')[0] }}</span></div></template></el-table-column>
-        <el-table-column label="消息" min-width="260"><template #default="{ row }"><div class="message-preview"><strong>{{ row.question }}</strong><span>{{ row.attachments?.length ? `包含 ${row.attachments.length} 个附件 · ` : '' }}{{ row.answer || '未生成回复' }}</span></div></template></el-table-column>
+        <el-table-column label="消息" min-width="260"><template #default="{ row }"><div class="message-preview"><strong>{{ mentions(row.question, row.mentionNames) }}</strong><span>{{ row.attachments?.length ? `包含 ${row.attachments.length} 个附件 · ` : '' }}{{ mentions(row.answer, row.mentionNames) || '未生成回复' }}</span></div></template></el-table-column>
         <el-table-column label="机器人 / 会话" min-width="150"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.botName }}</strong><span>{{ row.conversationName }}</span></div></template></el-table-column>
         <el-table-column label="发送者" width="110"><template #default="{ row }"><div class="sender-cell"><span class="truncate" :title="row.sender">{{ row.sender }}</span><i v-if="row.senderBlockedIds?.length" class="sender-blocked" title="已拉黑" /></div></template></el-table-column>
         <el-table-column label="模型" width="130"><template #default="{ row }"><div class="stacked-cell"><strong class="truncate">{{ row.model || '—' }}</strong><span>{{ row.tokens }} tokens</span></div></template></el-table-column>
@@ -53,7 +53,7 @@
           <div class="md-chat">
             <div class="md-bubble is-user">
               <small>{{ selected.sender }}</small>
-              <p>{{ selected.question }}</p>
+              <p>{{ mentions(selected.question, selected.mentionNames) }}</p>
               <div v-if="selected.attachments?.length" class="message-image-grid"><div v-for="(v,i) in selected.attachments.filter(p=>p.type==='voice')" :key="i"><audio v-if="v.waveUrl" controls preload="none" :src="v.waveUrl"/><p>{{v.transcript}}</p></div><el-image v-for="(image,index) in selected.attachments.filter(p=>p.type==='image')" :key="image.previewUrl || index" :src="image.previewUrl" :preview-src-list="previewUrls(selected.attachments)" fit="cover" loading="lazy" /></div>
             </div>
             <div v-if="selected.status !== 'merged' && (!selected.handoffStatus || botAnswer || selected.answerAttachments?.length)" class="md-bubble is-bot" :class="{ 'is-empty': !selected.answer && !selected.answerAttachments?.length }">
@@ -63,7 +63,7 @@
             </div>
             <div v-if="selected.handoffStatus" class="md-bubble is-bot is-human" :class="{ 'is-empty': !selected.humanReplyContent }">
               <small><span class="md-human-tag">人工客服</span>{{ selected.humanRepliedBy || '' }}<template v-if="selected.ticketNumber"> · 工单 #{{ selected.ticketNumber }}</template><template v-if="selected.humanRepliedAt"> · {{ selected.humanRepliedAt }}</template></small>
-              <p>{{ selected.humanReplyContent || (selected.handoffStatus === 'human_closed' ? '工单已结单，没有人工回复。' : selected.handoffStatus === 'human_processing' ? '人工客服已接单，还没有回复。' : '已转人工，等待人工客服接单。') }}</p>
+              <p>{{ mentions(selected.humanReplyContent, selected.mentionNames) || (selected.handoffStatus === 'human_closed' ? '工单已结单，没有人工回复。' : selected.handoffStatus === 'human_processing' ? '人工客服已接单，还没有回复。' : '已转人工，等待人工客服接单。') }}</p>
               <span v-if="selected.humanReplyContent && selected.handoffStatus === 'human_processing' && selected.humanDeliveryStatus !== 'sent'" class="md-human-state" :class="{ 'is-failed': selected.humanDeliveryStatus === 'failed' || selected.humanDeliveryStatus === 'expired' }"><i v-if="selected.humanDeliveryStatus === 'pending' || selected.humanDeliveryStatus === 'processing'" class="md-sending" />{{ selected.humanDeliveryStatus === 'failed' || selected.humanDeliveryStatus === 'expired' ? '发送失败' + (selected.humanDeliveryError ? '：' + selected.humanDeliveryError : '，可在人工台重新回复') : '正在发到群里' }}</span>
             </div>
           </div>
@@ -116,7 +116,9 @@
 
 <script setup lang="ts">
 import { useAdminEvents } from '@/composables/useAdminEvents'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { formatMentions as mentions } from '@/utils/mentions'
 import { CopyDocument, Download, Refresh, Search } from '@element-plus/icons-vue'
 import { connection } from '@/utils/connection'
 import StageBars from '@/components/fx/StageBars.vue'
@@ -139,7 +141,7 @@ const detailLoading = ref(false)
 const selected = ref<MessageRecord>()
 const loading = ref(false)
 const loadError = ref('')
-const filtered = computed(() => messages.value.filter(m => (!search.value || `${m.question}${m.answer}${m.sender}${m.traceId}`.includes(search.value)) && (status.value === 'all' || (status.value === 'handoff' ? Boolean(m.handoffStatus) : !m.handoffStatus && m.status === status.value))))
+const filtered = computed(() => messages.value.filter(m => (!search.value || `${mentions(m.question, m.mentionNames)}${m.answer}${m.sender}${m.traceId}`.includes(search.value)) && (status.value === 'all' || (status.value === 'handoff' ? Boolean(m.handoffStatus) : !m.handoffStatus && m.status === status.value))))
 const flowStages = computed(() => {
   const m = selected.value
   if (!m) return []
@@ -168,7 +170,26 @@ const traceSteps = computed(() => {
   ]
 })
 
-onMounted(load)
+// 从概览/告警跳来：?id= 直接打开那条消息的详情，?status= 预设筛选
+const route = useRoute()
+const router = useRouter()
+const validStatus = ['all', 'success', 'handoff', 'skipped', 'merged', 'failed']
+function applyQuery() {
+  const q = String(route.query.status || '')
+  if (validStatus.includes(q)) status.value = q
+  const id = String(route.query.id || '')
+  if (id && selected.value?.id !== id) openById(id)
+}
+// 不在当前列表里的旧消息：先取详情再打开，避免抽屉拿着半条记录渲染
+async function openById(id: string) {
+  const row = messages.value.find(m => m.id === id)
+  if (row) return open(row)
+  try { selected.value = await api.messages.detail(id); drawer.value = true }
+  catch (error) { ElMessage.error(error instanceof Error ? error.message : '没有找到这条消息') }
+}
+watch(() => [route.query.id, route.query.status], applyQuery)
+watch(drawer, visible => { if (!visible && route.query.id) router.replace({ query: { ...route.query, id: undefined } }) })
+onMounted(async () => { await load(); applyQuery() })
 async function load(background: unknown = false) {
   if (background !== true) loading.value = true
   loadError.value = ''
@@ -226,7 +247,7 @@ const contextView = computed(() => {
   const m = selected.value
   const list = m?.contextMessages || []
   const lastUser = list.map(x => x.role).lastIndexOf('user')
-  return list.map((message, index) => {
+  return list.map(message => ({ ...message, content: mentions(message.content, m?.mentionNames) })).map((message, index) => {
     if (message.role === 'assistant') return { ...message, speaker: message.name || m?.botName || '助手', text: message.content }
     if (message.role !== 'user') return { ...message, speaker: roleText(message.role), text: message.content }
     if (message.name) return { ...message, speaker: message.name, text: message.content.replace(speakerPrefix, '') }
@@ -239,7 +260,7 @@ const contextView = computed(() => {
 const botAnswer = computed(() => {
   const m = selected.value
   if (!m) return ''
-  return m.humanReplyContent ? m.answer.replace(m.humanReplyContent, '').trim() : m.answer
+  return mentions(m.humanReplyContent ? m.answer.replace(m.humanReplyContent, '').trim() : m.answer, m.mentionNames)
 })
 const cacheRatio = computed(() => {
   const m = selected.value

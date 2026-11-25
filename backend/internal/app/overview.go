@@ -9,6 +9,9 @@ import (
 )
 
 type overviewPipeline struct {
+	Sender       string          `json:"sender"`
+	SenderID     string          `json:"senderId"`
+	MentionNames json.RawMessage `json:"mentionNames"`
 	Timeline     json.RawMessage `json:"timeline"`
 	ID           string          `json:"id"`
 	Time         time.Time       `json:"time"`
@@ -52,7 +55,7 @@ func (a *App) overview(c *gin.Context) {
 
 	var active, stages json.RawMessage
 	err := a.db.QueryRow(c, `SELECT coalesce(jsonb_agg(to_jsonb(q)),'[]') FROM (
- SELECT t.id::text AS "taskId",m.id::text AS id,round(extract(epoch FROM now()-t.locked_at)*1000)::bigint AS "elapsedMs",b.id::text AS "botId",b.name AS bot,c.id::text AS "conversationId",coalesce(nullif(c.name,''),c.platform_id) AS conversation,m.sender_id AS "userId",coalesce(nullif(m.sender_name,''),m.sender_id) AS sender,m.content AS question,coalesce((SELECT label FROM message_stages WHERE message_id=m.id ORDER BY id DESC LIMIT 1),'接单检查') AS stage
+ SELECT t.id::text AS "taskId",m.id::text AS id,round(extract(epoch FROM now()-t.locked_at)*1000)::bigint AS "elapsedMs",b.id::text AS "botId",b.name AS bot,c.id::text AS "conversationId",coalesce(nullif(c.name,''),c.platform_id) AS conversation,m.sender_id AS "userId",coalesce(nullif(m.sender_name,''),m.sender_id) AS sender,m.content AS question,message_mention_names(m,m.content) AS "mentionNames",coalesce((SELECT label FROM message_stages WHERE message_id=m.id ORDER BY id DESC LIMIT 1),'接单检查') AS stage
  FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='processing' ORDER BY t.locked_at) q`).Scan(&active)
 	if err != nil {
 		fail(c, 500, "database_error", "读取处理中任务失败")
@@ -104,7 +107,7 @@ func (a *App) overview(c *gin.Context) {
 
 func (a *App) overviewPipelines(c *gin.Context) []overviewPipeline {
 	rows, err := a.db.Query(c, `
-		SELECT message_timeline(m),m.id::text,m.event_at,b.name,c.name,left(m.content,160),m.event_type,
+		SELECT coalesce(nullif(m.sender_name,''),nullif(cm.display_name,''),cm.qq_username,''),m.sender_id,message_mention_names(m,m.content),message_timeline(m),m.id::text,m.event_at,b.name,c.name,left(m.content,160),m.event_type,
 		       GREATEST(EXTRACT(EPOCH FROM (t.created_at-m.created_at))*1000,0)::bigint,
 		       COALESCE(ar.context_latency_ms,0),COALESCE(ar.retrieval_latency_ms,0),
 		       CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END,
@@ -114,6 +117,7 @@ func (a *App) overviewPipelines(c *gin.Context) []overviewPipeline {
 		       COALESCE(GREATEST(EXTRACT(EPOCH FROM (ot.updated_at-ot.created_at))*1000,0),0)::bigint,
 		       COALESCE(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ot.updated_at,ar.completed_at,t.updated_at)-m.created_at))*1000,0),0)::bigint
 		FROM messages m
+ LEFT JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id
  LEFT JOIN inbox_tasks t ON t.message_id=m.id
 		JOIN conversations c ON c.id=m.conversation_id
 		JOIN bots b ON b.id=m.bot_id
@@ -134,7 +138,7 @@ func (a *App) overviewPipelines(c *gin.Context) []overviewPipeline {
 		var p overviewPipeline
 		var contextMS, retrievalMS, hits, modelMS, deliveryMS int64
 		var taskStatus, runStatus, modelName, modelError, deliveryStatus string
-		if err := rows.Scan(&p.Timeline, &p.ID, &p.Time, &p.Bot, &p.Conversation, &p.Content, &p.EventType, &p.EventMS, &contextMS, &retrievalMS, &hits, &taskStatus, &runStatus, &modelMS, &modelName, &modelError, &deliveryStatus, &deliveryMS, &p.TotalMS); err != nil {
+		if err := rows.Scan(&p.Sender, &p.SenderID, &p.MentionNames, &p.Timeline, &p.ID, &p.Time, &p.Bot, &p.Conversation, &p.Content, &p.EventType, &p.EventMS, &contextMS, &retrievalMS, &hits, &taskStatus, &runStatus, &modelMS, &modelName, &modelError, &deliveryStatus, &deliveryMS, &p.TotalMS); err != nil {
 			a.log.Warn("scan overview pipeline", "error", err)
 			continue
 		}
@@ -187,24 +191,37 @@ func deliveryOverviewStatus(status string) string {
 }
 
 func (a *App) overviewAlerts(c *gin.Context) []map[string]any {
-	rows, err := a.db.Query(c, `SELECT id,time,bot,content,impact FROM (SELECT t.id::text AS id,t.updated_at AS time,b.name AS bot,'入口处理失败：'||COALESCE(t.last_error,'未知错误') AS content,'消息未生成回复' AS impact FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN bots b ON b.id=m.bot_id WHERE t.status='failed' AND t.dismissed_at IS NULL UNION ALL SELECT t.id::text,t.updated_at,b.name,'QQ 投递失败：'||COALESCE(t.last_error,'未知错误'),'回复未送达' FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN bots b ON b.id=m.bot_id WHERE t.status IN ('failed','expired') AND t.dismissed_at IS NULL AND m.event_type<>'PROCESSING_ACK' UNION ALL SELECT d.id::text,d.updated_at,'知识索引',d.name||'：'||COALESCE(d.last_error,'索引失败'),'知识检索可能不完整' FROM knowledge_documents d WHERE d.status='failed' AND d.dismissed_at IS NULL) failures ORDER BY time DESC LIMIT 8`)
-	if err != nil {
-		return []map[string]any{}
-	}
-	defer rows.Close()
-	out := make([]map[string]any, 0, 8)
-	for rows.Next() {
-		var id, bot, content, impact string
-		var at time.Time
-		if rows.Scan(&id, &at, &bot, &content, &impact) == nil {
-			level := "warning"
-			if bot != "知识索引" {
-				level = "critical"
+	rows, err := a.db.Query(c, `SELECT failures.*,CASE
+ WHEN detail ~* 'deadline exceeded|timeout|timed out' THEN '等待服务响应超时'
+ WHEN detail ~* 'rate limit|too many requests|http 429' THEN '服务请求过于频繁'
+ WHEN detail ~* 'unauthorized|forbidden|permission denied' THEN '服务拒绝访问，请检查凭据和权限'
+ ELSE NULL END AS reason FROM (
+ SELECT t.id::text,t.updated_at AS time,b.name AS bot,'inbox' AS kind,m.id::text AS "messageId",NULL::text AS "documentId",NULL::text AS "knowledgeBaseId",
+ '处理用户消息失败：'||left(m.content,80) AS content,t.last_error AS detail,'消息未生成回复' AS impact,'critical' AS level,false AS recovered
+ FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN bots b ON b.id=m.bot_id WHERE t.status='failed' AND t.dismissed_at IS NULL
+ UNION ALL SELECT t.id::text,t.updated_at,b.name,'outbox',i.id::text,NULL,NULL,
+ CASE WHEN t.status='expired' THEN '回复已超过发送时限：' ELSE '发送 QQ 消息失败：' END||left(m.content,80),t.last_error,'回复未送达','critical',false
+ FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN bots b ON b.id=m.bot_id
+ LEFT JOIN messages i ON i.conversation_id=m.conversation_id AND i.direction='inbound' AND i.platform_message_id=m.reply_to_message_id
+ WHERE t.status IN ('failed','expired') AND t.dismissed_at IS NULL AND m.event_type<>'PROCESSING_ACK'
+ UNION ALL SELECT d.id::text,d.updated_at,'知识索引','document',NULL,d.id::text,d.knowledge_base_id::text,
+ '文档索引失败：'||d.name,d.last_error,'知识检索可能不完整','warning',false
+ FROM knowledge_documents d WHERE d.status='failed' AND d.dismissed_at IS NULL) failures ORDER BY time DESC LIMIT 8`)
+	if err == nil {
+		var items []map[string]any
+		items, err = rowsJSON(rows)
+		if err == nil {
+			for _, item := range items {
+				if reason, ok := item["reason"].(string); ok {
+					item["content"] = fmt.Sprintf("%s（%s）", item["content"], reason)
+				}
+				delete(item, "reason")
 			}
-			out = append(out, map[string]any{"id": id, "level": level, "time": at, "bot": bot, "content": content, "impact": impact, "recovered": false})
+			return items
 		}
 	}
-	return out
+	a.log.Warn("overview alerts", "error", err)
+	return []map[string]any{}
 }
 
 func (a *App) overviewKnowledgeQueues(c *gin.Context) []map[string]any {

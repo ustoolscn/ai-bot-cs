@@ -104,8 +104,8 @@ export interface CustomTool {
 
 export interface Candidate { id: string; knowledgeBaseId?: string; knowledgeBaseName?: string; question: string; aliases: string[]; answer: string; source: string; evidence: Array<Record<string, string>>; confidence: number; status: string; reviewNote: string; createdAt: string }
 export interface Entry { id: string; knowledgeBaseId: string; knowledgeBaseName: string; question: string; aliases: string[]; answer: string; source: string; status: string; indexStatus: string; indexError: string; version: number; hitCount: number; helpfulCount: number; unhelpfulCount: number; updatedAt: string }
-export interface Gap { id: string; question: string; occurrences: number; status: string; firstSeenAt: string; lastSeenAt: string }
-export interface Feedback { id: string; source: string; rating: string; comment: string; correctedAnswer: string; createdAt: string; answer: string; question: string; messageId?: string; conversationName: string; read?: boolean }
+export interface Gap { id: string; question: string; occurrences: number; status: string; firstSeenAt: string; lastSeenAt: string; knowledgeBaseId?: string | null; knowledgeBaseName?: string }
+export interface Feedback { id: string; source: string; rating: string; comment: string; correctedAnswer: string; createdAt: string; answer: string; question: string; messageId?: string; conversationName: string; read?: boolean; knowledgeBaseId?: string | null; knowledgeBaseName?: string }
 export interface MemoryMember { botId: string; botName: string; conversationId: string; conversationName: string; conversationType: string; userId: string; displayName: string; count: number }
 export interface Memory { id: string; botId: string; botName: string; userId: string; displayName: string; kind: string; content: string; hasEmbedding: boolean; confidence: number; pinned: boolean; source: string; updatedAt: string; lastUsedAt?: string; eventAt?: string }
 export interface UserProfile { conversationId: string; userId: string; content: string; updatedAt?: string }
@@ -163,10 +163,10 @@ export const agentApi = {
     createEntry: (data: { knowledgeBaseId: string; question: string; aliases: string[]; answer: string }) => request<{ id: string }>({ method: 'POST', url: '/knowledge/entries', data }),
     updateEntry: (id: string, data: { question: string; aliases: string[]; answer: string; status: string }) => request<{ updated: boolean }>({ method: 'PUT', url: `/knowledge/entries/${id}`, data }),
     deleteEntry: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/knowledge/entries/${id}` }),
-    gaps: (status = 'open') => request<Gap[]>({ url: '/knowledge/gaps', params: { status } }, mock.mockGaps),
+    gaps: (status = 'open', knowledgeBaseId = '') => request<Gap[]>({ url: '/knowledge/gaps', params: { status, ...(knowledgeBaseId ? { knowledgeBaseId } : {}) } }, mock.mockGaps),
     answerGap: (id: string, data: { knowledgeBaseId: string; question: string; answer: string; aliases: string[] }) => request<{ entryId: string }>({ method: 'POST', url: `/knowledge/gaps/${id}/answer`, data }),
     ignoreGap: (id: string) => request<{ ignored: boolean }>({ method: 'POST', url: `/knowledge/gaps/${id}/ignore` }),
-    feedback: (rating = '') => request<Feedback[]>({ url: '/feedback', params: { rating } }, mock.mockFeedback),
+    feedback: (rating = '', knowledgeBaseId = '') => request<Feedback[]>({ url: '/feedback', params: { rating, ...(knowledgeBaseId ? { knowledgeBaseId } : {}) } }, mock.mockFeedback),
     markFeedbackRead: (target: { ids: string[] } | { all: true }) => request<{ updated: number }>({ method: 'POST', url: '/feedback/read', data: target }, { updated: 0 }),
   },
   memories: {

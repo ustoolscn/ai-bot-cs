@@ -809,6 +809,8 @@ const messageUsageColumns = `coalesce(usage.inputs,0) AS "inputTokens",coalesce(
 	coalesce(usage.reads,0) AS "cachedInputTokens",coalesce(usage.writes,0) AS "cacheWriteTokens",
 	coalesce(usage.reads::float8/nullif(usage.inputs,0),0) AS "cacheHitRate",usage.cost AS "estimatedCost"`
 
+const messageMentionText = `concat_ws(' ',m.content,(SELECT string_agg(x.content,' ') FROM messages x WHERE x.conversation_id=m.conversation_id AND x.direction='outbound' AND x.reply_to_message_id=m.platform_message_id))`
+
 const messageSenderColumns = `m.bot_id::text AS "botId",m.conversation_id::text AS "conversationId",
  c.type AS "conversationType",m.sender_id AS "senderId",
  COALESCE((SELECT jsonb_agg(bu.id::text ORDER BY bu.id) FROM blocked_users bu
@@ -820,7 +822,7 @@ func (a *App) listMessages(c *gin.Context) {
 	if v, _ := strconv.Atoi(c.DefaultQuery("limit", "50")); v > 0 && v <= 200 {
 		limit = v
 	}
-	query := `SELECT ` + messageSenderColumns + `,m.id::text,m.content AS question,m.parts,m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",
+	query := `SELECT message_mention_names(m,` + messageMentionText + `) AS "mentionNames",` + messageSenderColumns + `,m.id::text,m.content AS question,m.parts,m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",
 		m.platform_message_id AS "platformMessageId",c.name AS "conversationName",b.name AS "botName",
 		COALESCE((SELECT string_agg(x.content, E'\n\n' ORDER BY x.event_at) FROM messages x WHERE x.conversation_id=m.conversation_id AND x.direction='outbound' AND x.event_type IN ('AI_RESPONSE','HUMAN_REPLY') AND x.reply_to_message_id=m.platform_message_id),'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",` + handoffStatusColumns + `, COALESCE(hs.state,ar.status,t.status,(SELECT status FROM group_reviews WHERE message_id=m.id)) AS status,
 		COALESCE(mp.name,mp.model,'') AS model,` + messageUsageColumns + `,
@@ -860,7 +862,7 @@ func (a *App) listMessages(c *gin.Context) {
 }
 func (a *App) getMessage(c *gin.Context) {
 	var msg map[string]any
-	rows, err := a.db.Query(c, `SELECT `+messageSenderColumns+`,message_timeline(m) AS timeline,m.id::text,m.content AS question,m.parts,m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",m.raw_event AS "rawEvent",
+	rows, err := a.db.Query(c, `SELECT message_mention_names(m,concat_ws(' ',`+messageMentionText+`,(SELECT string_agg(r.context_messages::text,' ') FROM agent_runs r WHERE r.message_id=m.id))) AS "mentionNames",`+messageSenderColumns+`,message_timeline(m) AS timeline,m.id::text,m.content AS question,m.parts,m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",m.raw_event AS "rawEvent",
 		m.platform_message_id AS "platformMessageId",c.name AS "conversationName",b.name AS "botName",
 		COALESCE((SELECT string_agg(x.content, E'\n\n' ORDER BY x.event_at) FROM messages x WHERE x.conversation_id=m.conversation_id AND x.direction='outbound' AND x.event_type IN ('AI_RESPONSE','HUMAN_REPLY') AND x.reply_to_message_id=m.platform_message_id),'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",`+handoffStatusColumns+`, COALESCE(hs.state,ar.status,t.status,(SELECT status FROM group_reviews WHERE message_id=m.id)) AS status,
 		COALESCE(mp.name,mp.model,'') AS model,`+messageUsageColumns+`,
@@ -916,7 +918,7 @@ func (a *App) getMessage(c *gin.Context) {
 }
 
 func (a *App) listKBs(c *gin.Context) {
-	queryList(c, a, `SELECT k.id::text,k.name,k.description,k.embedding_profile_id::text AS "embeddingProfileId",k.embedding_model AS "embeddingModel",(SELECT count(*) FROM knowledge_entries e WHERE e.knowledge_base_id=k.id AND e.status='published') AS "entryCount",COUNT(DISTINCT d.id) AS "documentCount",COUNT(ch.id) AS "chunkCount",k.created_at AS "createdAt" FROM knowledge_bases k LEFT JOIN knowledge_documents d ON d.knowledge_base_id=k.id LEFT JOIN knowledge_chunks ch ON ch.document_id=d.id GROUP BY k.id ORDER BY k.created_at DESC`)
+	queryList(c, a, `SELECT k.id::text,(SELECT count(*) FROM knowledge_gaps g WHERE g.knowledge_base_id=k.id AND g.status='open') AS "openGaps",(SELECT count(*) FROM message_feedback f WHERE f.knowledge_base_id=k.id AND NOT f.is_read AND f.rating IN ('bad','wrong','unhelpful')) AS "unreadNegativeFeedback",k.name,k.description,k.embedding_profile_id::text AS "embeddingProfileId",k.embedding_model AS "embeddingModel",(SELECT count(*) FROM knowledge_entries e WHERE e.knowledge_base_id=k.id AND e.status='published') AS "entryCount",COUNT(DISTINCT d.id) AS "documentCount",COUNT(ch.id) AS "chunkCount",k.created_at AS "createdAt" FROM knowledge_bases k LEFT JOIN knowledge_documents d ON d.knowledge_base_id=k.id LEFT JOIN knowledge_chunks ch ON ch.document_id=d.id GROUP BY k.id ORDER BY k.created_at DESC`)
 }
 func (a *App) createKB(c *gin.Context) {
 	var in struct {

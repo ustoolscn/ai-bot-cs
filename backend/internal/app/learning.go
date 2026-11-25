@@ -199,8 +199,8 @@ func (a *App) deleteEntryAPI(c *gin.Context) {
 
 func (a *App) listGaps(c *gin.Context) {
 	status := c.DefaultQuery("status", "open")
-	queryList(c, a, `SELECT id::text,question,occurrences,sample_message_ids AS "sampleMessageIds",status,candidate_id::text AS "candidateId",first_seen_at AS "firstSeenAt",last_seen_at AS "lastSeenAt"
-		FROM knowledge_gaps WHERE ($1='all' OR status=$1) ORDER BY occurrences DESC,last_seen_at DESC LIMIT 300`, status)
+	queryList(c, a, `SELECT g.id::text,g.knowledge_base_id::text AS "knowledgeBaseId",k.name AS "knowledgeBaseName",question,occurrences,sample_message_ids AS "sampleMessageIds",status,candidate_id::text AS "candidateId",first_seen_at AS "firstSeenAt",last_seen_at AS "lastSeenAt"
+		FROM knowledge_gaps g LEFT JOIN knowledge_bases k ON k.id=g.knowledge_base_id WHERE ($1='all' OR status=$1) AND ($2='' OR coalesce(g.knowledge_base_id::text,'unassigned')=$2) ORDER BY occurrences DESC,last_seen_at DESC LIMIT 300`, status, c.Query("knowledgeBaseId"))
 }
 
 func (a *App) answerGap(c *gin.Context) {
@@ -294,11 +294,11 @@ func (a *App) createFeedback(c *gin.Context) {
 }
 
 func (a *App) listFeedback(c *gin.Context) {
-	queryList(c, a, `SELECT f.id::text,f.is_read AS "read",f.source,f.rating,f.comment,f.corrected_answer AS "correctedAnswer",f.created_at AS "createdAt",o.content AS answer,
+	queryList(c, a, `SELECT f.id::text,f.knowledge_base_id::text AS "knowledgeBaseId",k.name AS "knowledgeBaseName",f.is_read AS "read",f.source,f.rating,f.comment,f.corrected_answer AS "correctedAnswer",f.created_at AS "createdAt",o.content AS answer,
 		COALESCE(i.content,'') AS question,i.id::text AS "messageId",c.name AS "conversationName"
-		FROM message_feedback f JOIN messages o ON o.id=f.message_id JOIN conversations c ON c.id=o.conversation_id
+		FROM message_feedback f LEFT JOIN knowledge_bases k ON k.id=f.knowledge_base_id JOIN messages o ON o.id=f.message_id JOIN conversations c ON c.id=o.conversation_id
 		LEFT JOIN messages i ON i.conversation_id=o.conversation_id AND i.platform_message_id=o.reply_to_message_id AND i.direction='inbound'
-		WHERE ($1='' OR f.rating=$1) ORDER BY f.created_at DESC LIMIT 300`, c.Query("rating"))
+		WHERE ($1='' OR f.rating=$1) AND ($2='' OR coalesce(f.knowledge_base_id::text,'unassigned')=$2) ORDER BY f.created_at DESC LIMIT 300`, c.Query("rating"), c.Query("knowledgeBaseId"))
 }
 
 func (a *App) markFeedbackRead(c *gin.Context) {

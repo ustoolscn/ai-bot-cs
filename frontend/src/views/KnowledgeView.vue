@@ -1,6 +1,6 @@
 <template>
   <div class="content-page">
-    <PageHeader title="知识库" description="先选一个知识库，再管理它下面的文档、问答和待审核的知识。机器人回答时会查群里绑定的知识库。">
+    <PageHeader title="知识库" description="先选一个知识库，再管理它的文档、问答、待审核、没答上的问题和反馈。问题和反馈归属到群或机器人绑定的知识库。">
       <el-button :icon="Refresh" @click="reload">刷新</el-button>
       <el-button :icon="Plus" @click="createVisible = true">新建知识库</el-button>
     </PageHeader>
@@ -10,43 +10,40 @@
         <el-input v-model="search" placeholder="搜索知识库" :prefix-icon="Search" clearable />
         <button v-for="kb in filteredBases" :key="kb.id" type="button" class="knowledge-list-item" :class="{ active: !sharedView && current?.id === kb.id }" @click="openKb(kb.id)">
           <span><strong>{{ kb.name }}</strong><small>{{ kb.documents }} 篇文档 · {{ kb.entries ?? 0 }} 条问答</small></span>
-          <em v-if="pendingByKb[kb.id]" class="count-pill hot" :title="`${pendingByKb[kb.id]} 条待审核`">{{ pendingByKb[kb.id] }}</em>
+          <em v-if="todoByKb(kb.id)" class="count-pill hot" :title="todoTitle(kb.id)">{{ todoByKb(kb.id) }}</em>
         </button>
         <p v-if="!filteredBases.length" class="muted list-empty">{{ bases.length ? '没有匹配的知识库' : '还没有知识库' }}</p>
 
-        <div class="list-divider"><span>所有知识库共用</span></div>
-        <button type="button" class="knowledge-list-item" :class="{ active: sharedView === 'gaps' }" @click="openShared('gaps')">
-          <span><strong>没答上的问题</strong><small>补上答案后存入所选知识库</small></span>
-          <em v-if="stats?.openGaps" class="count-pill">{{ stats.openGaps }}</em>
-        </button>
-        <button type="button" class="knowledge-list-item" :class="{ active: sharedView === 'feedback' }" @click="openShared('feedback')">
-          <span><strong>回答反馈</strong><small>用户和管理员对回答的评价</small></span>
-          <em v-if="unreadFeedback" class="count-pill hot" title="未读差评">{{ unreadFeedback }}</em>
-        </button>
+        <template v-if="unassignedGaps.length || unassignedFeedback.length">
+          <div class="list-divider"><span>未归属到知识库</span></div>
+          <button type="button" class="knowledge-list-item" :class="{ active: !!sharedView }" @click="openShared(unassignedGaps.length ? 'gaps' : 'feedback')">
+            <span><strong>未归属</strong><small>{{ unassignedGaps.length }} 个没答上 · {{ unassignedFeedback.length }} 条反馈</small></span>
+            <em v-if="unassignedUnread" class="count-pill hot" title="未读差评">{{ unassignedUnread }}</em>
+          </button>
+        </template>
       </aside>
 
-      <!-- 共用：没答上的问题 -->
-      <section v-if="sharedView === 'gaps'" key="gaps" class="knowledge-detail panel-surface">
-        <div class="knowledge-detail-head"><div><h2>没答上的问题</h2><p>机器人因为缺少资料没答上的问题会自动归到这里。补充答案时选一个知识库存进去。</p></div></div>
+      <!-- 没归属到任何知识库的问题和反馈（群和机器人都没绑知识库时） -->
+      <section v-if="sharedView" key="unassigned" class="knowledge-detail panel-surface">
+        <div class="knowledge-detail-head"><div><span class="scope-tag">未归属</span><h2>{{ sharedView === 'gaps' ? '没答上的问题' : '回答反馈' }}</h2><p>这些消息所在的群和机器人都没有绑定知识库。到“群与会话”里绑定后，新的问题和反馈会归到对应知识库。</p></div></div>
+        <el-segmented :model-value="sharedView" class="unassigned-switch" :options="[{ label: `没答上 ${unassignedGaps.length}`, value: 'gaps' }, { label: `反馈 ${unassignedFeedback.length}`, value: 'feedback' }]" @update:model-value="(v: string | number | boolean) => openShared(v as 'gaps' | 'feedback')" />
+        <template v-if="sharedView === 'gaps'">
         <div class="toolbar kb-toolbar"><span class="spacer" /><el-button type="danger" plain :style="{ visibility: selectedIds.length ? 'visible' : 'hidden' }" :loading="deleting" @click="deleteSelected('gaps', '没答上的问题')">删除选中的 {{ selectedIds.length }} 条</el-button></div>
-        <el-table row-key="id" v-loading="loading" :data="gaps" empty-text="没有新的问题" @selection-change="selectRows">
+        <el-table row-key="id" v-loading="loading" :data="unassignedGaps" empty-text="没有新的问题" @selection-change="selectRows">
           <el-table-column type="selection" width="48" />
           <el-table-column prop="question" label="用户问了但没答上的问题" min-width="260" />
           <el-table-column prop="occurrences" label="出现次数" width="104" sortable align="right" />
           <el-table-column label="最近出现" width="140"><template #default="{ row }">{{ formatTime(row.lastSeenAt) }}</template></el-table-column>
           <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="answerGap(row)">补充答案</el-button><el-button link @click="ignoreGap(row)">忽略</el-button></template></el-table-column>
         </el-table>
-      </section>
-
-      <!-- 共用：回答反馈 -->
-      <section v-else-if="sharedView === 'feedback'" key="feedback" class="knowledge-detail panel-surface">
-        <div class="knowledge-detail-head"><div><h2>回答反馈</h2><p>差评可以在消息记录里纠正答案，纠正后的答案会进入对应知识库的待审核。</p></div></div>
+        </template>
+        <template v-else>
         <div class="toolbar kb-toolbar">
           <el-segmented v-model="feedbackView" :options="[{ label: '全部', value: 'all' }, { label: '未读', value: 'unread' }]" />
-          <el-select v-model="feedbackRating" clearable placeholder="全部评价" aria-label="按评价筛选" @change="loadPane"><el-option v-for="(v, k) in ratingText" :key="k" :label="v" :value="k" /></el-select>
+          <el-select v-model="feedbackRating" clearable placeholder="全部评价" aria-label="按评价筛选"><el-option v-for="(v, k) in ratingText" :key="k" :label="v" :value="k" /></el-select>
           <span class="spacer" />
           <el-button v-if="selectedIds.length" :loading="markingRead" @click="markRead({ ids: [...selectedIds] })">选中的标为已读</el-button>
-          <el-button v-else :disabled="!feedback.some(f => !f.read)" :loading="markingRead" @click="markRead({ all: true })">全部标为已读</el-button>
+          <el-button v-else :disabled="!shownFeedback.some(f => !f.read)" :loading="markingRead" @click="markRead({ ids: shownFeedback.filter(f => !f.read).map(f => f.id) })">全部标为已读</el-button>
           <el-button type="danger" plain :style="{ visibility: selectedIds.length ? 'visible' : 'hidden' }" :loading="deleting" @click="deleteSelected('feedback', '反馈')">删除选中的 {{ selectedIds.length }} 条</el-button>
         </div>
         <el-table row-key="id" v-loading="loading" :data="shownFeedback" :row-class-name="({ row }: { row: Feedback }) => row.read ? '' : 'is-unread'" :empty-text="feedbackView === 'unread' ? '没有未读反馈' : '暂无反馈'" @selection-change="selectRows">
@@ -57,6 +54,7 @@
           <el-table-column label="会话 / 来源" width="140"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.conversationName || '—' }}</strong><span>{{ feedbackSourceText[row.source] || row.source }}</span></div></template></el-table-column>
           <el-table-column label="时间" width="140"><template #default="{ row }">{{ formatTime(row.createdAt) }}</template></el-table-column>
         </el-table>
+        </template>
       </section>
 
       <!-- 选中的知识库 -->
@@ -118,6 +116,42 @@
               </el-table>
             </template>
           </el-tab-pane>
+
+          <el-tab-pane name="gaps">
+            <template #label>没答上<span class="count-pill" :class="{ warn: gapsByKb[current.id] }">{{ gapsByKb[current.id] || 0 }}</span></template>
+            <template v-if="kbTab === 'gaps'">
+            <div class="toolbar kb-toolbar"><span class="spacer" /><el-button type="danger" plain :style="{ visibility: selectedIds.length ? 'visible' : 'hidden' }" :loading="deleting" @click="deleteSelected('gaps', '没答上的问题')">删除选中的 {{ selectedIds.length }} 条</el-button></div>
+            <el-table row-key="id" v-loading="loading" :data="kbGaps" empty-text="这个知识库没有没答上的问题" @selection-change="selectRows">
+              <el-table-column type="selection" width="48" />
+              <el-table-column prop="question" label="用户问了但没答上的问题" min-width="260" />
+              <el-table-column prop="occurrences" label="出现次数" width="104" sortable align="right" />
+              <el-table-column label="最近出现" width="140"><template #default="{ row }">{{ formatTime(row.lastSeenAt) }}</template></el-table-column>
+              <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="answerGap(row)">补充答案</el-button><el-button link @click="ignoreGap(row)">忽略</el-button></template></el-table-column>
+            </el-table>
+            </template>
+          </el-tab-pane>
+
+          <el-tab-pane name="feedback">
+            <template #label>反馈<span class="count-pill" :class="{ hot: unreadByKb[current.id] }">{{ unreadByKb[current.id] || 0 }}</span></template>
+            <template v-if="kbTab === 'feedback'">
+            <div class="toolbar kb-toolbar">
+              <el-segmented v-model="feedbackView" :options="[{ label: '全部', value: 'all' }, { label: '未读', value: 'unread' }]" />
+              <el-select v-model="feedbackRating" clearable placeholder="全部评价" aria-label="按评价筛选"><el-option v-for="(v, k) in ratingText" :key="k" :label="v" :value="k" /></el-select>
+              <span class="spacer" />
+              <el-button v-if="selectedIds.length" :loading="markingRead" @click="markRead({ ids: [...selectedIds] })">选中的标为已读</el-button>
+              <el-button v-else :disabled="!shownFeedback.some(f => !f.read)" :loading="markingRead" @click="markRead({ ids: shownFeedback.filter(f => !f.read).map(f => f.id) })">全部标为已读</el-button>
+              <el-button type="danger" plain :style="{ visibility: selectedIds.length ? 'visible' : 'hidden' }" :loading="deleting" @click="deleteSelected('feedback', '反馈')">删除选中的 {{ selectedIds.length }} 条</el-button>
+            </div>
+            <el-table row-key="id" v-loading="loading" :data="shownFeedback" :row-class-name="({ row }: { row: Feedback }) => row.read ? '' : 'is-unread'" :empty-text="feedbackView === 'unread' ? '没有未读反馈' : '暂无反馈'" @selection-change="selectRows">
+              <el-table-column type="selection" width="48" />
+              <el-table-column width="72"><template #default="{ row }"><button v-if="!row.read" type="button" class="unread-dot" title="点击标为已读" @click.stop="markRead({ ids: [row.id] })"><i />未读</button><span v-else class="faint">已读</span></template></el-table-column>
+              <el-table-column label="问题 / 回答" min-width="240"><template #default="{ row }"><div class="qa"><strong>{{ row.question || '—' }}</strong><span>{{ row.answer }}</span><small v-if="row.correctedAnswer">纠正：{{ row.correctedAnswer }}</small></div></template></el-table-column>
+              <el-table-column label="评价" width="80"><template #default="{ row }"><el-tag size="small" :type="['good', 'helpful'].includes(row.rating) ? 'success' : 'danger'">{{ ratingText[row.rating] || row.rating }}</el-tag></template></el-table-column>
+              <el-table-column label="会话 / 来源" width="140"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.conversationName || '—' }}</strong><span>{{ feedbackSourceText[row.source] || row.source }}</span></div></template></el-table-column>
+              <el-table-column label="时间" width="140"><template #default="{ row }">{{ formatTime(row.createdAt) }}</template></el-table-column>
+            </el-table>
+            </template>
+          </el-tab-pane>
         </el-tabs>
       </section>
 
@@ -175,10 +209,10 @@ const route = useRoute()
 const router = useRouter()
 const shell = useShellStore()
 
-// ---- 路由：?kb=<id>&tab=documents|entries|candidates，或 ?tab=gaps|feedback（共用）----
-const kbTabs = ['documents', 'entries', 'candidates']
+// ---- 路由：?kb=<id>&tab=documents|entries|candidates|gaps|feedback；没归属到知识库的：?scope=unassigned&tab=gaps|feedback ----
+const kbTabs = ['documents', 'entries', 'candidates', 'gaps', 'feedback']
 const queryTab = computed(() => String(route.query.tab || ''))
-const sharedView = computed(() => (['gaps', 'feedback'].includes(queryTab.value) ? queryTab.value : '') as '' | 'gaps' | 'feedback')
+const sharedView = computed(() => (route.query.scope === 'unassigned' ? (queryTab.value === 'feedback' ? 'feedback' : 'gaps') : '') as '' | 'gaps' | 'feedback')
 const kbTab = computed(() => kbTabs.includes(queryTab.value) ? queryTab.value : 'documents')
 const queryKb = computed(() => typeof route.query.kb === 'string' ? route.query.kb : '')
 
@@ -191,7 +225,28 @@ const pendingCandidates = ref<Candidate[]>([])
 const search = ref('')
 const filteredBases = computed(() => bases.value.filter(k => !search.value || `${k.name}${k.description}`.includes(search.value)))
 const embeddingModels = computed(() => models.value.filter(m => m.kind === 'embedding'))
-const unreadFeedback = computed(() => stats.value ? stats.value.unreadNegativeFeedback ?? stats.value.negativeFeedback7d : 0)
+
+// 没答上的问题和反馈按“消息所在群/机器人绑定的知识库”归属；后端没给归属的算未归属
+const gaps = ref<Gap[]>([])
+const feedback = ref<Feedback[]>([])
+function kbOf(row: { knowledgeBaseId?: string | null; knowledgeBaseName?: string }) {
+  const id = row.knowledgeBaseId || (row.knowledgeBaseName ? bases.value.find(b => b.name === row.knowledgeBaseName)?.id : '') || ''
+  return bases.value.some(b => b.id === id) ? id : ''
+}
+const isUnreadNegative = (f: Feedback) => !f.read && !['good', 'helpful'].includes(f.rating)
+function countBy<T>(rows: T[], keep: (row: T) => boolean = () => true) {
+  return rows.reduce<Record<string, number>>((acc, row) => { if (keep(row)) { const id = kbOf(row as never); acc[id] = (acc[id] || 0) + 1 } return acc }, {})
+}
+const gapsByKb = computed(() => countBy(gaps.value))
+const unreadByKb = computed(() => countBy(feedback.value, isUnreadNegative))
+const unassignedGaps = computed(() => gaps.value.filter(g => !kbOf(g)))
+const unassignedFeedback = computed(() => feedback.value.filter(f => !kbOf(f)))
+const unassignedUnread = computed(() => unassignedFeedback.value.filter(isUnreadNegative).length)
+const kbGaps = computed(() => current.value ? gaps.value.filter(g => kbOf(g) === current.value!.id) : [])
+const todoByKb = (id: string) => (pendingByKb.value[id] || 0) + (gapsByKb.value[id] || 0) + (unreadByKb.value[id] || 0)
+function todoTitle(id: string) {
+  return [[pendingByKb.value[id], '条待审核'], [gapsByKb.value[id], '个没答上'], [unreadByKb.value[id], '条未读差评']].filter(([n]) => n).map(([n, t]) => `${n} ${t}`).join('，')
+}
 
 // 候选知识没写知识库时，归到“学习结果存入”的默认知识库
 function candidateKb(c: Candidate) {
@@ -202,7 +257,7 @@ function candidateKb(c: Candidate) {
 const pendingByKb = computed(() => pendingCandidates.value.reduce<Record<string, number>>((acc, c) => { const id = candidateKb(c); acc[id] = (acc[id] || 0) + 1; return acc }, {}))
 
 function openKb(id: string) { router.replace({ query: { kb: id, ...(kbTab.value !== 'documents' && !sharedView.value ? { tab: kbTab.value } : {}) } }) }
-function openShared(view: 'gaps' | 'feedback') { router.replace({ query: { tab: view } }) }
+function openShared(view: 'gaps' | 'feedback') { router.replace({ query: { scope: 'unassigned', tab: view } }) }
 function setTab(value: string | number) {
   if (!current.value) return
   const tab = String(value)
@@ -221,20 +276,24 @@ const candidateConversation = computed(() => typeof route.query.conversationId =
 const candidateConversationName = computed(() => typeof route.query.conversationName === 'string' ? route.query.conversationName : '')
 const kbCandidates = computed(() => current.value ? candidates.value.filter(c => candidateKb(c) === current.value!.id) : [])
 function clearConversationFilter() { router.replace({ query: { kb: current.value?.id, tab: 'candidates' } }) }
-const gaps = ref<Gap[]>([])
-const feedback = ref<Feedback[]>([])
 const feedbackRating = ref('')
 const feedbackView = ref<'all' | 'unread'>('all')
-const shownFeedback = computed(() => feedbackView.value === 'unread' ? feedback.value.filter(f => !f.read) : feedback.value)
+const shownFeedback = computed(() => feedback.value.filter(f =>
+  kbOf(f) === (sharedView.value ? '' : current.value?.id)
+  && (!feedbackRating.value || f.rating === feedbackRating.value)
+  && (feedbackView.value !== 'unread' || !f.read)))
 
 const { selectedIds, deleting, deleteSelected } = useBulkDelete(reload)
 function selectRows(rows: { id: string }[]) { selectedIds.value = rows.map(r => r.id) }
 
 async function reload() {
-  const [s, kbs, settings, pending, ms] = await Promise.all([
+  const [s, kbs, settings, pending, ms, gapRows, feedbackRows] = await Promise.all([
     agentApi.learning.stats().catch(() => null), api.knowledge.list(), agentApi.settings.get().catch(() => null),
     agentApi.learning.candidates('pending').catch(() => []), api.models.list().catch(() => []),
+    agentApi.learning.gaps().catch(() => gaps.value), agentApi.learning.feedback().catch(() => feedback.value),
   ])
+  gaps.value = gapRows
+  feedback.value = feedbackRows
   stats.value = s
   shell.refreshCounts(true)
   bases.value = kbs
@@ -248,8 +307,12 @@ async function reload() {
 // 选中哪个知识库：URL 指定的 > 当前的 > 有待审核的（从“待审核”链接进来时）> 第一个
 async function syncSelection(fresh = false) {
   if (sharedView.value) { await loadPane(); return }
+  // 从“没答上”“待审核”入口进来、没指定知识库时，先去待办最多的那个；全在未归属里就去未归属
+  const busiest = (counts: Record<string, number>) => Object.entries(counts).filter(([id]) => id).sort((a, b) => b[1] - a[1])[0]?.[0] || ''
+  if (!queryKb.value && kbTab.value === 'gaps' && !busiest(gapsByKb.value) && unassignedGaps.value.length) { openShared('gaps'); return }
+  if (!queryKb.value && kbTab.value === 'feedback' && !busiest(unreadByKb.value) && unassignedUnread.value) { openShared('feedback'); return }
   const wanted = queryKb.value || current.value?.id
-    || (kbTab.value === 'candidates' ? Object.entries(pendingByKb.value).sort((a, b) => b[1] - a[1])[0]?.[0] : '')
+    || (kbTab.value === 'candidates' ? busiest(pendingByKb.value) : kbTab.value === 'gaps' ? busiest(gapsByKb.value) : kbTab.value === 'feedback' ? busiest(unreadByKb.value) : '')
     || bases.value[0]?.id || ''
   const base = bases.value.find(b => b.id === wanted) || bases.value[0]
   if (!base) { current.value = undefined; return }
@@ -271,8 +334,8 @@ async function loadPane() {
   selectedIds.value = []
   loading.value = true
   try {
-    if (sharedView.value === 'gaps') gaps.value = await agentApi.learning.gaps()
-    else if (sharedView.value === 'feedback') feedback.value = await agentApi.learning.feedback(feedbackRating.value)
+    if (sharedView.value === 'gaps' || kbTab.value === 'gaps') gaps.value = await agentApi.learning.gaps()
+    else if (sharedView.value === 'feedback' || kbTab.value === 'feedback') feedback.value = await agentApi.learning.feedback()
     else if (current.value && kbTab.value === 'entries') entries.value = await agentApi.learning.entries({ knowledgeBaseId: current.value.id, status: entryStatus.value, q: entryQuery.value || undefined })
     else if (current.value && kbTab.value === 'candidates') candidates.value = await agentApi.learning.candidates(candidateStatus.value, candidateConversation.value || undefined)
   } catch (e) {
@@ -314,7 +377,7 @@ function openForm(mode: 'entry' | 'candidate' | 'gap', values: Partial<typeof en
 }
 function editEntry(row?: Entry) { openForm('entry', row ? { id: row.id, knowledgeBaseId: row.knowledgeBaseId, question: row.question, aliasesText: (row.aliases || []).join('\n'), answer: row.answer, status: row.status } : {}) }
 function review(row: Candidate) { openForm('candidate', { refId: row.id, knowledgeBaseId: candidateKb(row), question: row.question, aliasesText: (row.aliases || []).join('\n'), answer: row.answer, evidence: row.evidence || [] }) }
-function answerGap(row: Gap) { openForm('gap', { refId: row.id, question: row.question, knowledgeBaseId: defaultKB.value }) }
+function answerGap(row: Gap) { openForm('gap', { refId: row.id, question: row.question, knowledgeBaseId: kbOf(row) || current.value?.id || defaultKB.value }) }
 async function submitEntry() {
   const aliases = entryForm.aliasesText.split('\n').map(s => s.trim()).filter(Boolean)
   if (!entryForm.knowledgeBaseId || !entryForm.question.trim() || !entryForm.answer.trim()) { ElMessage.warning('知识库、问题和答案必填'); return }
@@ -378,6 +441,8 @@ useAdminEvents(['knowledge_bases', 'knowledge_documents', 'knowledge_entries', '
 
 <style scoped>
 .list-empty { padding: 8px 10px; font-size: 13px; }
+.count-pill.warn { background: var(--warning); color: #fff; }
+.unassigned-switch { align-self: flex-start; margin-bottom: 12px; }
 .list-divider { margin: 8px 0 4px; padding: 12px 10px 4px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12px; }
 .knowledge-list-item .count-pill { margin-left: 0; animation: pop-in var(--dur) var(--ease); }
 .kb-model { font-size: 14px; }

@@ -153,6 +153,8 @@ export interface MessageTimeline {
 
 export interface MessageRecord {
   timeline?: MessageTimeline
+  /** 消息、回复、上下文里 <@openid> 对应的昵称 */
+  mentionNames?: Record<string, string>
   id: string
   time: string
   botName: string
@@ -261,6 +263,10 @@ export interface PipelineRow {
   model: { status: Status; ms?: number; name?: string }
   delivery: { status: Status; ms?: number }
   totalMs: number
+  sender?: string
+  senderId?: string
+  /** 消息里 <@openid> 对应的昵称 */
+  mentionNames?: Record<string, string>
 }
 
 export interface AlertItem {
@@ -271,6 +277,14 @@ export interface AlertItem {
   content: string
   impact: string
   recovered: boolean
+  /** inbox=收到后处理失败，outbox=回复没发出去，document=知识文档索引失败 */
+  kind?: 'inbox' | 'outbox' | 'document'
+  /** 出错的那条用户消息，用来跳到消息记录详情 */
+  messageId?: string
+  documentId?: string
+  knowledgeBaseId?: string
+  /** 原始错误信息 */
+  detail?: string
 }
 
 /** 正在处理中的一条消息：哪个机器人在哪个群回复谁的什么问题，走到哪一步。 */
@@ -282,6 +296,7 @@ export interface ActiveTask {
   question: string
   stage: string
   elapsedMs?: number | null
+  mentionNames?: Record<string, string>
 }
 
 export interface SystemOverview {

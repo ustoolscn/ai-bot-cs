@@ -1,10 +1,10 @@
 <template>
   <div class="queue-flow">
     <template v-for="(node, index) in nodes" :key="node.label">
-      <div class="node" :class="[node.tone, { busy: node.count > 0 }]">
+      <component :is="node.to ? 'button' : 'div'" class="node" :class="[node.tone, { busy: node.count > 0, link: node.to }]" :type="node.to ? 'button' : undefined" :title="node.to ? `查看${node.label}的消息` : undefined" @click="node.to && emit('select', node)">
         <strong><CountUp :value="node.count" /></strong>
-        <span>{{ node.label }}</span>
-      </div>
+        <span>{{ node.label }}<template v-if="node.to"> ›</template></span>
+      </component>
       <span v-if="index < nodes.length - 1" class="pipe" :class="{ moving: node.count > 0 || nodes[index + 1].count > 0 }"><i /></span>
     </template>
   </div>
@@ -14,12 +14,17 @@
 // 任务队列：节点之间有任务流动时，连线上的点在移动；数量变化时数字过渡。
 import CountUp from './CountUp.vue'
 
-defineProps<{ nodes: Array<{ label: string; count: number; tone?: string }> }>()
+type QueueNode = { label: string; count: number; tone?: string; to?: string }
+defineProps<{ nodes: QueueNode[] }>()
+const emit = defineEmits<{ select: [node: QueueNode] }>()
 </script>
 
 <style scoped>
 .queue-flow { display: flex; align-items: center; gap: 0; height: 100%; }
 .node { display: flex; flex: 1 1 0; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-width: 64px; min-height: 76px; padding: 10px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); transition: border-color .3s var(--ease), background .3s var(--ease); }
+.node.link { font: inherit; color: inherit; cursor: pointer; }
+.node.link:hover { filter: brightness(.97); }
+.node.link:active { transform: scale(.97); }
 .node strong { font-size: 22px; font-weight: 600; line-height: 1.2; }
 .node > span { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .node.busy { border-color: var(--primary-soft, #bcd5f5); background: var(--primary-light); }

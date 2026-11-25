@@ -41,15 +41,15 @@ export const mockKnowledgeBases: KnowledgeBase[] = [
 ]
 
 const alerts: AlertItem[] = [
-  { id: 'a1', level: 'critical', time: '05-20 15:24:21', bot: '客服小Q', content: '知识检索超时（耗时 5.20s，超过阈值 5.00s）', impact: '处理失败', recovered: false },
-  { id: 'a2', level: 'warning', time: '05-20 15:23:10', bot: '知识助手', content: '索引失败：文档解析错误（文件：产品更新日志_20250519.pdf）', impact: '部分问答受影响', recovered: false },
+  { id: 'a1', level: 'critical', time: '05-20 15:24:21', bot: '客服小Q', content: '入口处理失败：知识检索超时（耗时 5.20s，超过阈值 5.00s）', impact: '消息未生成回复', recovered: false, kind: 'inbox', messageId: 'msg-001', detail: 'context deadline exceeded' },
+  { id: 'a2', level: 'warning', time: '05-20 15:23:10', bot: '知识助手', content: '索引失败：文档解析错误（文件：产品更新日志_20250519.pdf）', impact: '部分问答受影响', recovered: false, kind: 'document', documentId: 'doc-1', knowledgeBaseId: 'kb-products' },
   { id: 'a3', level: 'warning', time: '05-20 15:21:05', bot: '活动小助手', content: '模型调用延迟升高（当前 P95：4.8s，阈值 4.0s）', impact: '响应时间增加', recovered: true },
   { id: 'a4', level: 'info', time: '05-20 15:18:42', bot: '客服小Q', content: '投递失败率升高（当前 3.1%，阈值 2.0%）', impact: '消息触达可能受影响', recovered: true },
 ]
 
 export const mockOverview: SystemOverview = {
   active: [
-    { id: 'a1', bot: '客服小Q', conversation: '产品运营交流群', sender: '小林', question: 'claude sonnet 在 default 分组多少钱？', stage: '模型生成', elapsedMs: 2400 },
+    { id: 'a1', bot: '客服小Q', conversation: '产品运营交流群', sender: '小林', question: '<@E4F9A07C> claude sonnet 在 default 分组多少钱？', mentionNames: { E4F9A07C: '客服小Q' }, stage: '模型生成', elapsedMs: 2400 },
   ],
   messages24h: 23842,
   successRate: 95.1,
@@ -62,12 +62,12 @@ export const mockOverview: SystemOverview = {
     { label: '触发会话数', value: '6,842', trend: '15.2%', direction: 'up', good: false },
   ],
   pipelines: [
-    { id: 'p1', conversation: '产品运营交流群', content: '怎么申请七天无理由退款？', time: '15:24:31', bot: '客服小Q', eventMs: 120, contextMs: 210, retrieval: { status: 'success', ms: 320, hit: '5/5' }, model: { status: 'success', ms: 820, name: 'qwen-plus' }, delivery: { status: 'success', ms: 280 }, totalMs: 1750 },
-    { id: 'p2', conversation: '售后服务群', content: '保修期是多久？', time: '15:24:28', bot: '客服小Q', eventMs: 98, contextMs: 180, retrieval: { status: 'success', ms: 210, hit: '3/3' }, model: { status: 'success', ms: 690, name: 'qwen-plus' }, delivery: { status: 'success', ms: 210 }, totalMs: 1390 },
-    { id: 'p3', conversation: '产品运营交流群', content: '企业版支持哪些权限？', time: '15:24:24', bot: '知识助手', eventMs: 110, contextMs: 190, retrieval: { status: 'success', ms: 450, hit: '6/8' }, model: { status: 'success', ms: 930, name: 'qwen-max' }, delivery: { status: 'success', ms: 300 }, totalMs: 1980 },
-    { id: 'p4', conversation: '售后服务群', content: '帮我查询订单', time: '15:24:21', bot: '客服小Q', eventMs: 103, contextMs: 205, retrieval: { status: 'warning', ms: 5200, hit: '1/10' }, model: { status: 'pending' }, delivery: { status: 'failed' }, totalMs: 5510 },
-    { id: 'p5', conversation: '夏季活动执行群', content: '活动奖品什么时候发？', time: '15:24:18', bot: '活动小助手', eventMs: 95, contextMs: 160, retrieval: { status: 'success', ms: 180, hit: '2/2' }, model: { status: 'success', ms: 610, name: 'qwen-plus' }, delivery: { status: 'success', ms: 200 }, totalMs: 1250 },
-    { id: 'p6', conversation: '产品运营交流群', content: '发票在哪里申请', time: '15:24:15', bot: '客服小Q', eventMs: 101, contextMs: 220, retrieval: { status: 'success', ms: 260, hit: '4/4' }, model: { status: 'success', ms: 720, name: 'qwen-plus' }, delivery: { status: 'success', ms: 230 }, totalMs: 1530 },
+    { id: 'msg-001', sender: '林晓', conversation: '产品运营交流群', content: '怎么申请七天无理由退款？', time: '15:24:31', bot: '客服小Q', eventMs: 120, contextMs: 210, retrieval: { status: 'success', ms: 320, hit: '5/5' }, model: { status: 'success', ms: 820, name: 'qwen-plus' }, delivery: { status: 'success', ms: 280 }, totalMs: 1750 },
+    { id: 'p2', sender: '阿杰', conversation: '售后服务群', content: '保修期是多久？', time: '15:24:28', bot: '客服小Q', eventMs: 98, contextMs: 180, retrieval: { status: 'success', ms: 210, hit: '3/3' }, model: { status: 'success', ms: 690, name: 'qwen-plus' }, delivery: { status: 'success', ms: 210 }, totalMs: 1390 },
+    { id: 'p3', sender: 'Mia', conversation: '产品运营交流群', content: '企业版支持哪些权限？', time: '15:24:24', bot: '知识助手', eventMs: 110, contextMs: 190, retrieval: { status: 'success', ms: 450, hit: '6/8' }, model: { status: 'success', ms: 930, name: 'qwen-max' }, delivery: { status: 'success', ms: 300 }, totalMs: 1980 },
+    { id: 'p4', sender: '周周', conversation: '售后服务群', content: '<@E4F9A07C> 帮我查询订单', mentionNames: { E4F9A07C: '客服小Q' }, time: '15:24:21', bot: '客服小Q', eventMs: 103, contextMs: 205, retrieval: { status: 'warning', ms: 5200, hit: '1/10' }, model: { status: 'pending' }, delivery: { status: 'failed' }, totalMs: 5510 },
+    { id: 'p5', sender: '小川', conversation: '夏季活动执行群', content: '活动奖品什么时候发？', time: '15:24:18', bot: '活动小助手', eventMs: 95, contextMs: 160, retrieval: { status: 'success', ms: 180, hit: '2/2' }, model: { status: 'success', ms: 610, name: 'qwen-plus' }, delivery: { status: 'success', ms: 200 }, totalMs: 1250 },
+    { id: 'p6', sender: '林晓', conversation: '产品运营交流群', content: '发票在哪里申请', time: '15:24:15', bot: '客服小Q', eventMs: 101, contextMs: 220, retrieval: { status: 'success', ms: 260, hit: '4/4' }, model: { status: 'success', ms: 720, name: 'qwen-plus' }, delivery: { status: 'success', ms: 230 }, totalMs: 1530 },
     { id: 'p7', conversation: '售后服务群', content: '可以换绑手机号吗', time: '15:24:12', bot: '知识助手', eventMs: 112, contextMs: 210, retrieval: { status: 'warning', ms: 300, hit: '2/5' }, model: { status: 'success', ms: 800, name: 'qwen-max' }, delivery: { status: 'success', ms: 260 }, totalMs: 1680 },
     { id: 'p8', conversation: '用户 8G7X', content: '充值多久到账', time: '15:24:09', bot: '客服小Q', eventMs: 97, contextMs: 170, retrieval: { status: 'success', ms: 190, hit: '3/3' }, model: { status: 'success', ms: 660, name: 'qwen-plus' }, delivery: { status: 'success', ms: 220 }, totalMs: 1340 },
   ],
