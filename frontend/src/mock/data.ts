@@ -115,7 +115,7 @@ export function mockChat(conversationId: string): ChatPage {
     { id: 'c2', direction: 'inbound', role: 'user', senderName: '小川', content: '<@bot-openid> 帮我画一只在键盘上睡觉的橘猫', mentionNames: { 'bot-openid': '客服小Q' }, attachments: [], at: minutesAgo(46), messageId: 'msg-002', quotable: true },
     { id: 'c3', direction: 'outbound', role: 'bot', content: '画好啦[OK]，橘猫已经在键盘上睡着了[睡]', attachments: [], at: minutesAgo(45), status: 'sent', replyToId: 'c2' },
     { id: 'c4', direction: 'outbound', role: 'bot', kind: 'welcome', content: '欢迎新成员 周周 加入本群', attachments: [], at: minutesAgo(20) },
-    { id: 'c4b', direction: 'outbound', role: 'bot', kind: 'scheduled', content: '【今日资讯】绘图模型已支持 2K 输出，调用方式见群公告。', attachments: [], at: minutesAgo(12), status: 'sent' },
+    { id: 'c4b', direction: 'outbound', role: 'bot', kind: 'scheduled', content: '【今日资讯】绘图模型已支持 2K 输出，调用方式见：https://docs.example.com/guide/models/image-generation?lang=zh-CN&tab=pricing#section-2 。', attachments: [], at: minutesAgo(12), status: 'sent' },
     { id: 'c4c', direction: 'inbound', role: 'user', senderName: '林晓', content: '收到<faceType=1,faceId="13",ext="eyJ0ZXh0Ijoi5ZGy54mZIn0=">', attachments: [], at: minutesAgo(11), messageId: 'msg-003' },
     { id: 'c5', direction: 'inbound', role: 'user', senderName: '周周', content: '<@bot-openid> 充值 200 还没到账，找人工', mentionNames: { 'bot-openid': '客服小Q' }, attachments: [], at: minutesAgo(6), messageId: 'msg-h01', canReply: true, quotable: true },
     { id: 'c6', direction: 'outbound', role: 'bot', content: '已为您转接人工客服，请稍等。', attachments: [], at: minutesAgo(6), status: 'sent', replyToId: 'c5' },
