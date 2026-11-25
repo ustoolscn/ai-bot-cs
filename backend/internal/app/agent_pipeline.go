@@ -39,6 +39,10 @@ func (a *App) processInbox(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	return a.handleInbox(ctx, j)
+}
+
+func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 	finishCheck := a.startStage(ctx, j.MessageID, "接单检查")
 	if !j.Enabled || (j.Deadline != nil && time.Now().After(*j.Deadline)) {
 		finishCheck("会话停用或回复已过期", nil)

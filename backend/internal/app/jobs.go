@@ -43,6 +43,13 @@ func (a *App) claimAgentJob(ctx context.Context, kinds []string, exclude bool) (
 	if exclude {
 		cond = "NOT (kind = ANY($1))"
 	}
+	// A delayed review keeps its place so later inbound messages cannot bypass it.
+	if !exclude && len(kinds) == 1 && kinds[0] == "group_review" {
+		cond += ` AND NOT EXISTS (SELECT FROM messages m JOIN messages x ON x.conversation_id=m.conversation_id
+    JOIN agent_jobs prior ON prior.dedupe_key='review:'||x.id::text
+    WHERE m.id::text=agent_jobs.payload->>'messageId' AND
+    (prior.status='processing' OR (prior.status='pending' AND (x.created_at,x.id)<(m.created_at,m.id))))`
+	}
 	var j agentJob
 	var raw []byte
 	err = tx.QueryRow(ctx, `SELECT id::text,kind,payload,attempts FROM agent_jobs WHERE status='pending' AND next_attempt_at<=now() AND `+cond+` ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`, kinds).Scan(&j.ID, &j.Kind, &raw, &j.Attempts)

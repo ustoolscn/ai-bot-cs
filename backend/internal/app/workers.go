@@ -19,7 +19,10 @@ func (a *App) RunWorkers(ctx context.Context) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() { defer wg.Done(); a.runAdminEvents(ctx) }()
-	for name, fn := range map[string]func(context.Context) error{"group-actions": a.processGuardAction, "group-reviews": a.processGuardReview, "inbox": a.processInbox, "documents": a.processDocument, "outbox": a.processOutbox, "retractions": a.processRetraction, "agent-jobs": a.processAgentJob, "eval": a.processEvalJob} {
+	wg.Go(func() { dispatchJobs(ctx, a, "inbox", a.claimInbox, a.handleInbox) })
+	wg.Go(func() { dispatchJobs(ctx, a, "outbox", a.claimOutbox, a.handleOutbox) })
+	wg.Go(func() { dispatchJobs(ctx, a, "group-reviews", a.claimGuardReview, a.runJob) })
+	for name, fn := range map[string]func(context.Context) error{"group-actions": a.processGuardAction, "documents": a.processDocument, "retractions": a.processRetraction, "agent-jobs": a.processAgentJob, "eval": a.processEvalJob} {
 		name, fn := name, fn
 		wg.Add(1)
 		go func() { defer wg.Done(); a.workerLoop(ctx, name, fn) }()
@@ -111,6 +114,40 @@ func (a *App) workerLoop(ctx context.Context, name string, fn func(context.Conte
 	}
 }
 
+// Each successful claim reserves its conversation in the database. Dispatch
+// immediately so model and network latency never hold up the next claim.
+func dispatchJobs[J any](ctx context.Context, a *App, name string, claim func(context.Context) (J, error), handle func(context.Context, J) error) {
+	var running sync.WaitGroup
+	defer running.Wait()
+	wake := make(chan struct{}, 1)
+	ticker := time.NewTicker(a.cfg.WorkerPoll)
+	defer ticker.Stop()
+	for ctx.Err() == nil {
+		job, err := claim(ctx)
+		if err == nil {
+			running.Go(func() {
+				if err := handle(ctx, job); err != nil && ctx.Err() == nil {
+					a.log.Error("worker error", "worker", name, "error", err)
+				}
+				select {
+				case wake <- struct{}{}:
+				default:
+				}
+			})
+			continue
+		}
+		if !errors.Is(err, pgx.ErrNoRows) && ctx.Err() == nil {
+			a.log.Error("claim error", "worker", name, "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-wake:
+		case <-ticker.C:
+		}
+	}
+}
+
 type inboxJob struct {
 	TaskID, MessageID, BotID, ConversationID, ConversationType, PlatformConversationID, PlatformMessageID, Content, SystemPrompt, EventType, TriggerMode string
 	HasImage, MentionsBot                                                                                                                                bool
@@ -128,6 +165,15 @@ func (a *App) claimInbox(ctx context.Context) (inboxJob, error) {
 	defer tx.Rollback(ctx)
 	var j inboxJob
 	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,m.conversation_id::text,c.type,c.platform_id,COALESCE(m.platform_message_id,''),m.content,c.system_prompt,c.context_limit,c.enabled AND NOT c.bot_removed,m.reply_deadline,t.attempts,m.event_type,c.trigger_mode,m.parts @> '[{"type":"image"}]'::jsonb,COALESCE((m.raw_event#>'{d,mentions}') @> '[{"is_you":true}]'::jsonb,false) FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id WHERE t.status='pending' AND t.next_attempt_at<=now()
+    AND NOT EXISTS (SELECT FROM inbox_tasks active JOIN messages x ON x.id=active.message_id
+      WHERE x.conversation_id=c.id AND active.status='processing')
+    AND COALESCE(m.reply_batch,m.id) = (SELECT COALESCE(x.reply_batch,x.id)
+      FROM messages x JOIN inbox_tasks head ON head.message_id=x.id
+      WHERE x.conversation_id=c.id AND head.status='pending' ORDER BY x.created_at,x.id LIMIT 1)
+    AND NOT EXISTS (SELECT FROM messages x JOIN group_reviews r ON r.message_id=x.id
+      JOIN agent_jobs review ON review.dedupe_key='review:'||x.id::text
+      WHERE x.conversation_id=c.id AND r.queue_reply AND r.status='pending'
+      AND review.status IN ('pending','processing') AND (x.created_at,x.id)<(m.created_at,m.id))
 	AND (m.reply_batch IS NULL OR NOT EXISTS (
       SELECT FROM messages other LEFT JOIN inbox_tasks ot ON ot.message_id=other.id
       WHERE other.reply_batch=m.reply_batch AND (
@@ -330,11 +376,10 @@ func (a *App) claimOutbox(ctx context.Context) (outboxJob, error) {
 	var j outboxJob
 	var partsRaw []byte
 	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,c.id::text,c.type,c.platform_id,COALESCE(m.reply_to_message_id,''),m.content,m.event_type,m.parts,b.app_id,b.app_secret_enc,t.msg_seq,t.attempts,m.reply_deadline,m.qq_send_payload,c.qq_extended_replies FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='pending' AND t.next_attempt_at<=now()
-	AND (m.handoff_id IS NULL OR NOT EXISTS (
-	  SELECT FROM messages prior JOIN outbox_tasks pt ON pt.message_id=prior.id
-	  WHERE prior.handoff_id=m.handoff_id AND prior.conversation_id=m.conversation_id
-	  AND pt.status IN ('pending','processing') AND (prior.created_at,prior.id)<(m.created_at,m.id)))
-	ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationRecordID, &j.ConversationType, &j.ConversationID, &j.ReplyTo, &j.Text, &j.EventType, &partsRaw, &j.AppID, &j.SecretEnc, &j.Sequence, &j.Attempts, &j.Deadline, &j.Payload, &j.Extended)
+    AND NOT EXISTS (SELECT FROM messages prior JOIN outbox_tasks pt ON pt.message_id=prior.id
+      WHERE prior.conversation_id=c.id AND (pt.status='processing' OR
+        (pt.status='pending' AND (prior.created_at,prior.id)<(m.created_at,m.id))))
+	ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF c,t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationRecordID, &j.ConversationType, &j.ConversationID, &j.ReplyTo, &j.Text, &j.EventType, &partsRaw, &j.AppID, &j.SecretEnc, &j.Sequence, &j.Attempts, &j.Deadline, &j.Payload, &j.Extended)
 	if err != nil {
 		return j, err
 	}
@@ -350,6 +395,11 @@ func (a *App) processOutbox(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	return a.handleOutbox(ctx, j)
+}
+
+func (a *App) handleOutbox(ctx context.Context, j outboxJob) error {
+	var err error
 	if j.EventType == "AI_RESPONSE" && j.ReplyTo != "" {
 		var blocked bool
 		err = a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=$1 AND m.platform_message_id=$2 AND m.direction='inbound' AND (m.context_excluded OR EXISTS(SELECT FROM handoffs h WHERE h.conversation_id=m.conversation_id AND h.platform_user_id=m.sender_id AND h.status IN ('open','processing') AND h.message_id IS DISTINCT FROM m.id) OR EXISTS(SELECT 1 FROM blocked_users bu WHERE bu.bot_id=m.bot_id AND bu.platform_user_id=m.sender_id AND (bu.conversation_id IS NULL OR bu.conversation_id=m.conversation_id))))`, j.ConversationRecordID, j.ReplyTo).Scan(&blocked)

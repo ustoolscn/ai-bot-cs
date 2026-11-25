@@ -293,9 +293,13 @@ func (a *App) processGuardAction(ctx context.Context) error {
 }
 
 func (a *App) processGuardReview(ctx context.Context) error {
-	job, err := a.claimAgentJob(ctx, []string{"group_review"}, false)
+	job, err := a.claimGuardReview(ctx)
 	if err != nil {
 		return err
 	}
 	return a.runJob(ctx, job)
+}
+
+func (a *App) claimGuardReview(ctx context.Context) (agentJob, error) {
+	return a.claimAgentJob(ctx, []string{"group_review"}, false)
 }
