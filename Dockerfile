@@ -27,7 +27,7 @@ RUN cd backend && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -
 FROM ${RUNTIME_IMAGE} AS runtime
 ARG ALPINE_MIRROR=https://mirrors.aliyun.com/alpine
 RUN sed -i "s#https\?://dl-cdn.alpinelinux.org/alpine#${ALPINE_MIRROR}#g" /etc/apk/repositories \
-    && apk add --no-cache ca-certificates tzdata su-exec chromium font-noto-cjk \
+    && apk add --no-cache ca-certificates tzdata su-exec chromium font-noto-cjk poppler-utils tesseract-ocr tesseract-ocr-data-eng tesseract-ocr-data-chi_sim \
     && addgroup -S aibot \
     && adduser -S -G aibot -h /app aibot \
     && mkdir -p /app/data \

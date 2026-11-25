@@ -256,8 +256,8 @@ func (a *App) retryInbox(ctx context.Context, j inboxJob, cause error) error {
 }
 
 type documentJob struct {
-	ID, KBID, StorageKey, ProfileID string
-	Attempts                        int
+	ID, KBID, StorageKey, ProfileID, Description string
+	Attempts                                     int
 }
 
 func (a *App) claimDocument(ctx context.Context) (documentJob, error) {
@@ -267,7 +267,7 @@ func (a *App) claimDocument(ctx context.Context) (documentJob, error) {
 	}
 	defer tx.Rollback(ctx)
 	var j documentJob
-	err = tx.QueryRow(ctx, `SELECT d.id::text,d.knowledge_base_id::text,d.storage_key,k.embedding_profile_id::text,d.attempts FROM knowledge_documents d JOIN knowledge_bases k ON k.id=d.knowledge_base_id WHERE d.status='pending' AND d.next_attempt_at<=now() ORDER BY d.created_at FOR UPDATE OF d SKIP LOCKED LIMIT 1`).Scan(&j.ID, &j.KBID, &j.StorageKey, &j.ProfileID, &j.Attempts)
+	err = tx.QueryRow(ctx, `SELECT d.id::text,d.knowledge_base_id::text,d.storage_key,k.embedding_profile_id::text,d.attempts,d.image_description FROM knowledge_documents d JOIN knowledge_bases k ON k.id=d.knowledge_base_id WHERE d.status='pending' AND d.next_attempt_at<=now() ORDER BY d.created_at FOR UPDATE OF d SKIP LOCKED LIMIT 1`).Scan(&j.ID, &j.KBID, &j.StorageKey, &j.ProfileID, &j.Attempts, &j.Description)
 	if err != nil {
 		return j, err
 	}
@@ -286,7 +286,11 @@ func (a *App) processDocument(ctx context.Context) error {
 	if err != nil {
 		return a.retryDocumentJob(ctx, j, fmt.Errorf("读取原始文件失败: %w", err))
 	}
-	chunks := knowledge.Chunk(string(data), 1000, 150)
+	body, err := knowledge.Extract(ctx, j.StorageKey, data, j.Description)
+	if err != nil {
+		return a.retryDocumentJob(ctx, j, err)
+	}
+	chunks := knowledge.Chunk(body, 1000, 150)
 	if len(chunks) == 0 {
 		return a.retryDocumentJob(ctx, j, fmt.Errorf("文档内容为空，无法建立索引"))
 	}

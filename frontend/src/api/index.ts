@@ -81,7 +81,7 @@ export function sanitizeServiceError(value?: string): string | undefined {
     .replace(/((?:[?&]|\b)(?:api[_-]?key|token|access[_-]?token)=)[^&\s]+/gi, '$1[已隐藏凭证]')
 }
 export function mapDocument(item: BackendKnowledgeDocument): KnowledgeDocument {
-  return { id: item.id, name: item.name, type: item.name.toLowerCase().endsWith('.md') ? 'MD' : 'TXT', size: `${Math.max(1, Math.round(item.sizeBytes / 1024))} KB`, chunks: Number(item.chunkCount || 0), status: asStatus(item.status), updatedAt: dateText(item.updatedAt || item.createdAt), lastError: sanitizeServiceError(item.lastError) }
+  return { id: item.id, name: item.name, type: (item.name.split('.').pop() || 'TXT').toUpperCase().replace('JPEG', 'JPG'), size: `${Math.max(1, Math.round(item.sizeBytes / 1024))} KB`, chunks: Number(item.chunkCount || 0), status: asStatus(item.status), updatedAt: dateText(item.updatedAt || item.createdAt), lastError: sanitizeServiceError(item.lastError) }
 }
 function mapKnowledgeBase(item: BackendKnowledgeBase, documents: BackendKnowledgeDocument[] = []): KnowledgeBase {
   const documentCount = Number(item.documentCount ?? documents.length)
@@ -186,7 +186,7 @@ export const api = {
     list: () => loadOrMock(async () => (await request<BackendKnowledgeBase[]>({ url: '/knowledge-bases' })).map((item) => mapKnowledgeBase(item)), mockKnowledgeBases),
     get: async (id: string) => { const detail = await request<BackendKnowledgeDetail>({ url: `/knowledge-bases/${id}` }); return mapKnowledgeBase(detail, detail.documents || []) },
     create: (name: string, description: string, embeddingProfileId: string) => request<{ id: string }>({ method: 'POST', url: '/knowledge-bases', data: { name, description, embeddingProfileId } }, { id: `kb-${Date.now()}` }),
-    upload: (id: string, file: File) => { const data = new FormData(); data.append('file', file); return request<{ id: string; status: string }>({ method: 'POST', url: `/knowledge-bases/${id}/documents`, data }, { id: `doc-${Date.now()}`, status: 'pending' }) },
+    upload: (id: string, file: File, description = '') => { const data = new FormData(); data.append('file', file); if (description) data.append('description', description); return request<{ id: string; status: string }>({ method: 'POST', url: `/knowledge-bases/${id}/documents`, data }, { id: `doc-${Date.now()}`, status: 'pending' }) },
     retryDocument: (id: string, documentId: string) => request<{ queued: boolean }>({ method: 'POST', url: `/knowledge-bases/${id}/documents/${documentId}/retry` }, { queued: true }),
     deleteDocument: (id: string, documentId: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/knowledge-bases/${id}/documents/${documentId}` }, { deleted: true }),
     deleteDocumentIndex: (id: string, documentId: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/knowledge-bases/${id}/documents/${documentId}/index` }, { deleted: true }),

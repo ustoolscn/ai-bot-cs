@@ -982,9 +982,15 @@ func (a *App) deleteKB(c *gin.Context) {
 	ok(c, gin.H{"deleted": true})
 }
 func (a *App) uploadDocument(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 11<<20)
 	file, err := c.FormFile("file")
-	if err != nil || file.Size > 10<<20 {
-		fail(c, 400, "invalid_file", "请选择不超过10MB的 TXT/Markdown 文件")
+	if err != nil || file.Size > 10<<20 || !knowledge.Supported(file.Filename) {
+		fail(c, 400, "invalid_file", "请选择不超过 10 MiB 的文件，支持 "+knowledge.Formats)
+		return
+	}
+	description := strings.TrimSpace(c.PostForm("description"))
+	if description != "" && (!knowledge.IsImage(file.Filename) || len([]rune(description)) > 4000 || strings.ContainsRune(description, 0)) {
+		fail(c, 400, "invalid_description", "图片说明仅适用于图片，最多 4000 字且不能含空字符")
 		return
 	}
 	src, err := file.Open()
@@ -1004,7 +1010,7 @@ func (a *App) uploadDocument(c *gin.Context) {
 		return
 	}
 	var id string
-	err = a.db.QueryRow(c, "INSERT INTO knowledge_documents(knowledge_base_id,name,storage_key,content_type,size_bytes) VALUES($1,$2,$3,$4,$5) RETURNING id::text", c.Param("id"), file.Filename, key, file.Header.Get("Content-Type"), len(data)).Scan(&id)
+	err = a.db.QueryRow(c, "INSERT INTO knowledge_documents(knowledge_base_id,name,storage_key,content_type,size_bytes,image_description) VALUES($1,$2,$3,$4,$5,$6) RETURNING id::text", c.Param("id"), file.Filename, key, file.Header.Get("Content-Type"), len(data), description).Scan(&id)
 	if err != nil {
 		_ = a.files.Delete(c, key)
 		fail(c, 500, "database_error", "保存文档失败")

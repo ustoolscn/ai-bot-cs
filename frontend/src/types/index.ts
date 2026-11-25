@@ -263,7 +263,7 @@ export interface MessageAttachment {
 export interface KnowledgeDocument {
   id: string
   name: string
-  type: 'TXT' | 'MD'
+  type: string
   size: string
   chunks: number
   status: Status
