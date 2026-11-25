@@ -1,17 +1,40 @@
 <template>
   <div class="content-page dash">
     <div class="greeting">
-      <div>
-        <h1>{{ greeting }}，{{ auth.username || '管理员' }}</h1>
-        <p class="live-line"><LiveDot :active="busy" :tone="busy ? 'primary' : 'success'" />{{ busy ? `正在回复 ${overview.active.length} 条消息` : '空闲，等待新消息' }}</p>
-      </div>
+      <h1>{{ greeting }}，{{ auth.username || '管理员' }}</h1>
       <div class="greeting-actions">
         <button v-for="todo in todos" :key="todo.label" class="todo-chip" :class="todo.tone" @click="$router.push(todo.to)"><strong>{{ todo.count }}</strong>{{ todo.label }}</button>
+        <button type="button" class="cost-chip" title="按当前价格估算，点开看明细" @click="costOpen = true"><span>今日消费</span><strong>¥{{ money(cost?.today) }}</strong><span class="sep" /><span>累计</span><strong>¥{{ money(cost?.total) }}</strong></button>
         <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
       </div>
     </div>
 
-    <div class="dash-top">
+    <!-- 最需要盯的：现在正在处理哪条。空闲时显示刚处理完的那条。 -->
+    <section class="panel now" :class="{ busy }">
+      <header class="now-head">
+        <span class="now-state"><LiveDot :active="busy" :tone="busy ? 'primary' : 'success'" />{{ busy ? `正在处理 ${overview.active.length} 条` : '空闲，等待新消息' }}</span>
+        <span v-if="!busy && latest" class="muted">最近一条</span>
+      </header>
+      <TransitionGroup v-if="busy" name="live" tag="ul" class="now-list">
+        <li v-for="task in overview.active" :key="task.id" class="now-item">
+          <span class="who"><b>{{ task.sender || '用户' }}</b> · {{ task.conversation || '私聊' }} · {{ task.bot }}</span>
+          <strong class="now-q">{{ mentions(task.question, task.mentionNames) || '（图片或表情）' }}</strong>
+          <span class="stage-run"><i />{{ task.stage }}<template v-if="task.elapsedMs"> · 已用 {{ (task.elapsedMs / 1000).toFixed(1) }} 秒</template></span>
+        </li>
+      </TransitionGroup>
+      <div v-else-if="latest" class="now-item is-done" role="button" tabindex="0" @click="openMessage(latest.id)" @keydown.enter.self="openMessage(latest.id)">
+        <span class="who"><b>{{ latest.sender || '未知用户' }}</b><template v-if="latest.conversation"> · {{ latest.conversation }}</template> · {{ latest.bot }} · {{ latest.time }}</span>
+        <strong class="now-q">{{ mentions(latest.content, latest.mentionNames) || '（没有文字内容）' }}</strong>
+        <span class="now-result">
+          <span class="pill" :class="outcomeOf(latest).tone" :title="outcomeOf(latest).title">{{ outcomeOf(latest).text }}</span>
+          <span class="live-ms" :class="{ slow: rowTotal(latest) > 5000 }">用时 {{ rowTotal(latest) ? (rowTotal(latest) / 1000).toFixed(1) + ' 秒' : '—' }}</span>
+          <span class="now-open">查看处理详情<el-icon><ArrowRight /></el-icon></span>
+        </span>
+      </div>
+      <p v-else class="muted now-empty">机器人被 @ 或收到私聊后，正在处理的消息会出现在这里。</p>
+    </section>
+
+    <div class="dash-stats">
       <section class="panel dash-card">
         <header>
           <h2>任务状态</h2>
@@ -43,45 +66,64 @@
       <section class="panel dash-card">
         <header><h2>处理消息</h2><span class="muted">24 小时</span></header>
         <div class="top-body">
-        <div class="big-num"><CountUp :value="overview.messages24h" /><span>条</span></div>
-        <div class="meters">
-        <div class="meter-row">
-          <span>成功回复</span>
-          <span class="meter"><i :style="{ transform: `scaleX(${(overview.successRate ?? 0) / 100})` }" /></span>
-          <strong><CountUp :value="overview.successRate" :decimals="1" suffix="%" /></strong>
-        </div>
-        <div class="meter-row">
-          <span>平均用时</span>
-          <span class="meter"><i class="is-time" :style="{ transform: `scaleX(${Math.min(1, avgTotal / 8000)})` }" /></span>
-          <strong>{{ avgTotal ? (avgTotal / 1000).toFixed(2) + ' 秒' : '—' }}</strong>
-        </div>
-        </div>
+          <div class="stat-nums">
+            <div><strong :title="exact(overview.messages24h)"><CountUp v-if="!isBig(overview.messages24h)" :value="overview.messages24h" /><template v-else>{{ wan(overview.messages24h) }}<small>万</small></template></strong><span>条消息</span></div>
+            <div><strong :title="exact(successCount)"><CountUp v-if="!isBig(successCount)" :value="successCount" /><template v-else>{{ wan(successCount) }}<small>万</small></template></strong><span>条成功回复</span></div>
+            <div><strong>{{ avgTotal ? (avgTotal / 1000).toFixed(1) : '—' }}<small v-if="avgTotal">秒</small></strong><span>平均用时</span></div>
+          </div>
+          <div class="meter-row">
+            <span>成功率</span>
+            <span class="meter"><i :style="{ transform: `scaleX(${(overview.successRate ?? 0) / 100})` }" /></span>
+            <strong><CountUp :value="overview.successRate" :decimals="1" suffix="%" /></strong>
+          </div>
         </div>
       </section>
 
       <section class="panel dash-card">
         <header><h2>知识库</h2><el-button text type="primary" @click="$router.push('/knowledge')">管理</el-button></header>
         <div class="top-body">
-        <div class="kb-nums">
-          <div><strong><CountUp :value="overview.knowledge.total" /></strong><span>篇文档</span></div>
-          <div><strong><CountUp :value="overview.knowledge.entries ?? stats?.publishedEntries" /></strong><span>条知识问答</span></div>
-          <div><strong :class="{ warn: stats?.pendingCandidates }"><CountUp :value="stats?.pendingCandidates" /></strong><span>条待审核</span></div>
-        </div>
-        <div class="meter-row">
-          <span>已索引</span>
-          <span class="meter" :class="{ indexing: overview.knowledge.indexing }"><i :style="{ transform: `scaleX(${overview.knowledge.progress / 100})` }" /></span>
-          <strong><CountUp :value="overview.knowledge.progress" suffix="%" /></strong>
-        </div>
+          <div class="stat-nums">
+            <div><strong><CountUp :value="overview.knowledge.total" /></strong><span>篇文档</span></div>
+            <div><strong><CountUp :value="overview.knowledge.entries ?? stats?.publishedEntries" /></strong><span>条问答</span></div>
+            <div><strong :class="{ warn: stats?.pendingCandidates }"><CountUp :value="stats?.pendingCandidates" /></strong><span>条待审核</span></div>
+          </div>
+          <div class="meter-row">
+            <span>已索引</span>
+            <span class="meter" :class="{ indexing: overview.knowledge.indexing }"><i :style="{ transform: `scaleX(${overview.knowledge.progress / 100})` }" /></span>
+            <strong><CountUp :value="overview.knowledge.progress" suffix="%" /></strong>
+          </div>
         </div>
       </section>
-    </div>
 
-    <CostPanel ref="costPanel" class="dash-cost" />
+    </div>
 
     <div class="dash-bottom">
       <section class="panel dash-card bottom-card">
+        <header><h2>最近处理</h2><el-button text type="primary" @click="$router.push('/messages')">全部消息</el-button></header>
+        <div class="live-scroll">
+          <TransitionGroup name="live" tag="ul" class="live-list">
+            <li v-for="row in recent" :key="row.id" class="live-item" :class="{ selected: traceScope === row.id }" role="button" tabindex="0" :aria-pressed="traceScope === row.id" title="在右侧查看这条消息各环节的用时" @click="pickRow(row.id)" @keydown.enter.self="pickRow(row.id)" @keydown.space.self.prevent="pickRow(row.id)">
+              <LiveDot :tone="rowTone(row)" />
+              <div class="live-main">
+                <span class="who"><b>{{ row.sender || '未知用户' }}</b><template v-if="row.conversation"> · {{ row.conversation }}</template> · {{ row.bot }}</span>
+                <strong>{{ mentions(row.content, row.mentionNames) || '（没有文字内容）' }}</strong>
+              </div>
+              <span class="live-side">
+                <span class="pill" :class="outcomeOf(row).tone" :title="outcomeOf(row).title">{{ outcomeOf(row).text }}</span>
+                <span class="live-meta"><span>{{ row.time }}</span><span class="live-ms" :class="{ slow: rowTotal(row) > 5000 }">{{ rowTotal(row) ? (rowTotal(row) / 1000).toFixed(1) + 's' : '—' }}</span></span>
+              </span>
+              <el-tooltip content="查看处理详情" placement="left" :show-after="300">
+                <button type="button" class="live-open" aria-label="查看这条消息的处理详情" @click.stop="openMessage(row.id)"><el-icon><ArrowRight /></el-icon></button>
+              </el-tooltip>
+            </li>
+          </TransitionGroup>
+          <EmptyState v-if="!recent.length" compact title="还没有消息" description="机器人被 @ 或收到私聊后会出现在这里。" />
+        </div>
+      </section>
+
+      <section class="panel dash-card bottom-card">
         <header>
-          <h2>各环节用时</h2>
+          <h2>处理用时</h2>
           <el-select v-model="traceScope" aria-label="选择消息" size="small" style="width: 220px">
             <el-option label="最近消息平均" value="average" />
             <el-option v-for="row in overview.pipelines" :key="row.id" :value="row.id" :label="row.time + ' · ' + (row.sender ? row.sender + '：' : '') + (mentions(row.content, row.mentionNames) || '群消息')" />
@@ -90,38 +132,12 @@
         <div class="stage-scroll"><StageBars :stages="shownStages" :waterfall="traceScope !== 'average'" /></div>
         <p class="total-line">{{ traceScope === 'average' ? '平均总用时' : '总用时' }} <strong>{{ shownTotal == null ? '—' : (shownTotal / 1000).toFixed(2) + ' 秒' }}</strong></p>
       </section>
-
-      <section class="panel dash-card bottom-card">
-        <header><h2>最新动态</h2><el-button text type="primary" @click="$router.push('/messages')">全部消息</el-button></header>
-        <div class="live-scroll">
-        <TransitionGroup name="live" tag="ul" class="live-list">
-          <li v-for="task in overview.active" :key="'a' + task.id" class="live-item is-active">
-            <LiveDot active tone="primary" />
-            <div class="live-main">
-              <span class="who"><b>{{ task.bot }}</b> 正在 <b>{{ task.conversation || '私聊' }}</b> 回复<template v-if="task.sender"> <b>{{ task.sender }}</b></template></span>
-              <strong>{{ mentions(task.question, task.mentionNames) || '（图片或表情）' }}</strong>
-              <span class="stage-run"><i />{{ task.stage }}</span>
-            </div>
-          </li>
-          <li v-for="row in recent" :key="row.id" class="live-item" :class="{ selected: traceScope === row.id }" role="button" tabindex="0" :aria-pressed="traceScope === row.id" title="在左侧查看这条消息各环节的用时" @click="pickRow(row.id)" @keydown.enter.self="pickRow(row.id)" @keydown.space.self.prevent="pickRow(row.id)">
-            <LiveDot :tone="rowTone(row)" />
-            <div class="live-main">
-              <span class="who"><b>{{ row.sender || '未知用户' }}</b><template v-if="row.conversation"> · {{ row.conversation }}</template> · {{ row.bot }}</span>
-              <strong>{{ mentions(row.content, row.mentionNames) || '（没有文字内容）' }}</strong>
-            </div>
-            <span class="live-side">
-              <span class="pill" :class="outcomeOf(row).tone" :title="outcomeOf(row).title">{{ outcomeOf(row).text }}</span>
-              <span class="live-meta"><span>{{ row.time }}</span><span class="live-ms" :class="{ slow: rowTotal(row) > 5000 }">{{ rowTotal(row) ? (rowTotal(row) / 1000).toFixed(1) + 's' : '—' }}</span></span>
-            </span>
-            <el-tooltip content="查看处理详情" placement="left" :show-after="300">
-              <button type="button" class="live-open" aria-label="查看这条消息的处理详情" @click.stop="openMessage(row.id)"><el-icon><ArrowRight /></el-icon></button>
-            </el-tooltip>
-          </li>
-        </TransitionGroup>
-        <EmptyState v-if="!overview.active.length && !recent.length" compact title="还没有消息" description="机器人被 @ 或收到私聊后会出现在这里。" />
-        </div>
-      </section>
     </div>
+
+    <MessageDetailDrawer v-model="detailOpen" :message-id="detailId" />
+    <el-dialog v-model="costOpen" title="消费明细（按当前价格估算）" width="960px" append-to-body>
+      <CostPanel ref="costPanel" class="cost-detail" />
+    </el-dialog>
   </div>
 </template>
 
@@ -133,12 +149,13 @@ import { api } from '@/api'
 import { agentApi, type LearningStats } from '@/api/agent'
 import EmptyState from '@/components/EmptyState.vue'
 import CostPanel from '@/components/CostPanel.vue'
+import MessageDetailDrawer from '@/components/message/MessageDetailDrawer.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import CountUp from '@/components/fx/CountUp.vue'
 import LiveDot from '@/components/fx/LiveDot.vue'
 import QueueFlow from '@/components/fx/QueueFlow.vue'
 import StageBars from '@/components/fx/StageBars.vue'
-import type { AlertItem, PipelineRow, SystemOverview, TimingStage } from '@/types'
+import type { AlertItem, CostSummary, PipelineRow, SystemOverview, TimingStage } from '@/types'
 import { formatMentions as mentions } from '@/utils/mentions'
 import { useRouter } from 'vue-router'
 import { createEmptyOverview } from '@/utils/overview'
@@ -163,7 +180,18 @@ async function dismissFailed() {
 }
 const shell = useShellStore()
 const router = useRouter()
-function openMessage(id: string) { router.push({ path: '/messages', query: { id } }) }
+// 处理详情就地用抽屉打开，不跳到消息记录页。
+const detailOpen = ref(false)
+const detailId = ref('')
+function openMessage(id: string) { detailId.value = id; detailOpen.value = true }
+// 消费只看个大概：今日和累计；明细放在弹窗里。
+const cost = ref<CostSummary | null>(null)
+const costOpen = ref(false)
+// 上万的条数用“万”显示，卡片窄时也放得下；悬停看准确数字。
+const isBig = (v: number | null) => (v ?? 0) >= 10000
+const wan = (v: number | null) => ((v ?? 0) / 10000).toFixed(1)
+const exact = (v: number | null) => v == null ? undefined : v.toLocaleString() + ' 条'
+const money = (v?: number | null) => v == null ? '—' : v >= 100 ? v.toFixed(0) : v.toFixed(2)
 
 // 告警：说清楚出了什么事、影响什么，按钮直接带到能处理它的地方
 const alertTitle = (a: AlertItem) => a.kind === 'document' ? '知识文档索引失败' : a.kind === 'outbox' ? '回复没有发出去' : a.kind === 'inbox' ? '消息处理失败' : a.content.split('：')[0] || '告警'
@@ -195,6 +223,8 @@ const queueNodes = computed(() => [
 ])
 const activeIds = computed(() => new Set(overview.value.active.map(task => task.id)))
 const recent = computed(() => overview.value.pipelines.filter(row => !activeIds.value.has(row.id)).slice(0, 20))
+const latest = computed(() => recent.value[0])
+const successCount = computed(() => overview.value.messages24h == null || overview.value.successRate == null ? null : Math.round(overview.value.messages24h * overview.value.successRate / 100))
 
 const rowTotal = (row: PipelineRow) => row.timeline ? row.timeline.totalMs ?? 0 : row.totalMs
 function rowFailed(row: PipelineRow) {
@@ -258,9 +288,10 @@ const shownStages = computed((): TimingStage[] => {
 
 async function load(background: unknown = false) {
   if (background !== true) loading.value = true
-  const [overviewResult, statsResult] = await Promise.allSettled([api.overview(), agentApi.learning.stats()])
+  const [overviewResult, statsResult, costResult] = await Promise.allSettled([api.overview(), agentApi.learning.stats(), api.system.costs('today')])
   if (overviewResult.status === 'fulfilled') overview.value = overviewResult.value
   if (statsResult.status === 'fulfilled') stats.value = statsResult.value
+  if (costResult.status === 'fulfilled') cost.value = costResult.value
   costPanel.value?.refresh(background !== true)
   shell.refreshCounts(true)
   loading.value = false
@@ -271,7 +302,6 @@ useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_c
 
 <style scoped>
 .greeting-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-.live-line { display: flex; align-items: center; gap: 8px; }
 .todo-chip { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-2); font-size: 13px; cursor: pointer; transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease); animation: pop-in var(--dur-slow) var(--ease) backwards; }
 .todo-chip:hover { border-color: var(--line-strong); background: var(--surface-2); }
 .todo-chip:active { transform: scale(.97); }
@@ -280,40 +310,66 @@ useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_c
 .todo-chip.is-info strong { color: var(--primary-text); }
 .todo-chip.is-warn strong { color: var(--warning); }
 
-.dash-top { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
-.dash-bottom { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; height: 400px; }
+.dash-stats { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
+.dash-bottom { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; height: 420px; }
+
+/* 正在处理：页面顶部，问题本身用较大字号；忙时整块浅蓝，空闲时白底 */
+.now { display: flex; flex-direction: column; gap: 10px; padding: 16px 20px; transition: background .4s var(--ease), border-color .4s var(--ease); }
+.now.busy { background: var(--primary-light); border-color: var(--primary-soft); }
+.now-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 24px; font-size: 13px; }
+.now-state { display: inline-flex; align-items: center; gap: 8px; color: var(--text-2); font-weight: 600; }
+.now.busy .now-state { color: var(--primary-text); }
+.now-list { display: flex; flex-direction: column; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.now-list > li + li { padding-top: 12px; border-top: 1px solid var(--primary-soft); }
+.now-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.now-item.is-done { margin: -6px -10px; padding: 6px 10px; border-radius: var(--radius-sm); cursor: pointer; transition: background var(--dur-fast) var(--ease); }
+.now-item.is-done:hover { background: var(--surface-2); }
+.now-item.is-done:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.now-q { overflow: hidden; font-size: 16px; font-weight: 600; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+.now-result { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.now-result .live-ms { font-size: 13px; }
+.now-open { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; color: var(--primary-text); font-size: 13px; }
+.now-open .el-icon { transition: transform var(--dur-fast) var(--ease); }
+.now-item.is-done:hover .now-open .el-icon { transform: translateX(2px); }
+.now-empty { margin: 0; font-size: 13px; }
+.now .stage-run { margin-top: 2px; font-size: 13px; }
 .dash-card { display: flex; flex-direction: column; gap: 16px; padding: 16px 20px 20px; min-width: 0; }
 .dash-card > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 32px; flex: none; }
 .dash-card h2 { font-size: 15px; font-weight: 600; white-space: nowrap; }
 .head-actions { display: flex; align-items: center; gap: 12px; }
 .head-actions .el-button { height: 28px; padding: 0 6px; }
 .head-actions .el-button + .el-button { margin-left: 0; }
-.dash-cost { margin-top: 16px; }
 .dash-card header .muted { font-size: 12px; }
 .top-body { display: flex; flex: 1; flex-direction: column; justify-content: space-between; gap: 12px; }
 
-.big-num { display: flex; align-items: baseline; gap: 4px; }
-.big-num .count-up { font-size: 28px; font-weight: 600; line-height: 1.15; }
-.big-num span:last-child { color: var(--muted); font-size: 13px; }
-.meters { display: flex; flex-direction: column; gap: 8px; }
 .meter-row { display: grid; grid-template-columns: 56px minmax(0, 1fr) 64px; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
 .meter-row strong { text-align: right; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .meter { position: relative; height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
 .meter i { position: absolute; inset: 0; border-radius: 3px; background: var(--success); transform-origin: left; transition: transform .8s var(--ease); }
 .meter i.is-time { background: var(--primary); }
 .meter.indexing i { background: linear-gradient(90deg, var(--primary) 0 40%, #7fb8f2 50%, var(--primary) 60% 100%); background-size: 250% 100%; animation: flow 1.4s linear infinite; }
-.kb-nums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.kb-nums div { display: flex; flex-direction: column; min-width: 0; }
-.kb-nums strong { font-size: 24px; font-weight: 600; line-height: 1.2; }
-.kb-nums strong.warn { color: var(--warning); }
-.kb-nums div > span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.stat-nums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.stat-nums div { display: flex; flex-direction: column; min-width: 0; }
+.stat-nums strong { overflow: hidden; font-size: 24px; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.stat-nums strong small { margin-left: 2px; color: var(--muted); font-size: 13px; font-weight: 400; }
+.stat-nums strong.warn { color: var(--warning); }
+.stat-nums div > span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+/* 消费只看个大概：放在页头一行小字，明细在弹窗里 */
+.cost-chip { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--muted); font-size: 13px; cursor: pointer; transition: background var(--dur-fast) var(--ease); }
+.cost-chip:hover { background: var(--surface-3); }
+.cost-chip:active { transform: scale(.97); }
+.cost-chip strong { color: var(--text-2); font-weight: 600; font-variant-numeric: tabular-nums; }
+.cost-chip .sep { width: 1px; height: 12px; margin: 0 4px; background: var(--line-strong); }
+.cost-detail { margin: 0; padding: 0; border: 0; }
+.cost-detail :deep(h2) { display: none; }
 
 .bottom-card { min-height: 0; }
 .bottom-card :deep(.stage-bars) { align-content: start; gap: 10px; }
 /* 环节多时在卡片里滚动，不截断 */
 .stage-scroll { flex: 1; min-height: 0; margin: 0 -20px; padding: 0 20px; overflow-y: auto; overscroll-behavior: contain; }
 /* 网格里的卡片不吃全局的 .panel + .panel 上边距，否则同一行会错开 16px */
-.dash-top > .panel, .dash-bottom > .panel { margin-top: 0; }
+.dash-stats > .panel, .dash-bottom > .panel { margin-top: 0; }
 .total-line { margin: 0; padding-top: 12px; border-top: 1px solid var(--line); text-align: right; color: var(--muted); font-size: 13px; }
 .total-line strong { margin-left: 4px; color: var(--text); font-size: 15px; font-variant-numeric: tabular-nums; }
 
@@ -328,7 +384,6 @@ useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_c
 .live-open:hover { background: var(--surface-3); color: var(--primary-text); transform: translateX(2px); }
 .live-open:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .live-meta { display: inline-flex; gap: 8px; color: var(--faint, var(--muted)); font-size: 12px; font-variant-numeric: tabular-nums; }
-.live-item.is-active { grid-template-columns: 10px minmax(0, 1fr); background: var(--primary-light); cursor: default; }
 .live-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .live-main strong { overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .who { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -359,6 +414,6 @@ useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_c
 .alert-meta { color: var(--muted); font-size: 12px; }
 .alert-detail { display: -webkit-box; overflow: hidden; color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 
-@media (max-width: 1100px) { .dash-top { grid-template-columns: 1fr 1fr; } .dash-top > :first-child { grid-column: 1 / -1; } .dash-bottom { grid-template-columns: 1fr; height: auto; } .live-scroll { max-height: 360px; } }
-@media (max-width: 640px) { .dash-top { grid-template-columns: 1fr; } .greeting { flex-direction: column; align-items: flex-start; } .greeting-actions { justify-content: flex-start; } }
+@media (max-width: 1100px) { .dash-stats { grid-template-columns: 1fr 1fr; } .dash-stats > :first-child { grid-column: 1 / -1; } .dash-bottom { grid-template-columns: 1fr; height: auto; } .live-scroll { max-height: 360px; } }
+@media (max-width: 640px) { .dash-stats { grid-template-columns: 1fr; } .now-result { flex-wrap: wrap; } .greeting { flex-direction: column; align-items: flex-start; } .greeting-actions { justify-content: flex-start; } }
 </style>

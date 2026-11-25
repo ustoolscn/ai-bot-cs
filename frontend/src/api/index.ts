@@ -180,7 +180,7 @@ export const api = {
   },
   messages: {
     list: () => loadOrMock(async () => (await request<BackendMessage[]>({ url: '/messages' })).map(mapMessage), mockMessages),
-    detail: async (id: string) => mapMessage(await request<BackendMessage>({ url: `/messages/${id}` })),
+    detail: (id: string) => loadOrMock(async () => mapMessage(await request<BackendMessage>({ url: `/messages/${id}` })), mockMessages.find(m => m.id === id) || { ...mockMessages[0], id }),
   },
   knowledge: {
     list: () => loadOrMock(async () => (await request<BackendKnowledgeBase[]>({ url: '/knowledge-bases' })).map((item) => mapKnowledgeBase(item)), mockKnowledgeBases),

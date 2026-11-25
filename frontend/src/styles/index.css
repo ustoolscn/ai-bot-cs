@@ -193,6 +193,9 @@ code, kbd, pre, .mono { font-family: var(--font-mono); }
 .detail-body > :nth-child(n+3), .settings-sections > :nth-child(n+3) { animation-delay: 80ms; }
 /* 弹窗、抽屉的遮罩层挂在页面容器里时不参与分区入场，否则自身淡入结束后会再淡入一次，看起来闪一下 */
 .content-page > .el-overlay, .detail-body > .el-overlay, .settings-sections > .el-overlay { animation: none; }
+/* 弹窗、抽屉打开时只保留面板自身的进场。里面的分区、行、气泡如果再各自从透明淡入，
+   就会和面板动画叠在一起，看起来闪一下；重新打开时（v-show 切换）还会整体重播。 */
+.el-overlay :is(.detail-body > *, .settings-sections > *, .el-table__body tr, .entity-row, .record-item, .inbox-item, .knowledge-list-item, .service-list > div, .empty-state, .chat-row, .knowledge-detail, .test-results > div, .workbench-result, .result-item, .el-tab-pane, .persona-block, .todo-chip, .count-pill, .composer-gate, .md > *, .md-bubble, .hit-image img) { animation: none !important; }
 
 /* 表格、列表的行依次滑入；之后新到的行同样滑入 */
 .el-table__body tr { animation: row-in var(--dur-slow) var(--ease) backwards; }

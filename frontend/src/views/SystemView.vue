@@ -104,7 +104,7 @@ import { connection } from '@/utils/connection'
 import { applySystemSettings, createSystemSettingsForm } from '@/utils/system-settings'
 
 const overview=ref<SystemOverview>(createEmptyOverview()),settings=reactive<SystemSettings>(createSystemSettingsForm()),loading=ref(false),saving=ref(false),settingsLoaded=ref(false),settingsError=ref('')
-const services=[{name:'后端服务',detail:'管理端和 QQ 回调的接口',status:'online',icon:markRaw(Connection)},{name:'数据库',detail:'PostgreSQL + pgvector，保存消息和知识索引',status:'online',icon:markRaw(Coin)},{name:'文件存储',detail:'本地存储（DATA_DIR），支持 .txt、.md',status:'online',icon:markRaw(FolderOpened)}]
+const services=[{name:'后端服务',detail:'管理端和 QQ 回调的接口',status:'online',icon:markRaw(Connection)},{name:'数据库',detail:'PostgreSQL + pgvector，保存消息和知识索引',status:'online',icon:markRaw(Coin)},{name:'文件存储',detail:'本地存储（DATA_DIR），知识文档支持 TXT、MD、PDF、DOCX 和 PNG、JPG、WEBP 图片',status:'online',icon:markRaw(FolderOpened)}]
 let savedSettings = JSON.stringify(settings)
 const savedBase = ref('')
 const base = computed(() => settings.publicBaseUrl.trim().replace(/\/+$/, ''))

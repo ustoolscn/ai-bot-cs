@@ -32,7 +32,7 @@
                 <button type="button" aria-label="回复这条" @click="pick(m)"><el-icon><ChatLineSquare /></el-icon></button>
               </el-tooltip>
               <el-tooltip v-if="m.messageId" content="查看处理详情" placement="top" :show-after="300">
-                <button type="button" aria-label="查看处理详情" @click="$router.push({ path: '/messages', query: { id: m.messageId } })"><el-icon><Tickets /></el-icon></button>
+                <button type="button" aria-label="查看处理详情" @click="openDetail(m.messageId)"><el-icon><Tickets /></el-icon></button>
               </el-tooltip>
             </div>
           </div>
@@ -67,6 +67,7 @@
         <el-button type="primary" :icon="Promotion" :loading="sending" :disabled="!text.trim()" @click="send">发送</el-button>
       </div>
     </footer>
+    <MessageDetailDrawer v-model="detailOpen" :message-id="detailId" />
   </section>
 </template>
 
@@ -79,9 +80,14 @@ import { useAdminEvents } from '@/composables/useAdminEvents'
 import EmptyState from '@/components/EmptyState.vue'
 import AvatarImage from '@/components/AvatarImage.vue'
 import MsgText from '@/components/MsgText.vue'
+import MessageDetailDrawer from '@/components/message/MessageDetailDrawer.vue'
 import type { ChatItem, Conversation, MessageAttachment } from '@/types'
 
 const props = defineProps<{ conversation: Conversation }>()
+// 处理详情就地用抽屉打开，不离开群聊页面。
+const detailOpen = ref(false)
+const detailId = ref('')
+function openDetail(id: string) { detailId.value = id; detailOpen.value = true }
 const emit = defineEmits<{ 'open-settings': [tab?: string] }>()
 
 const items = ref<ChatItem[]>([])
