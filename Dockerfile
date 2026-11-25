@@ -1,9 +1,9 @@
-ARG NODE_IMAGE=docker.m.daocloud.io/library/node:24-alpine
-ARG GO_IMAGE=docker.m.daocloud.io/library/golang:1.26-alpine
-ARG RUNTIME_IMAGE=docker.m.daocloud.io/library/alpine:3.23
+ARG NODE_IMAGE=docker.io/library/node:24-alpine
+ARG GO_IMAGE=docker.io/library/golang:1.26-alpine
+ARG RUNTIME_IMAGE=docker.io/library/alpine:3.23
 
 FROM ${NODE_IMAGE} AS frontend-build
-ARG PNPM_REGISTRY=https://registry.npmmirror.com
+ARG PNPM_REGISTRY=https://registry.npmjs.org
 WORKDIR /src/frontend
 ARG PNPM_VERSION=10.11.0
 RUN npm install --global pnpm@${PNPM_VERSION} --registry=${PNPM_REGISTRY} && pnpm config set registry ${PNPM_REGISTRY}
@@ -14,7 +14,7 @@ COPY backend/internal/statuscard/templates/ /src/backend/internal/statuscard/tem
 RUN pnpm build
 
 FROM ${GO_IMAGE} AS backend-build
-ARG GOPROXY=https://goproxy.cn,direct
+ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}
 WORKDIR /src
 COPY backend/go.mod backend/go.sum ./backend/
@@ -25,7 +25,7 @@ COPY --from=frontend-build /src/frontend/dist ./backend/internal/webui/dist
 RUN cd backend && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/ai-bot ./cmd/server
 
 FROM ${RUNTIME_IMAGE} AS runtime
-ARG ALPINE_MIRROR=https://mirrors.aliyun.com/alpine
+ARG ALPINE_MIRROR=https://dl-cdn.alpinelinux.org/alpine
 RUN sed -i "s#https\?://dl-cdn.alpinelinux.org/alpine#${ALPINE_MIRROR}#g" /etc/apk/repositories \
     && apk add --no-cache ca-certificates tzdata su-exec chromium font-noto-cjk \
     && addgroup -S aibot \

@@ -27,8 +27,6 @@ jobs:
 
       - name: Test backend
         working-directory: backend
-        env:
-          GOPROXY: https://goproxy.cn,direct
         run: |
           go test ./... -count=1
           go vet ./...
@@ -48,7 +46,6 @@ jobs:
       - name: Test and build frontend
         working-directory: frontend
         run: |
-          pnpm config set registry https://registry.npmmirror.com
           pnpm install --frozen-lockfile
           pnpm test
           pnpm build
@@ -66,9 +63,6 @@ jobs:
           tags: ai-bot:latest
           build-args: |
             VCS_REF=${{ github.sha }}
-            GOPROXY=https://goproxy.cn,direct
-            PNPM_REGISTRY=https://registry.npmmirror.com
-            ALPINE_MIRROR=https://mirrors.aliyun.com/alpine
 
       - name: Verify sandboxed HTML screenshot
         run: |
