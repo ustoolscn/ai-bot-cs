@@ -26,7 +26,12 @@ jobs:
           go-version: '1.26.x'
           cache-dependency-path: backend/go.sum
 
+      - name: Check sandboxed Chrome startup
+        run: timeout 60s google-chrome --headless --disable-gpu --user-data-dir="$RUNNER_TEMP/chrome-smoke" --dump-dom about:blank
+
       - name: Test backend
+        env:
+          HTML_RENDER_BROWSER: /usr/bin/google-chrome
         working-directory: backend
         run: |
           go test ./... -count=1

@@ -107,7 +107,7 @@ pnpm config set registry https://registry.npmmirror.com
 PGVECTOR_IMAGE=<国内镜像代理域名>/pgvector/pgvector:pg18
 ```
 
-生产 Dockerfile 默认通过 DaoCloud 镜像代理拉取 Node、Go 和 Alpine 基础镜像，并使用 `goproxy.cn`、npmmirror 与阿里云 Alpine 镜像下载依赖。所有地址都可以通过 Docker build args 覆盖，以便切换到组织内部镜像。
+生产 Dockerfile 默认从 Docker Hub 拉取 Node、Go 和 Alpine 基础镜像，并从官方源 `proxy.golang.org`、`registry.npmjs.org` 和 `dl-cdn.alpinelinux.org` 下载依赖。阿里云和 GitHub Actions 构建均可直接使用默认值。需要内部镜像时，可通过 Docker 构建参数 `NODE_IMAGE`、`GO_IMAGE`、`RUNTIME_IMAGE`、`GOPROXY`、`PNPM_REGISTRY` 和 `ALPINE_MIRROR` 覆盖。
 
 ## 生产部署：单应用容器
 
