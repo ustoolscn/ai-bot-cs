@@ -6,16 +6,11 @@ import (
 	"context"
 	"encoding/xml"
 	"errors"
-	"fmt"
-	"image"
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	_ "golang.org/x/image/webp"
 )
@@ -39,67 +34,32 @@ func Supported(name string) bool {
 	return IsImage(name)
 }
 
-func Extract(ctx context.Context, name string, data []byte, description string) (string, error) {
+const ImageModelRequired = "当前向量模型不支持图片，请更换为图文向量模型"
+
+func Extract(ctx context.Context, name string, data []byte) (string, error) {
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".txt", ".md":
 		return string(data), nil
 	case ".docx":
 		return wordText(data)
 	case ".pdf":
-		result, err := convert(ctx, data, "pdftotext", "-enc", "UTF-8", "-", "-")
-		if err == nil && strings.TrimSpace(result) == "" {
-			return "", errors.New("PDF 没有可提取的文字，请将扫描页作为图片上传")
+		pages, err := readPDF(ctx, data, false)
+		if err != nil {
+			return "", err
 		}
-		return result, err
-	}
-	if !IsImage(name) {
-		return "", errors.New("不支持的文档格式")
-	}
-	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
-	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
-	if ext == "jpg" {
-		ext = "jpeg"
-	}
-	if err != nil || format != ext {
-		return "", errors.New("图片格式无效或与扩展名不符")
-	}
-	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width) > 16000000/int64(cfg.Height) {
-		return "", errors.New("图片超过 1600 万像素，请缩小后上传")
-	}
-	if description != "" {
-		return description, nil
-	}
-	result, err := convert(ctx, data, "tesseract", "stdin", "stdout", "-l", "chi_sim+eng")
-	if err == nil && strings.TrimSpace(result) == "" {
-		return "", errors.New("图片未识别到文字，请添加图片说明后重新上传")
-	}
-	return result, err
-}
-
-type limitedOutput struct{ buffer bytes.Buffer }
-
-func (b *limitedOutput) Write(p []byte) (int, error) {
-	if len(p) > textLimit-b.buffer.Len() {
-		return 0, errors.New("提取的文本超过 2 MiB，请拆分文件")
-	}
-	return b.buffer.Write(p)
-}
-
-func convert(ctx context.Context, data []byte, program string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, program, args...)
-	cmd.Stdin = bytes.NewReader(data)
-	cmd.Env = append(os.Environ(), "OMP_THREAD_LIMIT=1")
-	var out limitedOutput
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return "", fmt.Errorf("解析超时或已取消：%w", ctx.Err())
+		var all []string
+		for _, p := range pages {
+			all = append(all, p.Text)
 		}
-		return "", fmt.Errorf("解析失败（%s）：%w", program, err)
+		if len(all) == 0 {
+			return "", errors.New("PDF 没有可提取的文字，请使用图文向量模型处理扫描页")
+		}
+		return strings.Join(all, "\n"), nil
 	}
-	return strings.TrimSpace(out.buffer.String()), nil
+	if IsImage(name) {
+		return "", errors.New(ImageModelRequired)
+	}
+	return "", errors.New("不支持的文档格式")
 }
 
 func wordText(data []byte) (string, error) {

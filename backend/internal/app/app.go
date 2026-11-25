@@ -1006,10 +1006,25 @@ func (a *App) uploadDocument(c *gin.Context) {
 		fail(c, 400, "invalid_file", "请选择不超过 10 MiB 的文件，支持 "+knowledge.Formats)
 		return
 	}
-	description := strings.TrimSpace(c.PostForm("description"))
-	if description != "" && (!knowledge.IsImage(file.Filename) || len([]rune(description)) > 4000 || strings.ContainsRune(description, 0)) {
-		fail(c, 400, "invalid_description", "图片说明仅适用于图片，最多 4000 字且不能含空字符")
+	if _, present := c.GetPostForm("description"); present {
+		fail(c, 400, "invalid_description", "上传接口不接受图片说明")
 		return
+	}
+	if knowledge.IsImage(file.Filename) {
+		var supported bool
+		err = a.db.QueryRow(c, `SELECT EXISTS(SELECT FROM model_profiles p WHERE p.id=k.embedding_profile_id AND p.kind='embedding' AND p.provider='google' AND p.model='gemini-embedding-2') FROM knowledge_bases k WHERE k.id=$1`, c.Param("id")).Scan(&supported)
+		if errors.Is(err, pgx.ErrNoRows) {
+			fail(c, 404, "not_found", "知识库不存在")
+			return
+		}
+		if err != nil {
+			fail(c, 500, "database_error", "读取知识库模型配置失败")
+			return
+		}
+		if !supported {
+			fail(c, 400, "image_model_required", knowledge.ImageModelRequired)
+			return
+		}
 	}
 	src, err := file.Open()
 	if err != nil {
@@ -1028,7 +1043,7 @@ func (a *App) uploadDocument(c *gin.Context) {
 		return
 	}
 	var id string
-	err = a.db.QueryRow(c, "INSERT INTO knowledge_documents(knowledge_base_id,name,storage_key,content_type,size_bytes,image_description) VALUES($1,$2,$3,$4,$5,$6) RETURNING id::text", c.Param("id"), file.Filename, key, file.Header.Get("Content-Type"), len(data), description).Scan(&id)
+	err = a.db.QueryRow(c, "INSERT INTO knowledge_documents(knowledge_base_id,name,storage_key,content_type,size_bytes) VALUES($1,$2,$3,$4,$5) RETURNING id::text", c.Param("id"), file.Filename, key, file.Header.Get("Content-Type"), len(data)).Scan(&id)
 	if err != nil {
 		_ = a.files.Delete(c, key)
 		fail(c, 500, "database_error", "保存文档失败")

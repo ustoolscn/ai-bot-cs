@@ -17,7 +17,7 @@ func TestMarkdownScreenshotScope(t *testing.T) {
 	}
 	text := "点击账户设置\n![账户页](images/account.png)\n点击退款\n![](data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()) + ")"
 	calls := 0
-	sections, err := Multimodal(context.Background(), "guide.md", []byte(text), "", func(name string) ([]byte, error) {
+	sections, err := Multimodal(context.Background(), "guide.md", []byte(text), func(name string) ([]byte, error) {
 		calls++
 		if name != "account.png" {
 			t.Fatalf("unexpected reference %q", name)

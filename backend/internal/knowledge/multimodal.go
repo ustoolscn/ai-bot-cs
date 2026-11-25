@@ -13,14 +13,10 @@ import (
 	"io"
 	"math"
 	"net/url"
-	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
-	"time"
 
 	"golang.org/x/image/draw"
 )
@@ -134,13 +130,13 @@ func (s *sections) add(paras []paragraph, load func(string) ([]byte, error)) err
 	return nil
 }
 
-func Multimodal(ctx context.Context, name string, data []byte, description string, resolve func(string) ([]byte, error)) ([]Section, error) {
+func Multimodal(ctx context.Context, name string, data []byte, resolve func(string) ([]byte, error)) ([]Section, error) {
 	var s sections
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".docx":
 		return wordSections(data)
 	case ".pdf":
-		return pdfSections(ctx, data)
+		return readPDF(ctx, data, true)
 	case ".md":
 		if markdownImage.Match(data) {
 			var paragraphs []paragraph
@@ -190,7 +186,6 @@ func Multimodal(ctx context.Context, name string, data []byte, description strin
 		if e != nil {
 			return nil, e
 		}
-		pic.Text = description
 		s.items = []Section{pic}
 	}
 	return s.items, nil
@@ -297,163 +292,4 @@ func wordSections(data []byte) ([]Section, error) {
 	var s sections
 	e = s.add(ps, read)
 	return s.items, e
-}
-
-type pdfNode struct {
-	Top, Left, Width, Height int
-	Src, Text                string
-}
-
-func (n *pdfNode) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	for _, a := range start.Attr {
-		v, _ := strconv.Atoi(a.Value)
-		switch a.Name.Local {
-		case "top":
-			n.Top = v
-		case "left":
-			n.Left = v
-		case "width":
-			n.Width = v
-		case "height":
-			n.Height = v
-		case "src":
-			n.Src = a.Value
-		}
-	}
-	depth := 1
-	var b strings.Builder
-	for depth > 0 {
-		t, e := d.Token()
-		if e != nil {
-			return e
-		}
-		switch x := t.(type) {
-		case xml.StartElement:
-			depth++
-		case xml.EndElement:
-			depth--
-		case xml.CharData:
-			b.Write(x)
-		}
-	}
-	n.Text = strings.TrimSpace(b.String())
-	return nil
-}
-
-var pageCount = regexp.MustCompile(`(?m)^Pages:\s+(\d+)`)
-
-func pdfSections(ctx context.Context, data []byte) ([]Section, error) {
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	dir, e := os.MkdirTemp("", "kb-pdf-")
-	if e != nil {
-		return nil, e
-	}
-	defer os.RemoveAll(dir)
-	src := filepath.Join(dir, "input.pdf")
-	if e = os.WriteFile(src, data, 0600); e != nil {
-		return nil, e
-	}
-	info, e := exec.CommandContext(ctx, "pdfinfo", src).Output()
-	if e != nil {
-		return nil, errors.New("PDF 无法读取，请检查文件或移除密码")
-	}
-	m := pageCount.FindSubmatch(info)
-	if m == nil {
-		return nil, errors.New("无法读取 PDF 页数")
-	}
-	count, _ := strconv.Atoi(string(m[1]))
-	if count > 200 {
-		return nil, errors.New("每份 PDF 最多支持 200 页，请拆分文件")
-	}
-	// Poppler decodes embedded bitmaps to disk. Inspect dimensions before extraction.
-	var listing limitedOutput
-	probe := exec.CommandContext(ctx, "pdfimages", "-list", src)
-	probe.Stdout = &listing
-	if e = probe.Run(); e != nil {
-		return nil, errors.New("无法读取 PDF 图片信息")
-	}
-	var pixels int64
-	for _, line := range strings.Split(listing.buffer.String(), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 5 {
-			continue
-		}
-		if _, e := strconv.Atoi(fields[0]); e != nil {
-			continue
-		}
-		w, ew := strconv.ParseInt(fields[3], 10, 32)
-		h, eh := strconv.ParseInt(fields[4], 10, 32)
-		if ew != nil || eh != nil || w <= 0 || h <= 0 || w*h > 16000000 {
-			return nil, errors.New("PDF 图片超过 1600 万像素，请缩小或拆分文件")
-		}
-		pixels += w * h
-		if pixels > 96000000 {
-			return nil, errors.New("PDF 图片总像素过多，请拆分文件")
-		}
-	}
-	var s sections
-	for i := 1; i <= count; i++ {
-		page := strconv.Itoa(i)
-		cmd := exec.CommandContext(ctx, "pdftohtml", "-q", "-xml", "-zoom", "1", "-f", page, "-l", page, src, "page.xml")
-		cmd.Dir = dir
-		if e = cmd.Run(); e != nil {
-			return nil, errors.New("PDF 页面解析失败")
-		}
-		var doc struct {
-			Page struct {
-				Lines  []pdfNode `xml:"text"`
-				Images []pdfNode `xml:"image"`
-			} `xml:"page"`
-		}
-		file := filepath.Join(dir, "page.xml")
-		f, e := os.Open(file)
-		if e != nil {
-			return nil, e
-		}
-		e = xml.NewDecoder(io.LimitReader(f, textLimit)).Decode(&doc)
-		f.Close()
-		if e != nil {
-			return nil, e
-		}
-		ps := make([]paragraph, len(doc.Page.Lines))
-		for i, l := range doc.Page.Lines {
-			ps[i].text = l.Text
-		}
-		for _, img := range doc.Page.Images {
-			if len(ps) == 0 {
-				ps = append(ps, paragraph{})
-			}
-			best := 0
-			dist := math.MaxFloat64
-			for j, l := range doc.Page.Lines {
-				vertical := max(0, l.Top-img.Top-img.Height, img.Top-l.Top-l.Height)
-				horizontal := max(0, l.Left-img.Left-img.Width, img.Left-l.Left-l.Width)
-				score := math.Hypot(float64(horizontal), float64(vertical))
-				if score < dist {
-					best = j
-					dist = score
-				}
-			}
-			ps[best].images = append(ps[best].images, img.Src)
-		}
-		e = s.add(ps, func(ref string) ([]byte, error) {
-			name := filepath.Join(dir, filepath.Base(ref))
-			stat, e := os.Stat(name)
-			if e != nil {
-				return nil, e
-			}
-			if stat.Size() > 16<<20 {
-				return nil, errors.New("PDF 截图过大")
-			}
-			return os.ReadFile(name)
-		})
-		if e != nil {
-			return nil, e
-		}
-		for _, img := range doc.Page.Images {
-			os.Remove(filepath.Join(dir, filepath.Base(img.Src)))
-		}
-	}
-	return s.items, nil
 }

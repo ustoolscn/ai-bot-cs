@@ -256,8 +256,8 @@ func (a *App) retryInbox(ctx context.Context, j inboxJob, cause error) error {
 }
 
 type documentJob struct {
-	ID, KBID, StorageKey, ProfileID, Description, Name string
-	Attempts                                           int
+	ID, KBID, StorageKey, ProfileID, Name string
+	Attempts                              int
 }
 
 func (a *App) claimDocument(ctx context.Context) (documentJob, error) {
@@ -267,7 +267,7 @@ func (a *App) claimDocument(ctx context.Context) (documentJob, error) {
 	}
 	defer tx.Rollback(ctx)
 	var j documentJob
-	err = tx.QueryRow(ctx, `SELECT d.id::text,d.knowledge_base_id::text,d.storage_key,k.embedding_profile_id::text,d.attempts,d.image_description,d.name FROM knowledge_documents d JOIN knowledge_bases k ON k.id=d.knowledge_base_id WHERE d.status='pending' AND d.next_attempt_at<=now() ORDER BY d.created_at FOR UPDATE OF d SKIP LOCKED FOR SHARE OF k SKIP LOCKED LIMIT 1`).Scan(&j.ID, &j.KBID, &j.StorageKey, &j.ProfileID, &j.Attempts, &j.Description, &j.Name)
+	err = tx.QueryRow(ctx, `SELECT d.id::text,d.knowledge_base_id::text,d.storage_key,k.embedding_profile_id::text,d.attempts,d.name FROM knowledge_documents d JOIN knowledge_bases k ON k.id=d.knowledge_base_id WHERE d.status='pending' AND d.next_attempt_at<=now() ORDER BY d.created_at FOR UPDATE OF d SKIP LOCKED FOR SHARE OF k SKIP LOCKED LIMIT 1`).Scan(&j.ID, &j.KBID, &j.StorageKey, &j.ProfileID, &j.Attempts, &j.Name)
 	if err != nil {
 		return j, err
 	}
@@ -306,10 +306,10 @@ func (a *App) processDocument(ctx context.Context) error {
 			}
 			return a.files.Read(ctx, keys[0])
 		}
-		sections, err = knowledge.Multimodal(ctx, j.StorageKey, data, j.Description, resolve)
+		sections, err = knowledge.Multimodal(ctx, j.StorageKey, data, resolve)
 	} else {
 		var body string
-		body, err = knowledge.Extract(ctx, j.StorageKey, data, j.Description)
+		body, err = knowledge.Extract(ctx, j.StorageKey, data)
 		for _, ch := range knowledge.Chunk(body, 1000, 150) {
 			sections = append(sections, knowledge.Section{Text: ch})
 		}

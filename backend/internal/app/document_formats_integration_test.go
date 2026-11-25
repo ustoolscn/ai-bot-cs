@@ -1,10 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -23,7 +25,7 @@ func TestKnowledgeUploadAndRetrieveFormats(t *testing.T) {
 	}
 	ctx := context.Background()
 	pool := newIntegrationSchema(t, ctx, dbURL)
-	terms := []string{"COBALT", "AMBER", "ORCHID"}
+	terms := []string{"COBALT", "AMBER", "退款"}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct{ Input []string }
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -57,9 +59,46 @@ func TestKnowledgeUploadAndRetrieveFormats(t *testing.T) {
 	profile := createdID(t, requestJSON(t, client, "POST", api+"/model-profiles", map[string]any{"name": "format test", "kind": "embedding", "baseUrl": upstream.URL + "/v1", "apiKey": "fixture", "model": "mock", "dimension": 3}, 200))
 	kb := createdID(t, requestJSON(t, client, "POST", api+"/knowledge-bases", map[string]string{"name": "format test", "embeddingProfileId": profile}, 201))
 	base := api + "/knowledge-bases/" + kb
+	for _, test := range []struct {
+		name, code  string
+		description bool
+	}{{"image.png", "image_model_required", false}, {"notes.txt", "invalid_description", true}} {
+		var buf bytes.Buffer
+		w := multipart.NewWriter(&buf)
+		f, e := w.CreateFormFile("file", test.name)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e = f.Write([]byte("example")); e != nil {
+			t.Fatal(e)
+		}
+		if test.description {
+			if e = w.WriteField("description", ""); e != nil {
+				t.Fatal(e)
+			}
+		}
+		if e = w.Close(); e != nil {
+			t.Fatal(e)
+		}
+		resp, e := client.Post(base+"/documents", w.FormDataContentType(), &buf)
+		if e != nil {
+			t.Fatal(e)
+		}
+		raw, e := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if e != nil || resp.StatusCode != 400 || !bytes.Contains(raw, []byte(test.code)) {
+			t.Fatalf("upload %s: %d %s %v", test.name, resp.StatusCode, raw, e)
+		}
+	}
 	ids := make([]string, 0, len(terms))
-	for _, name := range []string{"cobalt.pdf", "amber.docx", "orchid.png"} {
-		raw, err := os.ReadFile("testdata/knowledge/" + name)
+	for _, name := range []string{"cobalt.pdf", "amber.docx", "refund.txt"} {
+		var raw []byte
+		var err error
+		if name == "refund.txt" {
+			raw = []byte("退款规则")
+		} else {
+			raw, err = os.ReadFile("testdata/knowledge/" + name)
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
