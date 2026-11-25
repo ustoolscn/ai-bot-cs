@@ -1,4 +1,4 @@
-import { ApiError, mockFallbackEnabled, request } from './client'
+import client, { ApiError, mockFallbackEnabled, request } from './client'
 import { connection } from '@/utils/connection'
 import { modelProviderPresets } from '@/utils/model-providers'
 import { mockBots, mockConversations, mockHumanOperators, mockKnowledgeBases, mockMessages, mockModels, mockOverview, mockProxies, mockCosts, mockChat } from '@/mock/data'
@@ -31,6 +31,16 @@ const asStatus = (value: string, enabled = true): Status => {
   if (value === 'sent' || value === 'completed' || value === 'ready') return 'success'
   if (value === 'expired') return 'warning'
   return 'pending'
+}
+
+// 下载类接口出错时响应体也是 Blob，要读出来才能拿到后端的错误说明。
+async function blobError(error: unknown, fallback: string) {
+  const response = (error as { response?: { status?: number; data?: unknown } }).response
+  if (response?.data instanceof Blob) {
+    try { const body = JSON.parse(await response.data.text()); if (body?.error) return new ApiError(body.error.code, body.error.message, response.status) } catch { /* 不是 JSON */ }
+  }
+  const down = !response || [502, 503, 504].includes(response.status || 0)
+  return new ApiError(down ? 'NETWORK_ERROR' : 'HTTP_ERROR', down ? '暂时无法连接到服务' : `${fallback}（HTTP ${response?.status}）`, response?.status)
 }
 
 async function loadOrMock<T>(loader: () => Promise<T>, fallback: T): Promise<T> {
@@ -191,6 +201,22 @@ export const api = {
     deleteDocument: (id: string, documentId: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/knowledge-bases/${id}/documents/${documentId}` }, { deleted: true }),
     deleteDocumentIndex: (id: string, documentId: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/knowledge-bases/${id}/documents/${documentId}/index` }, { deleted: true }),
     changeModel: (id: string, embeddingProfileId: string) => request<{ changed: boolean }>({ method: 'PUT', url: `/knowledge-bases/${id}/embedding-profile`, data: { embeddingProfileId } }),
+    // 导出整个知识库（设置、原始文档、问答、待审核、没答上的问题、评测用例）为一个 ZIP。
+    exportArchive: async (id: string) => {
+      try {
+        const response = await client.get<Blob>(`/knowledge-bases/${id}/export`, { responseType: 'blob', timeout: 30 * 60 * 1000 })
+        const name = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(String(response.headers['content-disposition'] || ''))?.[1]
+        return { blob: response.data, filename: name ? decodeURIComponent(name) : `knowledge-${id}.zip` }
+      } catch (error) { throw await blobError(error, '导出失败') }
+    },
+    // 导入为一个新知识库；导入完成后文档在后台重新索引。
+    importArchive: async (file: File, embeddingProfileId: string, name: string, onProgress?: (ratio: number) => void) => {
+      const data = new FormData()
+      data.append('file', file)
+      data.append('embeddingProfileId', embeddingProfileId)
+      if (name.trim()) data.append('name', name.trim())
+      return request<{ id: string; name: string; documentCount: number; entryCount: number }>({ method: 'POST', url: '/knowledge-bases/import', data, timeout: 60 * 60 * 1000, onUploadProgress: e => onProgress?.(e.total ? e.loaded / e.total : 0) })
+    },
     chunkImageUrl: (id: string, chunkId: string) => `/api/knowledge-bases/${id}/chunks/${chunkId}/image`,
     test: (id: string, query: string) => loadOrMock(() => request<Array<{ id?: string; content: string; score: number; hasImage?: boolean }>>({ method: 'POST', url: `/knowledge-bases/${id}/search`, data: { query, limit: 8 } }), [{ content: '命中知识片段：机器人通过统一消息入口接收 QQ Webhook 事件。', score: 0.92 }]),
   },

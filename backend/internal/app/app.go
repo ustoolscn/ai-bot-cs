@@ -142,6 +142,8 @@ func (a *App) Router() http.Handler {
 	auth.GET("/messages/:id/attachments/:index", a.getMessageAttachment)
 	auth.GET("/knowledge-bases", a.listKBs)
 	auth.POST("/knowledge-bases", a.createKB)
+	auth.POST("/knowledge-bases/import", a.importKnowledge)
+	auth.GET("/knowledge-bases/:id/export", a.exportKnowledge)
 	auth.GET("/knowledge-bases/:id", a.getKB)
 	auth.DELETE("/knowledge-bases/:id", a.deleteKB)
 	auth.POST("/knowledge-bases/:id/documents", a.uploadDocument)

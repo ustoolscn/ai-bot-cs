@@ -2,6 +2,7 @@
   <div class="content-page">
     <PageHeader title="知识库" description="先选一个知识库，再管理它的文档、问答、待审核、没答上的问题和反馈。问题和反馈归属到群或机器人绑定的知识库。">
       <el-button :icon="Refresh" @click="reload">刷新</el-button>
+      <el-button :icon="Upload" @click="openImport">导入知识库</el-button>
       <el-button :icon="Plus" @click="createVisible = true">新建知识库</el-button>
     </PageHeader>
 
@@ -61,7 +62,7 @@
       <section v-else-if="current" :key="current.id" class="knowledge-detail panel-surface">
         <div class="knowledge-detail-head">
           <div><span class="scope-tag">{{ scopeText(current.scope) }}知识库</span><h2>{{ current.name }}</h2><p>{{ current.description || '没有说明' }}</p></div>
-          <div><el-button :icon="Search" @click="testVisible = true">检索测试</el-button></div>
+          <div class="kb-head-actions"><el-button :icon="Download" :loading="exporting" @click="exportKb">{{ exporting ? '正在打包' : '导出' }}</el-button><el-button :icon="Search" @click="testVisible = true">检索测试</el-button></div>
         </div>
         <div class="knowledge-summary">
           <div><span>文档</span><strong>{{ current.documents }}</strong></div>
@@ -179,6 +180,27 @@
       <template #footer><el-button @click="createVisible = false">取消</el-button><el-button type="primary" @click="createKb">创建知识库</el-button></template>
     </el-dialog>
 
+    <el-dialog v-model="importVisible" title="导入知识库" width="520px" :close-on-click-modal="!importing" :close-on-press-escape="!importing" :show-close="!importing">
+      <el-form label-position="top">
+        <el-form-item label="导出文件">
+          <div class="import-file" :class="{ picked: importForm.file }">
+            <el-icon><Document /></el-icon>
+            <span class="truncate">{{ importForm.file ? `${importForm.file.name} · ${fileSize(importForm.file.size)}` : '选择从另一套系统导出的 .zip 文件' }}</span>
+            <el-button size="small" :disabled="importing" @click="importPicker?.click()">{{ importForm.file ? '重新选择' : '选择文件' }}</el-button>
+            <input ref="importPicker" type="file" accept=".zip,application/zip" hidden @change="pickImport">
+          </div>
+        </el-form-item>
+        <el-form-item label="知识库名称"><el-input v-model="importForm.name" :disabled="importing" placeholder="留空则沿用文件里的名称" /></el-form-item>
+        <el-form-item label="Embedding 模型"><el-select v-model="importForm.embeddingProfileId" :disabled="importing"><el-option v-for="model in embeddingModels" :key="model.id" :label="`${model.name} · ${model.model}`" :value="model.id" /></el-select></el-form-item>
+      </el-form>
+      <p class="switch-note">导入后会生成一个新的知识库，不会覆盖已有的库。文档和问答会用这里选的模型重新索引，索引在后台进行，并按模型计费。</p>
+      <div class="import-progress" :class="{ active: importing }" aria-live="polite">
+        <div class="progress-line" :class="{ 'is-running': importing && importRatio >= 1 }"><i :style="{ width: Math.round(importRatio * 100) + '%' }" /></div>
+        <span>{{ !importing ? '' : importRatio < 1 ? `正在上传 ${Math.round(importRatio * 100)}%` : '上传完成，正在导入…' }}</span>
+      </div>
+      <template #footer><el-button :disabled="importing" @click="importVisible = false">取消</el-button><el-button type="primary" :loading="importing" :disabled="!importForm.file || !importForm.embeddingProfileId" @click="runImport">导入</el-button></template>
+    </el-dialog>
+
     <el-drawer v-model="testVisible" :title="`检索测试 · ${current?.name || ''}`" size="560px">
       <p class="muted drawer-hint">输入一个用户可能会问的问题，看看这个知识库能找到哪些内容。相似度越高越相关。</p>
       <el-form label-position="top">
@@ -203,7 +225,7 @@ import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useShellStore } from '@/stores/shell'
-import { ChatLineSquare, Finished, Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { ChatLineSquare, Document, Download, Finished, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -434,6 +456,48 @@ async function createKb() {
   } catch (e) { ElMessage.error(e instanceof Error ? e.message : '创建失败') }
 }
 
+// ---- 导出 / 导入（迁移到另一套同样的系统）----
+const exporting = ref(false)
+async function exportKb() {
+  if (!current.value) return
+  exporting.value = true
+  try {
+    const { blob, filename } = await api.knowledge.exportArchive(current.value.id)
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename.startsWith('knowledge-') ? `${current.value.name}.zip` : filename; a.click(); URL.revokeObjectURL(a.href)
+    ElMessage.success('已导出，在另一套系统的知识库页点“导入知识库”即可')
+  } catch (e) { ElMessage.error(e instanceof Error ? e.message : '导出失败') } finally { exporting.value = false }
+}
+const importVisible = ref(false), importing = ref(false), importRatio = ref(0)
+const importPicker = ref<HTMLInputElement>()
+const importForm = reactive<{ file: File | null; name: string; embeddingProfileId: string }>({ file: null, name: '', embeddingProfileId: '' })
+function fileSize(bytes: number) { return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB` }
+function openImport() {
+  Object.assign(importForm, { file: null, name: '', embeddingProfileId: importForm.embeddingProfileId || embeddingModels.value[0]?.id || '' })
+  importRatio.value = 0
+  importVisible.value = true
+}
+function pickImport(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  if (!file.name.toLowerCase().endsWith('.zip')) { ElMessage.error('请选择知识库导出的 .zip 文件'); return }
+  if (file.size > 1024 ** 3) { ElMessage.error('文件超过 1 GB，无法导入'); return }
+  importForm.file = file
+}
+async function runImport() {
+  if (!importForm.file || !importForm.embeddingProfileId) return
+  importing.value = true
+  importRatio.value = 0
+  try {
+    const result = await api.knowledge.importArchive(importForm.file, importForm.embeddingProfileId, importForm.name, ratio => { importRatio.value = ratio })
+    importVisible.value = false
+    ElMessage.success(`已导入“${result.name}”：${result.documentCount} 篇文档、${result.entryCount} 条问答，正在后台索引`)
+    await router.replace({ query: { kb: result.id } })
+    await reload()
+  } catch (e) { ElMessage.error(e instanceof Error ? e.message : '导入失败') } finally { importing.value = false }
+}
+
 // ---- 检索测试（针对当前知识库）----
 const testVisible = ref(false), testQuery = ref(''), testing = ref(false), testResults = ref<Array<{ id?: string; content: string; score: number; hasImage?: boolean }>>([])
 
@@ -469,6 +533,14 @@ useAdminEvents(['knowledge_bases', 'knowledge_documents', 'knowledge_entries', '
 .summary-action { flex: none; padding: 0; border: 0; background: none; color: var(--primary-text); font-size: 12px; cursor: pointer; }
 .summary-action:hover { text-decoration: underline; }
 .switch-note { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.import-file { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; height: 44px; padding: 0 8px 0 12px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); color: var(--muted); font-size: 13px; transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease); }
+.import-file > span { flex: 1; min-width: 0; }
+.import-file.picked { border-style: solid; background: var(--surface-2); color: var(--text); }
+/* 进度行固定占位，开始导入时只淡入，不推动弹窗高度 */
+.import-progress { display: flex; align-items: center; gap: 12px; height: 20px; margin-top: 12px; opacity: 0; transition: opacity var(--dur) var(--ease); }
+.import-progress.active { opacity: 1; }
+.import-progress .progress-line { flex: 1; }
+.import-progress span { flex: none; min-width: 120px; color: var(--text-2); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
 .hit-image-tag { margin-left: 8px; padding: 1px 6px; border-radius: var(--radius-xs); background: var(--surface-3); color: var(--text-2); font-weight: 500; }
 .hit-image { display: block; margin-top: 8px; }
 .hit-image img { display: block; max-width: 100%; max-height: 240px; border: 1px solid var(--line); border-radius: var(--radius-sm); object-fit: contain; background: var(--surface-2); animation: rise var(--dur-slow) var(--ease) backwards; }
