@@ -1,4 +1,5 @@
-import type { AlertItem, Bot, Conversation, KnowledgeBase, MessageRecord, CostSummary, ModelProfile, SystemOverview } from '@/types'
+import type { AlertItem, Bot, ChatItem, ChatPage, Conversation, KnowledgeBase, MessageRecord, CostSummary, ModelProfile, SystemOverview } from '@/types'
+import type { Memory, MemoryMember, UserProfile } from '@/api/agent'
 
 export const mockBots: Bot[] = [
   { id: 'bot-qq-service', name: '客服小Q', appId: '102*******31', status: 'online', enabled: true, callbackPath: '/callbacks/qq/bot-qq-service', callbackUrl: 'https://bot.example.com/callbacks/qq/bot-qq-service', lastEventAt: '刚刚' },
@@ -14,8 +15,8 @@ export const mockModels: ModelProfile[] = [
 ]
 
 export const mockConversations: Conversation[] = [
-  { id: 'group-1001', botId: 'bot-qq-service', platformId: 'qq-group-1001', botName: '客服小Q', name: '产品运营交流群', platform: 'QQ', type: 'group', triggerMode: 'mention_only', messageCount: 12842, memberCount: 486, hasFullMessageEvents: true, contextLimit: 20, knowledgeBaseNames: ['产品手册库', '常见问题库'], knowledgeBaseIds: ['kb-products', 'kb-faq'], chatProfileId: 'chat-qwen-plus', systemPrompt: '你是群内的 AI 助手，请根据知识库准确、简洁地回答问题。', lastActiveAt: '刚刚', enabled: true },
-  { id: 'group-1002', botId: 'bot-knowledge', platformId: 'qq-group-1002', botName: '知识助手', name: '售后服务群', platform: 'QQ', type: 'group', triggerMode: 'mention_only', messageCount: 8631, memberCount: 238, hasFullMessageEvents: false, contextLimit: 20, knowledgeBaseNames: ['售后知识库'], knowledgeBaseIds: ['kb-after-sale'], chatProfileId: 'chat-qwen-max', systemPrompt: '你是售后服务助手，请优先依据售后知识库回答。', lastActiveAt: '1 分钟前', enabled: true },
+  { id: 'group-1001', botId: 'bot-qq-service', platformId: 'qq-group-1001', botName: '客服小Q', name: '产品运营交流群', lastMessage: { content: '有人知道新出的绘图模型怎么调用吗', senderName: '林晓', direction: 'inbound', at: new Date(Date.now() - 48 * 60000).toISOString() }, platform: 'QQ', type: 'group', triggerMode: 'mention_only', messageCount: 12842, memberCount: 486, hasFullMessageEvents: true, contextLimit: 20, knowledgeBaseNames: ['产品手册库', '常见问题库'], knowledgeBaseIds: ['kb-products', 'kb-faq'], chatProfileId: 'chat-qwen-plus', systemPrompt: '你是群内的 AI 助手，请根据知识库准确、简洁地回答问题。', lastActiveAt: '刚刚', enabled: true },
+  { id: 'group-1002', botId: 'bot-knowledge', platformId: 'qq-group-1002', botName: '知识助手', name: '售后服务群', lastMessage: { content: '您好，已经帮您查到了，是支付渠道延迟，5 分钟内会到账。', senderName: '阿杰', direction: 'outbound', at: new Date(Date.now() - 2 * 60000).toISOString() }, platform: 'QQ', type: 'group', triggerMode: 'mention_only', messageCount: 8631, memberCount: 238, hasFullMessageEvents: false, contextLimit: 20, knowledgeBaseNames: ['售后知识库'], knowledgeBaseIds: ['kb-after-sale'], chatProfileId: 'chat-qwen-max', systemPrompt: '你是售后服务助手，请优先依据售后知识库回答。', lastActiveAt: '1 分钟前', enabled: true },
   { id: 'group-1003', botId: 'bot-campaign', platformId: 'qq-group-1003', botName: '活动小助手', name: '夏季活动执行群', platform: 'QQ', type: 'group', triggerMode: 'mention_only', messageCount: 3210, memberCount: 92, hasFullMessageEvents: true, contextLimit: 12, knowledgeBaseNames: ['活动文案库'], knowledgeBaseIds: ['kb-campaign'], chatProfileId: 'chat-qwen-plus', systemPrompt: '你是活动执行助手，请使用简洁、明确的活动话术。', lastActiveAt: '12 分钟前', enabled: true },
   { id: 'c2c-88', botId: 'bot-qq-service', platformId: 'qq-user-88', botName: '客服小Q', name: '用户 8G7X', platform: 'QQ', type: 'c2c', triggerMode: 'always', messageCount: 46, memberCount: 1, hasFullMessageEvents: true, contextLimit: 20, knowledgeBaseNames: ['常见问题库'], knowledgeBaseIds: ['kb-faq'], chatProfileId: 'chat-qwen-plus', systemPrompt: '你是私聊智能助手，请准确回答用户问题。', lastActiveAt: '18 分钟前', enabled: true },
 ]
@@ -104,4 +105,58 @@ export const mockCosts: CostSummary = {
     { id: 'system', name: '系统任务', cost: 2.1 },
   ],
   unpricedModels: ['高质量对话模型'],
+}
+
+// 聊天界面的示例数据（后端未连接时使用）
+const minutesAgo = (m: number) => new Date(Date.now() - m * 60000).toISOString()
+export function mockChat(conversationId: string): ChatPage {
+  const items: ChatItem[] = [
+    { id: 'c1', direction: 'inbound', role: 'user', senderName: '林晓', content: '有人知道新出的绘图模型怎么调用吗', attachments: [], at: minutesAgo(48), messageId: 'msg-001' },
+    { id: 'c2', direction: 'inbound', role: 'user', senderName: '小川', content: '<@bot-openid> 帮我画一只在键盘上睡觉的橘猫', mentionNames: { 'bot-openid': '客服小Q' }, attachments: [], at: minutesAgo(46), messageId: 'msg-002', quotable: true },
+    { id: 'c3', direction: 'outbound', role: 'bot', content: '画好啦，橘猫已经在键盘上睡着了。', attachments: [], at: minutesAgo(45), status: 'sent', replyToId: 'c2' },
+    { id: 'c4', direction: 'outbound', role: 'system', content: '欢迎新成员 周周 加入本群', attachments: [], at: minutesAgo(20) },
+    { id: 'c5', direction: 'inbound', role: 'user', senderName: '周周', content: '<@bot-openid> 充值 200 还没到账，找人工', mentionNames: { 'bot-openid': '客服小Q' }, attachments: [], at: minutesAgo(6), messageId: 'msg-h01', canReply: true, quotable: true },
+    { id: 'c6', direction: 'outbound', role: 'bot', content: '已为您转接人工客服，请稍等。', attachments: [], at: minutesAgo(6), status: 'sent', replyToId: 'c5' },
+    { id: 'c7', direction: 'outbound', role: 'human', senderName: '阿杰', content: '您好，已经帮您查到了，是支付渠道延迟，5 分钟内会到账。', attachments: [], at: minutesAgo(2), status: 'processing' },
+  ]
+  return { items: conversationId ? items : [], nextBefore: null }
+}
+
+export const mockMemoryDirectory: MemoryMember[] = [
+  { botId: 'bot-qq-service', botName: '客服小Q', conversationId: 'group-1002', conversationName: '售后服务群', conversationType: 'group', userId: 'member-zhouzhou', displayName: '周周', count: 3 },
+]
+export const mockMemories: Memory[] = [
+  { id: 'mem-1', botId: 'bot-qq-service', botName: '客服小Q', userId: 'member-zhouzhou', displayName: '周周', kind: 'issue', content: '多次反馈充值到账慢', hasEmbedding: true, confidence: 0.9, pinned: false, source: 'extracted', updatedAt: minutesAgo(60) },
+  { id: 'mem-2', botId: 'bot-qq-service', botName: '客服小Q', userId: 'member-zhouzhou', displayName: '周周', kind: 'preference', content: '希望先给结论再给步骤', hasEmbedding: true, confidence: 0.8, pinned: true, source: 'tool', updatedAt: minutesAgo(300) },
+]
+export const mockProfile: UserProfile = {
+  conversationId: 'group-1002', userId: 'member-zhouzhou', content: '独立开发者，用 Python 接入接口，关心到账速度和稳定性。', updatedAt: minutesAgo(30),
+  persona: {
+    summary: '着急上线的独立开发者，说话直接，技术熟练，最在意稳定和到账速度',
+    observedTurns: 14, updatedAt: minutesAgo(30),
+    bigFive: {
+      openness: { score: 72, confidence: 0.6, evidence: '主动问新出的绘图模型怎么用' },
+      conscientiousness: { score: 64, confidence: 0.5, evidence: '每次都附上订单号和截图' },
+      extraversion: { score: 48, confidence: 0.3, evidence: '只在遇到问题时发言' },
+      agreeableness: { score: 58, confidence: 0.5, evidence: '得到答复后会说谢谢' },
+      stability: { score: 35, confidence: 0.7, evidence: '到账慢时连发三条催促' },
+    },
+    communication: {
+      verbosity: { score: 22, confidence: 0.8, evidence: '消息大多不超过 20 个字' },
+      formality: { score: 30, confidence: 0.6, evidence: '常用口语和缩写' },
+      directness: { score: 84, confidence: 0.8, evidence: '开门见山直接说要人工' },
+      patience: { score: 26, confidence: 0.7, evidence: '五分钟没回复就再次催促' },
+      emotion: { score: 55, confidence: 0.4 },
+      humor: null,
+      decision: { score: 70, confidence: 0.5, evidence: '会要求给出具体到账时间' },
+    },
+    expertise: { score: 76, confidence: 0.7, evidence: '能看懂接口报错并贴出请求参数', domains: ['API 接入', 'Python'] },
+    relationship: { satisfaction: { score: 42, confidence: 0.6, evidence: '两次反馈到账慢' }, trust: { score: 61, confidence: 0.5 }, mood: '着急', trend: 'down' },
+    roles: ['独立开发者', '付费用户'],
+    interests: ['绘图模型', '高并发通道'],
+    habits: ['晚上 9 点后活跃', '喜欢发截图'],
+    needs: ['充值尽快到账', '稳定的高并发通道'],
+    avoid: ['不要发长篇大论', '不要让他反复等待'],
+    tips: ['先给结论再给步骤', '主动告知预计时间'],
+  },
 }

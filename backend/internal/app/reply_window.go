@@ -38,7 +38,7 @@ type replySegment struct {
 }
 
 func (a *App) replySegments(ctx context.Context, mid string) ([]replySegment, error) {
-	rows, err := a.db.Query(ctx, `SELECT m.id::text,m.content,m.parts @> '[{"type":"image"}]',m.event_type='GROUP_AT_MESSAGE_CREATE' OR coalesce((m.raw_event#>'{d,mentions}') @> '[{"is_you":true}]',false)
+	rows, err := a.db.Query(ctx, `SELECT m.id::text,display_mentions(m,m.content),m.parts @> '[{"type":"image"}]',m.event_type='GROUP_AT_MESSAGE_CREATE' OR coalesce((m.raw_event#>'{d,mentions}') @> '[{"is_you":true}]',false)
     FROM messages anchor JOIN messages m ON m.reply_batch=anchor.reply_batch OR m.id=anchor.id
     JOIN inbox_tasks t ON t.message_id=m.id WHERE anchor.id=$1 AND (m.id=anchor.id OR t.status='merged') AND `+visibleContextSQL+`
     ORDER BY m.event_at,m.created_at,m.id`, mid)

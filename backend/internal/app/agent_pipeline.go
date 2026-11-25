@@ -528,7 +528,7 @@ func (a *App) loadHistory(ctx context.Context, conversationID, currentMessageID 
 	if before.IsZero() {
 		before = time.Now().Add(time.Minute)
 	}
-	rows, err := a.db.Query(ctx, `SELECT m.id::text,m.direction,m.sender_id,m.sender_name,m.content,m.parts,m.event_type,COALESCE(m.platform_message_id,''),COALESCE(m.reply_to_message_id,''),COALESCE(cm.is_staff,false),m.event_at
+	rows, err := a.db.Query(ctx, `SELECT m.id::text,m.direction,m.sender_id,m.sender_name,display_mentions(m,m.content),m.parts,m.event_type,COALESCE(m.platform_message_id,''),COALESCE(m.reply_to_message_id,''),COALESCE(cm.is_staff,false),m.event_at
 		FROM messages m LEFT JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id
         LEFT JOIN messages cur ON cur.id=$2
         WHERE m.conversation_id=$1 AND `+visibleContextSQL+` AND (m.reply_batch IS NULL OR m.reply_batch IS DISTINCT FROM cur.reply_batch)
@@ -834,6 +834,11 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 				_, _ = a.db.Exec(ctx, "INSERT INTO tool_calls(agent_run_id,tool_name,arguments,result,error) VALUES($1,$2,$3::jsonb,$4::jsonb,$5)", rt.runID, call.Name, args, resultJSON, errorText(terr))
 			}
 			messages = append(messages, domain.ChatMessage{Role: "tool", ToolCallID: call.ID, Content: agent.TruncateRunes(result, 6000)})
+			if quota, ok := terr.(imageLimitError); ok {
+				out.content = quota.Error()
+				out.messages = messages
+				return out
+			}
 			if rt.handoff && terr == nil && !rt.dryRun {
 				out.content = "已转人工，请稍等客服接单。"
 				out.messages = messages

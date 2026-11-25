@@ -234,7 +234,7 @@ func (a *App) executeTool(ctx context.Context, rt *turnRuntime, call domain.Tool
 		if rt.dryRun {
 			return `{"preview":true}`, nil
 		}
-		part, err := a.generateImage(ctx, rt.settings.ImageProfileID, str("prompt"))
+		part, err := a.generateLimitedImage(ctx, rt.conversationID, rt.senderID, rt.settings.ImageProfileID, str("prompt"))
 		if err != nil {
 			return "", err
 		}

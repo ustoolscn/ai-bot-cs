@@ -49,7 +49,7 @@ func (a *App) decisionHistory(ctx context.Context, j inboxJob, senderID string) 
 		     WHEN m.direction='outbound' THEN '机器人' ELSE '群成员' END,
 		coalesce(nullif(m.sender_name,''),m.sender_id),
 		m.direction='inbound' AND m.sender_id=$3 AND m.sender_id<>'',
-		m.content, m.direction='inbound' AND `+alreadyAnsweredSQL+`, m.parts @> '[{"type":"image"}]'::jsonb
+		display_mentions(m,m.content), m.direction='inbound' AND `+alreadyAnsweredSQL+`, m.parts @> '[{"type":"image"}]'::jsonb
 		FROM messages m JOIN messages cur ON cur.id=$2 AND m.conversation_id=cur.conversation_id
 		LEFT JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id
 		WHERE m.conversation_id=$1 AND (m.reply_batch IS NULL OR m.reply_batch IS DISTINCT FROM cur.reply_batch) AND (m.event_at,m.created_at,m.id)<(cur.event_at,cur.created_at,cur.id)

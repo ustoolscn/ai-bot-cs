@@ -50,6 +50,7 @@
         <el-form label-position="top" class="panel-body grow">
           <el-form-item label="新会话默认带上几条消息"><el-input-number v-model="settings.defaultContextLimit" :min="1" :max="100" :disabled="!settingsLoaded" /><small class="form-tip">包含当前问题；只影响之后新出现的会话，已有会话在“群与会话”里单独调整。</small></el-form-item>
           <el-form-item label="AI 请求超时"><el-input-number v-model="settings.aiRequestTimeoutSeconds" :min="10" :max="600" :disabled="!settingsLoaded" /><span class="unit-label">秒</span></el-form-item>
+          <el-form-item label="每人每天生图上限"><el-input-number v-model="settings.imageDailyLimitDefault" :min="0" :max="999" :disabled="!settingsLoaded" /><span class="unit-label">张</span><small class="form-tip">只限制调用生图模型画的图，网页渲染的图片不计数；按北京时间、按会话分别计算，0 表示不限制。单个群可在“群与会话 → 设置”里另设。</small></el-form-item>
           <el-form-item label="消息记录保留" class="last-item"><el-input-number v-model="settings.messageRetentionDays" :min="1" :max="3650" :disabled="!settingsLoaded" /><span class="unit-label">天</span><small class="form-tip">超过天数的消息约 1 分钟内自动清理。</small></el-form-item>
         </el-form>
         <div class="panel-foot"><span class="note">{{ settingsLoaded ? (settings.updatedAt ? '最近更新：' + formatUpdatedAt(settings.updatedAt) : '') : '参数读取失败，暂时不能修改' }}</span><el-button type="primary" :loading="saving" :disabled="!settingsLoaded || saving" @click="saveSettings">保存全局参数</el-button></div>

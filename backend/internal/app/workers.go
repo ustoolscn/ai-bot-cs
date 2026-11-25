@@ -164,7 +164,7 @@ func (a *App) claimInbox(ctx context.Context) (inboxJob, error) {
 	}
 	defer tx.Rollback(ctx)
 	var j inboxJob
-	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,m.conversation_id::text,c.type,c.platform_id,COALESCE(m.platform_message_id,''),m.content,c.system_prompt,c.context_limit,c.enabled AND NOT c.bot_removed,m.reply_deadline,t.attempts,m.event_type,c.trigger_mode,m.parts @> '[{"type":"image"}]'::jsonb,COALESCE((m.raw_event#>'{d,mentions}') @> '[{"is_you":true}]'::jsonb,false) FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id WHERE t.status='pending' AND t.next_attempt_at<=now()
+	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,m.conversation_id::text,c.type,c.platform_id,COALESCE(m.platform_message_id,''),display_mentions(m,m.content),c.system_prompt,c.context_limit,c.enabled AND NOT c.bot_removed,m.reply_deadline,t.attempts,m.event_type,c.trigger_mode,m.parts @> '[{"type":"image"}]'::jsonb,COALESCE((m.raw_event#>'{d,mentions}') @> '[{"is_you":true}]'::jsonb,false) FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id WHERE t.status='pending' AND t.next_attempt_at<=now()
     AND NOT EXISTS (SELECT FROM inbox_tasks active JOIN messages x ON x.id=active.message_id
       WHERE x.conversation_id=c.id AND active.status='processing')
     AND COALESCE(m.reply_batch,m.id) = (SELECT COALESCE(x.reply_batch,x.id)
@@ -375,7 +375,7 @@ func (a *App) claimOutbox(ctx context.Context) (outboxJob, error) {
 	defer tx.Rollback(ctx)
 	var j outboxJob
 	var partsRaw []byte
-	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,c.id::text,c.type,c.platform_id,COALESCE(m.reply_to_message_id,''),m.content,m.event_type,m.parts,b.app_id,b.app_secret_enc,t.msg_seq,t.attempts,m.reply_deadline,m.qq_send_payload,c.qq_extended_replies FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='pending' AND t.next_attempt_at<=now()
+	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,c.id::text,c.type,c.platform_id,COALESCE(m.reply_to_message_id,''),display_mentions(m,m.content),m.event_type,m.parts,b.app_id,b.app_secret_enc,t.msg_seq,t.attempts,m.reply_deadline,m.qq_send_payload,c.qq_extended_replies FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='pending' AND t.next_attempt_at<=now()
     AND NOT EXISTS (SELECT FROM messages prior JOIN outbox_tasks pt ON pt.message_id=prior.id
       WHERE prior.conversation_id=c.id AND (pt.status='processing' OR
         (pt.status='pending' AND (prior.created_at,prior.id)<(m.created_at,m.id))))
@@ -489,7 +489,7 @@ func (a *App) handleOutbox(ctx context.Context, j outboxJob) error {
 		}
 	}
 	if (j.EventType == "HUMAN_REPLY" || j.EventType == "HANDOFF_UPDATE") && j.ReplyTo != "" && j.ConversationType == "group" {
-		if err = a.db.QueryRow(ctx, "SELECT raw_event,COALESCE(NULLIF(sender_name,''),sender_id) FROM messages WHERE conversation_id=$1 AND platform_message_id=$2", j.ConversationRecordID, j.ReplyTo).Scan(&raw, &mentionName); err != nil {
+		if err = a.db.QueryRow(ctx, "SELECT raw_event,COALESCE(NULLIF(NULLIF(sender_name,''),sender_id),(SELECT nullif(display_name,messages.sender_id) FROM conversation_members WHERE conversation_id=messages.conversation_id AND platform_user_id=messages.sender_id),'群成员') FROM messages WHERE conversation_id=$1 AND platform_message_id=$2", j.ConversationRecordID, j.ReplyTo).Scan(&raw, &mentionName); err != nil {
 			return a.retryOutbox(ctx, j, err)
 		}
 	}

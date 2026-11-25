@@ -131,6 +131,8 @@ func (a *App) Router() http.Handler {
 	auth.PUT("/model-profiles/:id", a.saveModel)
 	auth.DELETE("/model-profiles/:id", a.deleteModel)
 	auth.POST("/model-profiles/:id/test", a.testModel)
+	auth.POST("/mention-names", a.mentionNames)
+	auth.GET("/conversations/:id/chat", a.chatHistory)
 	auth.GET("/conversations", a.listConversations)
 	auth.DELETE("/conversations/:id", a.deleteConversation)
 	auth.GET("/conversations/:id", a.getConversation)
@@ -680,11 +682,12 @@ func (a *App) testModel(c *gin.Context) {
 		return
 	}
 	if kind == "image" {
-		data, typ, err := a.requestImage(c, c.Param("id"), cl, firstNonEmpty(strings.TrimSpace(in.Input), "画一个蓝色圆形，白色背景。"))
+		data, typ, err := a.requestImage(c, cl, firstNonEmpty(strings.TrimSpace(in.Input), "画一个蓝色圆形，白色背景。"))
 		if err != nil {
 			fail(c, 502, "model_error", err.Error())
 			return
 		}
+		a.recordModelCall(c, "", "", c.Param("id"), "image", domain.ChatResult{}, time.Since(started).Milliseconds(), nil)
 		ok(c, gin.H{"kind": kind, "model": model, "content": "已生成一张测试图片。", "contentType": typ, "imageUrl": "data:" + typ + ";base64," + base64.StdEncoding.EncodeToString(data), "sizeBytes": len(data), "latencyMs": time.Since(started).Milliseconds()})
 		return
 	}
@@ -736,10 +739,10 @@ func (a *App) testModel(c *gin.Context) {
 }
 
 func (a *App) listConversations(c *gin.Context) {
-	queryList(c, a, `SELECT c.id::text,c.bot_id::text AS "botId",c.service_id::text AS "serviceId",c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",b.name AS "botName",ARRAY(SELECT ck.knowledge_base_id::text FROM conversation_knowledge_bases ck WHERE ck.conversation_id=c.id) AS "knowledgeBaseIds",c.updated_at AS "updatedAt",COALESCE(ms.message_count,0) AS "messageCount",CASE WHEN c.type='private' THEN GREATEST(COALESCE(cm.member_count,0),1) ELSE COALESCE(cm.member_count,0) END AS "memberCount",COALESCE(ms.has_full_message_events,false) AS "hasFullMessageEvents" FROM conversations c JOIN bots b ON b.id=c.bot_id LEFT JOIN LATERAL (SELECT count(*) FILTER(WHERE event_type<>'PROCESSING_ACK') AS message_count,bool_or(event_type='GROUP_MESSAGE_CREATE') AS has_full_message_events FROM messages WHERE conversation_id=c.id) ms ON true LEFT JOIN LATERAL (SELECT count(*) AS member_count FROM conversation_members WHERE conversation_id=c.id AND active) cm ON true WHERE NOT c.bot_removed ORDER BY c.updated_at DESC`)
+	queryList(c, a, `SELECT c.image_daily_limit AS "imageDailyLimit",c.id::text,c.bot_id::text AS "botId",c.service_id::text AS "serviceId",c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",b.name AS "botName",ARRAY(SELECT ck.knowledge_base_id::text FROM conversation_knowledge_bases ck WHERE ck.conversation_id=c.id) AS "knowledgeBaseIds",c.updated_at AS "updatedAt",latest.preview AS "lastMessage",COALESCE(ms.message_count,0) AS "messageCount",CASE WHEN c.type='private' THEN GREATEST(COALESCE(cm.member_count,0),1) ELSE COALESCE(cm.member_count,0) END AS "memberCount",COALESCE(ms.has_full_message_events,false) AS "hasFullMessageEvents" FROM conversations c JOIN bots b ON b.id=c.bot_id LEFT JOIN LATERAL (SELECT count(*) FILTER(WHERE event_type<>'PROCESSING_ACK') AS message_count,bool_or(event_type='GROUP_MESSAGE_CREATE') AS has_full_message_events FROM messages WHERE conversation_id=c.id) ms ON true LEFT JOIN LATERAL (SELECT count(*) AS member_count FROM conversation_members WHERE conversation_id=c.id AND active) cm ON true LEFT JOIN LATERAL (SELECT m.event_at,jsonb_build_object('content',left(m.content,200),'direction',m.direction,'senderName',coalesce(nullif(m.sender_name,''),CASE WHEN m.direction='outbound' THEN b.name ELSE 'QQ用户' END),'at',m.event_at,'mentionNames',message_mention_names(m,left(m.content,200))) AS preview FROM messages m WHERE m.conversation_id=c.id AND m.event_type<>'PROCESSING_ACK' ORDER BY m.event_at DESC,m.id DESC LIMIT 1) latest ON true WHERE NOT c.bot_removed ORDER BY latest.event_at DESC NULLS LAST,c.updated_at DESC`)
 }
 func (a *App) getConversation(c *gin.Context) {
-	rows, err := a.db.Query(c, `SELECT c.id::text,c.bot_id::text AS "botId",c.service_id::text AS "serviceId",c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",COALESCE(json_agg(ck.knowledge_base_id::text) FILTER(WHERE ck.knowledge_base_id IS NOT NULL),'[]') AS "knowledgeBaseIds" FROM conversations c LEFT JOIN conversation_knowledge_bases ck ON ck.conversation_id=c.id WHERE c.id=$1 GROUP BY c.id`, c.Param("id"))
+	rows, err := a.db.Query(c, `SELECT c.image_daily_limit AS "imageDailyLimit",c.id::text,c.bot_id::text AS "botId",c.service_id::text AS "serviceId",c.channel,c.platform_id AS "platformId",c.type,c.name,c.enabled,c.trigger_mode AS "triggerMode",c.context_limit AS "contextLimit",c.system_prompt AS "systemPrompt",c.chat_profile_id::text AS "chatProfileId",COALESCE(json_agg(ck.knowledge_base_id::text) FILTER(WHERE ck.knowledge_base_id IS NOT NULL),'[]') AS "knowledgeBaseIds" FROM conversations c LEFT JOIN conversation_knowledge_bases ck ON ck.conversation_id=c.id WHERE c.id=$1 GROUP BY c.id`, c.Param("id"))
 	if err != nil {
 		fail(c, 500, "database_error", "读取失败")
 		return
@@ -753,17 +756,23 @@ func (a *App) getConversation(c *gin.Context) {
 }
 func (a *App) updateConversation(c *gin.Context) {
 	var in struct {
-		Name             string   `json:"name"`
-		TriggerMode      string   `json:"triggerMode"`
-		SystemPrompt     string   `json:"systemPrompt"`
-		ChatProfileID    string   `json:"chatProfileId"`
-		Enabled          bool     `json:"enabled"`
-		ContextLimit     int      `json:"contextLimit"`
-		KnowledgeBaseIDs []string `json:"knowledgeBaseIds"`
-		ServiceID        *string  `json:"serviceId"`
+		ImageDailyLimit  json.RawMessage `json:"imageDailyLimit"`
+		Name             string          `json:"name"`
+		TriggerMode      string          `json:"triggerMode"`
+		SystemPrompt     string          `json:"systemPrompt"`
+		ChatProfileID    string          `json:"chatProfileId"`
+		Enabled          bool            `json:"enabled"`
+		ContextLimit     int             `json:"contextLimit"`
+		KnowledgeBaseIDs []string        `json:"knowledgeBaseIds"`
+		ServiceID        *string         `json:"serviceId"`
 	}
 	if c.ShouldBindJSON(&in) != nil || in.ContextLimit < 1 || in.ContextLimit > 100 {
 		fail(c, 400, "invalid_request", "会话配置无效")
+		return
+	}
+	var limit *int32
+	if in.ImageDailyLimit != nil && (json.Unmarshal(in.ImageDailyLimit, &limit) != nil || (limit != nil && *limit < 0)) {
+		fail(c, 400, "invalid_request", "生图限额无效")
 		return
 	}
 	if in.TriggerMode != "mention_only" && in.TriggerMode != "always" && in.TriggerMode != "smart" {
@@ -780,7 +789,7 @@ func (a *App) updateConversation(c *gin.Context) {
 	if in.ChatProfileID != "" {
 		profile = in.ChatProfileID
 	}
-	_, err = tx.Exec(c, "UPDATE conversations SET name=$1,enabled=$2,trigger_mode=$3,context_limit=$4,system_prompt=$5,chat_profile_id=$6,service_id=CASE WHEN $8::text IS NULL THEN service_id ELSE NULLIF($8,'')::uuid END,updated_at=now() WHERE id=$7", in.Name, in.Enabled, in.TriggerMode, in.ContextLimit, in.SystemPrompt, profile, c.Param("id"), in.ServiceID)
+	_, err = tx.Exec(c, "UPDATE conversations SET image_daily_limit=CASE WHEN $9 THEN $10::int ELSE image_daily_limit END,name=$1,enabled=$2,trigger_mode=$3,context_limit=$4,system_prompt=$5,chat_profile_id=$6,service_id=CASE WHEN $8::text IS NULL THEN service_id ELSE NULLIF($8,'')::uuid END,updated_at=now() WHERE id=$7", in.Name, in.Enabled, in.TriggerMode, in.ContextLimit, in.SystemPrompt, profile, c.Param("id"), in.ServiceID, in.ImageDailyLimit != nil, limit)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && (pgErr.ConstraintName == "conversation_bot_service" || pgErr.Code == "22P02") {
 		fail(c, 400, "invalid_reference", "请选择当前机器人的客服")

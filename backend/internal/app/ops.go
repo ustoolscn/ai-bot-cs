@@ -111,7 +111,7 @@ func (a *App) humanReply(c *gin.Context) {
 // --- members / staff ---
 
 func (a *App) listMembers(c *gin.Context) {
-	queryList(c, a, `SELECT cm.platform_user_id AS "userId",cm.display_name AS "displayName",cm.qq_avatar AS avatar,cm.qq_joined_at AS "joinedAt",cm.qq_union_id AS "unionId",cm.active,cm.qq_role AS "role",cm.is_bot AS "isBot",cm.is_staff AS "isStaff",
+	queryList(c, a, `SELECT coalesce((SELECT used FROM image_daily_usage WHERE conversation_id=cm.conversation_id AND user_id=cm.platform_user_id AND day=(now() AT TIME ZONE 'Asia/Shanghai')::date),0) AS "imagesToday",cm.platform_user_id AS "userId",cm.display_name AS "displayName",cm.qq_avatar AS avatar,cm.qq_joined_at AS "joinedAt",cm.qq_union_id AS "unionId",cm.active,cm.qq_role AS "role",cm.is_bot AS "isBot",cm.is_staff AS "isStaff",
         EXISTS(SELECT 1 FROM blocked_users bu JOIN conversations bc ON bc.bot_id=bu.bot_id WHERE bc.id=cm.conversation_id AND bu.platform_user_id=cm.platform_user_id AND (bu.conversation_id IS NULL OR bu.conversation_id=cm.conversation_id)) AS "isBlocked",
         COALESCE((SELECT jsonb_agg(bu.id::text) FROM blocked_users bu JOIN conversations bc ON bc.bot_id=bu.bot_id WHERE bc.id=cm.conversation_id AND bu.platform_user_id=cm.platform_user_id AND (bu.conversation_id IS NULL OR bu.conversation_id=cm.conversation_id)),'[]') AS "blockedUserIds",cm.first_seen_at AS "firstSeenAt",cm.last_seen_at AS "lastSeenAt",
 		(SELECT count(*) FROM user_memories um JOIN conversations c ON c.bot_id=um.bot_id WHERE c.id=cm.conversation_id AND um.conversation_id=c.id AND um.platform_user_id=cm.platform_user_id AND um.status='active') AS "memoryCount",

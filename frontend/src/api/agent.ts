@@ -1,5 +1,6 @@
 import { request } from './client'
 import * as mock from '@/mock/agent'
+import { mockMemories, mockMemoryDirectory, mockProfile } from '@/mock/data'
 
 export interface AgentExample { question: string; answer: string }
 export type StatusImageStyle = 'brief' | 'table' | 'heatmap' | 'night' | 'page' | 'off'
@@ -108,12 +109,29 @@ export interface Gap { id: string; question: string; occurrences: number; status
 export interface Feedback { id: string; source: string; rating: string; comment: string; correctedAnswer: string; createdAt: string; answer: string; question: string; messageId?: string; conversationName: string; read?: boolean; knowledgeBaseId?: string | null; knowledgeBaseName?: string }
 export interface MemoryMember { botId: string; botName: string; conversationId: string; conversationName: string; conversationType: string; userId: string; displayName: string; count: number }
 export interface Memory { id: string; botId: string; botName: string; userId: string; displayName: string; kind: string; content: string; hasEmbedding: boolean; confidence: number; pinned: boolean; source: string; updatedAt: string; lastUsedAt?: string; eventAt?: string }
-export interface UserProfile { conversationId: string; userId: string; content: string; updatedAt?: string }
+/** 一个人格维度：0-100 分，confidence 0-1，evidence 是来自对话的一句依据；还看不出来时为 null */
+export type PersonaTrait = { score: number; confidence: number; evidence?: string } | null
+export interface Persona {
+  summary?: string
+  observedTurns?: number
+  updatedAt?: string
+  bigFive?: Partial<Record<'openness' | 'conscientiousness' | 'extraversion' | 'agreeableness' | 'stability', PersonaTrait>>
+  communication?: Partial<Record<'verbosity' | 'formality' | 'directness' | 'patience' | 'emotion' | 'humor' | 'decision', PersonaTrait>>
+  expertise?: (NonNullable<PersonaTrait> & { domains?: string[] }) | null
+  relationship?: { satisfaction?: PersonaTrait; trust?: PersonaTrait; mood?: string; trend?: 'up' | 'flat' | 'down' } | null
+  roles?: string[]
+  interests?: string[]
+  habits?: string[]
+  needs?: string[]
+  avoid?: string[]
+  tips?: string[]
+}
+export interface UserProfile { conversationId: string; userId: string; content: string; updatedAt?: string; persona?: Persona | null }
 export interface LearningStats { pendingCandidates: number; publishedEntries: number; openGaps: number; feedback7d: number; negativeFeedback7d: number; unreadNegativeFeedback?: number; activeMemories: number; openHandoffs: number }
 export interface HandoffMessage { id: string; direction: string; senderName: string; content: string; eventType: string; eventAt: string; status?: string; deliveryError?: string }
 export type HandoffCloseMethod = 'qq' | 'web' | 'timeout'
 export interface Handoff { id: string; claimedByName?: string | null; claimedById?: string | null; claimedVia?: 'qq' | 'web' | null; claimedAt?: string | null; closeMethod?: HandoffCloseMethod | null; conversationName: string; conversationType: string; userId: string; displayName: string; messageId?: string; messageContent: string; reason: string; status: string; pausedUntil?: string; createdAt: string; resolvedAt?: string; recent: HandoffMessage[]; ticketNumber?: string; humanRepliedBy?: string; humanReplyContent?: string; humanRepliedAt?: string; notifications?: Array<{ conversationId: string; status: string; error?: string }> }
-export interface Member { userId: string; displayName: string; avatar?: string; joinedAt?: string; unionId?: string; role?: string; isBot?: boolean; active: boolean; isStaff: boolean; isBlocked?: boolean; blockedUserIds?: string[]; lastSeenAt: string; memoryCount: number; messageCount: number }
+export interface Member { userId: string; displayName: string; avatar?: string; joinedAt?: string; unionId?: string; role?: string; isBot?: boolean; active: boolean; isStaff: boolean; isBlocked?: boolean; blockedUserIds?: string[]; lastSeenAt: string; memoryCount: number; messageCount: number; /** 今天在这个会话里用生图模型生成了几张 */ imagesToday?: number }
 export interface BlockedAction { id: string; conversationId: string; status: 'pending' | 'kicked' | 'failed' | 'disabled'; attempts: number; error: string; lastAttemptAt: string | null; updatedAt: string }
 export interface BlockedUser { id: string; botId: string; botName: string; conversationId: string | null; userId: string; displayName: string; reason: string; autoKick: boolean; createdAt: string; actions: BlockedAction[] }
 export interface StaffLearningJob { id: string; status: 'pending' | 'processing' | 'completed' | 'failed'; attempts: number; error: string; updatedAt: string }
@@ -170,14 +188,14 @@ export const agentApi = {
     markFeedbackRead: (target: { ids: string[] } | { all: true }) => request<{ updated: number }>({ method: 'POST', url: '/feedback/read', data: target }, { updated: 0 }),
   },
   memories: {
-    directory: () => request<MemoryMember[]>({ url: '/memories/directory' }),
-    list: (params: { userId?: string; botId?: string; conversationId?: string; q?: string }) => request<Memory[]>({ url: '/memories', params }),
+    directory: () => request<MemoryMember[]>({ url: '/memories/directory' }, mockMemoryDirectory),
+    list: (params: { userId?: string; botId?: string; conversationId?: string; q?: string }) => request<Memory[]>({ url: '/memories', params }, mockMemories),
     update: (id: string, data: { content: string; kind: string; pinned: boolean }) => request<{ updated: boolean }>({ method: 'PUT', url: `/memories/${id}`, data }),
     remove: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/memories/${id}` }),
     profile: (conversationId: string, userId: string) => {
       const url = `/conversations/${conversationId}/user-profiles/${encodeURIComponent(userId)}`
       return {
-        get: () => request<UserProfile>({ url }),
+        get: () => request<UserProfile>({ url }, mockProfile),
         save: (content: string) => request<UserProfile>({ method: 'PUT', url, data: { content } }),
         clear: () => request<UserProfile>({ method: 'DELETE', url }),
       }

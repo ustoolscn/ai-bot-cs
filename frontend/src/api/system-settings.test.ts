@@ -14,7 +14,7 @@ describe('system settings contract', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('loads settings from GET /system/settings and maps all database values', async () => {
-    const response = { publicBaseUrl: 'https://bot.example.com', defaultContextLimit: 36, aiRequestTimeoutSeconds: 240, messageRetentionDays: 365, updatedAt: '2026-07-16T03:00:00Z' }
+    const response = { publicBaseUrl: 'https://bot.example.com', defaultContextLimit: 36, aiRequestTimeoutSeconds: 240, messageRetentionDays: 365, imageDailyLimitDefault: 0, updatedAt: '2026-07-16T03:00:00Z' }
     vi.mocked(request).mockResolvedValue(response)
 
     const target = createSystemSettingsForm()
@@ -25,11 +25,11 @@ describe('system settings contract', () => {
   })
 
   it('saves only editable fields through PUT /system/settings', async () => {
-    const settings = { publicBaseUrl: 'https://bot.example.com', defaultContextLimit: 48, aiRequestTimeoutSeconds: 300, messageRetentionDays: 730, updatedAt: 'old-value' }
+    const settings = { publicBaseUrl: 'https://bot.example.com', defaultContextLimit: 48, aiRequestTimeoutSeconds: 300, messageRetentionDays: 730, imageDailyLimitDefault: 5, updatedAt: 'old-value' }
     vi.mocked(request).mockResolvedValue({ ...settings, updatedAt: '2026-07-16T04:00:00Z' })
 
     await api.system.updateSettings(settings)
 
-    expect(request).toHaveBeenCalledWith({ method: 'PUT', url: '/system/settings', data: { publicBaseUrl: 'https://bot.example.com', defaultContextLimit: 48, aiRequestTimeoutSeconds: 300, messageRetentionDays: 730 } })
+    expect(request).toHaveBeenCalledWith({ method: 'PUT', url: '/system/settings', data: { publicBaseUrl: 'https://bot.example.com', defaultContextLimit: 48, aiRequestTimeoutSeconds: 300, messageRetentionDays: 730, imageDailyLimitDefault: 5 } })
   })
 })

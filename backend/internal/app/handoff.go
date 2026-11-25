@@ -86,7 +86,7 @@ func linkHandoffTurn(ctx context.Context, tx pgx.Tx, bot, conv, user, name, mid,
 	_, err = tx.Exec(ctx, `WITH notes AS (
 	INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,content,parts,status,context_excluded,handoff_id)
 	SELECT 'qq',h.bot_id,op.id,'outbound','HANDOFF_NOTICE',format('工单 #%s｜%s｜%s（%s）',h.ticket_number,c.name,h.display_name,h.platform_user_id)
-	|| E'\n转人工原因：'||h.reason|| E'\n用户消息：'||m.content||CASE WHEN m.parts @> '[{"type":"image"}]' THEN ' [图片见网页人工台]' ELSE '' END
+	|| E'\n转人工原因：'||display_mentions(m,h.reason)|| E'\n用户消息：'||display_mentions(m,m.content)||CASE WHEN m.parts @> '[{"type":"image"}]' THEN ' [图片见网页人工台]' ELSE '' END
 	||CASE WHEN h.status='open' THEN format(E'\n请先发送 #%s 接单',h.ticket_number) ELSE format(E'\n回复：#%s 内容；结单：#%s 结单',h.ticket_number,h.ticket_number) END,
 	m.parts,'pending',true,h.id FROM handoffs h JOIN conversations c ON c.id=h.conversation_id JOIN messages m ON m.id=$2
 	JOIN conversations op ON op.bot_id=h.bot_id AND op.human_operator AND op.id<>c.id

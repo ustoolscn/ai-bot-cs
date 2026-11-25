@@ -7,9 +7,12 @@ import './styles/index.css'
 import App from './App.vue'
 import router from './router'
 import { useAuthStore } from './stores/auth'
+import { formatMentions } from './utils/mentions'
 
 async function bootstrap() {
   const app = createApp(App)
+  // 模板里显示用户文字统一走 $at()：<@openid> 换成 @昵称
+  app.config.globalProperties.$at = formatMentions
   const pinia = createPinia()
   app.use(pinia)
   await useAuthStore(pinia).restore()

@@ -42,7 +42,7 @@
     <el-table :data="actions" max-height="480" empty-text="还没有处理记录">
       <el-table-column label="操作" width="150"><template #default="{ row }">{{ labels[row.kind] || row.kind }}</template></el-table-column>
       <el-table-column label="结果" width="110"><template #default="{ row }"><span class="pill" :class="toneOf(row.status)">{{ labels[row.status] || row.status }}</span></template></el-table-column>
-      <el-table-column label="原因" min-width="220"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.reason || '—' }}</strong><span v-if="row.detail">{{ row.detail }}</span></div></template></el-table-column>
+      <el-table-column label="原因" min-width="220"><template #default="{ row }"><div class="stacked-cell"><strong>{{ $at(row.reason) || '—' }}</strong><span v-if="row.detail">{{ $at(row.detail) }}</span></div></template></el-table-column>
       <el-table-column label="成员" width="180"><template #default="{ row }"><span class="mono">{{ row.userId }}</span></template></el-table-column>
       <el-table-column label="时间" width="150"><template #default="{ row }">{{ formatTime(row.createdAt) }}</template></el-table-column>
     </el-table>

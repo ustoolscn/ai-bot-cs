@@ -167,11 +167,12 @@ func (a *App) auxText(ctx context.Context, s agent.Settings, fallbackProfile, ki
 }
 
 type evaluation struct {
-	Profile          *string `json:"profile"`
-	Answered         bool    `json:"answered"`
-	KnowledgeGap     string  `json:"knowledge_gap"`
-	PreviousFeedback string  `json:"previous_feedback"`
-	TooLong          bool    `json:"too_long"`
+	Persona          map[string]any `json:"persona,omitempty"`
+	Profile          *string        `json:"profile"`
+	Answered         bool           `json:"answered"`
+	KnowledgeGap     string         `json:"knowledge_gap"`
+	PreviousFeedback string         `json:"previous_feedback"`
+	TooLong          bool           `json:"too_long"`
 	Memories         []struct {
 		Action     string  `json:"action"`
 		ID         string  `json:"id"`
@@ -192,7 +193,7 @@ func (a *App) jobEvaluate(ctx context.Context, runID, messageID, profileID strin
 	}
 	var botID, convID, convType, senderID, senderName, question, platformID string
 	var eventAt time.Time
-	if err := a.db.QueryRow(ctx, `SELECT m.bot_id::text,m.conversation_id::text,c.type,m.sender_id,m.sender_name,m.content,COALESCE(m.platform_message_id,''),m.event_at FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=$1`, messageID).
+	if err := a.db.QueryRow(ctx, `SELECT m.bot_id::text,m.conversation_id::text,c.type,m.sender_id,m.sender_name,display_mentions(m,m.content),COALESCE(m.platform_message_id,''),m.event_at FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=$1`, messageID).
 		Scan(&botID, &convID, &convType, &senderID, &senderName, &question, &platformID, &eventAt); err != nil {
 		return nil // message deleted
 	}
@@ -215,7 +216,7 @@ func (a *App) jobEvaluate(ctx context.Context, runID, messageID, profileID strin
 	}
 	// Previous bot answer to the same user within 30 minutes.
 	var prevAnswerID, prevAnswer, prevQuestion string
-	_ = a.db.QueryRow(ctx, `SELECT o.id::text,o.content,i.content FROM messages i JOIN messages o ON o.conversation_id=i.conversation_id AND o.reply_to_message_id=i.platform_message_id AND o.direction='outbound' AND o.event_type='AI_RESPONSE'
+	_ = a.db.QueryRow(ctx, `SELECT o.id::text,display_mentions(o,o.content),display_mentions(i,i.content) FROM messages i JOIN messages o ON o.conversation_id=i.conversation_id AND o.reply_to_message_id=i.platform_message_id AND o.direction='outbound' AND o.event_type='AI_RESPONSE'
 		WHERE NOT i.context_excluded AND NOT o.context_excluded AND i.event_at>coalesce((SELECT moderation_cutoff FROM conversations WHERE id=$1),'-infinity') AND i.conversation_id=$1 AND i.direction='inbound' AND i.sender_id=$2 AND i.event_at<$3 AND i.event_at>$3-interval '30 minutes' AND i.id<>$4
 		ORDER BY i.event_at DESC, o.event_at DESC LIMIT 1`, convID, senderID, eventAt, messageID).Scan(&prevAnswerID, &prevAnswer, &prevQuestion)
 
@@ -224,18 +225,20 @@ func (a *App) jobEvaluate(ctx context.Context, runID, messageID, profileID strin
 		fmt.Fprintf(&b, "（上一轮）用户：%s\n（上一轮）客服：%s\n\n", agent.TruncateRunes(prevQuestion, 300), agent.TruncateRunes(prevAnswer, 500))
 	}
 	fmt.Fprintf(&b, "（本轮）用户：%s\n（本轮）客服：%s", agent.TruncateRunes(question, 800), agent.TruncateRunes(answer, 1200))
-	var previousProfile, existing string
+	var previousProfile, existing, previousPersona string
 	if s.MemoryEnabled && senderID != "" {
-		if err = a.db.QueryRow(ctx, `SELECT coalesce((SELECT content FROM user_profiles WHERE conversation_id=$1 AND platform_user_id=$2),''),coalesce((SELECT jsonb_agg(jsonb_build_object('id',id,'content',content,'eventAt',coalesce(event_at,created_at))) FROM user_memories WHERE conversation_id=$1 AND platform_user_id=$2 AND status='active'),'[]')::text`, convID, senderID).Scan(&previousProfile, &existing); err != nil {
+		if err = a.db.QueryRow(ctx, `SELECT coalesce((SELECT persona::text FROM user_profiles WHERE conversation_id=$1 AND platform_user_id=$2),'null'),coalesce((SELECT content FROM user_profiles WHERE conversation_id=$1 AND platform_user_id=$2),''),coalesce((SELECT jsonb_agg(jsonb_build_object('id',id,'content',content,'eventAt',coalesce(event_at,created_at))) FROM user_memories WHERE conversation_id=$1 AND platform_user_id=$2 AND status='active'),'[]')::text`, convID, senderID).Scan(&previousPersona, &previousProfile, &existing); err != nil {
 			return err
 		}
+		fmt.Fprintf(&b, "\n已有结构化画像：%s", previousPersona)
 		fmt.Fprintf(&b, "\n本轮时间：%s\n已有用户档案：%s\n已有事件：%s", eventAt.Format(time.RFC3339), previousProfile, existing)
 	}
 	var ev evaluation
-	if err := a.auxJSON(ctx, s, profileID, runID, "", "evaluate", agent.EvaluationPrompt, b.String(), &ev); err != nil {
+	if err := a.auxJSON(ctx, s, profileID, runID, "", "evaluate", agent.EvaluationPrompt+personaPrompt, b.String(), &ev); err != nil {
 		return err
 	}
 	evForAudit := ev
+	evForAudit.Persona = nil
 	evForAudit.Profile = nil
 	evForAudit.Memories = nil
 	evJSON, _ := json.Marshal(evForAudit)
@@ -331,7 +334,7 @@ func (a *App) jobSummarize(ctx context.Context, conversationID, scope, until, pr
 	if !untilAt.After(coveredUntil) {
 		return nil
 	}
-	rows, err := a.db.Query(ctx, `SELECT m.id::text,m.direction,m.sender_id,m.sender_name,m.content,COALESCE(m.reply_to_message_id,''),COALESCE(m.platform_message_id,'') FROM messages m
+	rows, err := a.db.Query(ctx, `SELECT m.id::text,m.direction,m.sender_id,m.sender_name,display_mentions(m,m.content),COALESCE(m.reply_to_message_id,''),COALESCE(m.platform_message_id,'') FROM messages m
 		WHERE m.conversation_id=$1 AND m.event_at>$2 AND m.event_at<$3 AND m.content<>'' AND m.context_excluded=false AND m.event_type<>'PROCESSING_ACK' ORDER BY m.event_at LIMIT 300`, conversationID, coveredUntil, untilAt)
 	if err != nil {
 		return err

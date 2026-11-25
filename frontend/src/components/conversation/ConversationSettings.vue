@@ -1,7 +1,7 @@
 <template>
   <section class="panel">
     <div class="subsection">
-      <div class="subsection-head"><div><h3>显示名称</h3><p>只影响后台显示。群聊可以点右上角“同步群名”换成 QQ 当前的群名。</p></div></div>
+      <div class="subsection-head"><div><h3>显示名称</h3><p>只影响后台显示。群聊可以在聊天窗口右上角的“更多”里同步 QQ 当前的群名。</p></div></div>
       <el-input v-model="form.name" maxlength="60" style="max-width: 360px" />
     </div>
 
@@ -26,6 +26,22 @@
     <div class="subsection">
       <div class="subsection-head"><div><h3>回复时参考几条消息</h3><p>包含当前这条；设为 1 表示只看当前问题。“通用设置”里的 token 预算仍然生效。</p></div></div>
       <el-slider v-model="form.contextLimit" :min="1" :max="50" show-input style="max-width: 480px" />
+    </div>
+
+    <div class="subsection">
+      <div class="subsection-head"><div><h3>每人每天生图次数</h3><p>只限制调用生图模型画的图，用网页渲染出来的图片不计数。用完后机器人会告诉对方今天的次数已用完，失败的生成不扣次数。</p></div></div>
+      <div class="limit-row">
+        <el-radio-group v-model="form.imageLimitMode">
+          <el-radio-button value="default">跟随全局默认</el-radio-button>
+          <el-radio-button value="custom">这个{{ conversation.type === 'group' ? '群' : '私聊' }}单独设置</el-radio-button>
+        </el-radio-group>
+        <Transition name="limit">
+          <span v-if="form.imageLimitMode === 'custom'" class="limit-input">
+            <el-input-number v-model="form.imageLimit" :min="0" :max="999" :step="1" step-strictly controls-position="right" />
+            <span class="muted">{{ form.imageLimit === 0 ? '张，0 表示不限制' : '张 / 人 / 天' }}</span>
+          </span>
+        </Transition>
+      </div>
     </div>
 
     <div class="subsection">
@@ -61,6 +77,7 @@ const emit = defineEmits<{ saved: [] }>()
 const fields = (c: Conversation) => ({
   name: c.name, serviceId: c.serviceId || '', triggerMode: c.triggerMode, contextLimit: c.contextLimit,
   knowledgeBaseIds: [...(c.knowledgeBaseIds || [])], systemPrompt: c.systemPrompt || '',
+  imageLimitMode: c.imageDailyLimit == null ? 'default' : 'custom', imageLimit: c.imageDailyLimit ?? 5,
 })
 const form = reactive(fields(props.conversation))
 const snapshot = ref(JSON.stringify(form))
@@ -96,7 +113,8 @@ async function save() {
   if (saving.value) return
   saving.value = true
   try {
-    await api.conversations.save(props.conversation.id, { ...props.conversation, ...form })
+    const { imageLimitMode, imageLimit, ...rest } = form
+    await api.conversations.save(props.conversation.id, { ...props.conversation, ...rest, imageDailyLimit: imageLimitMode === 'custom' ? imageLimit : null })
     snapshot.value = JSON.stringify(form)
     ElMessage.success('接待设置已保存')
     emit('saved')
@@ -105,3 +123,11 @@ async function save() {
   } finally { saving.value = false }
 }
 </script>
+
+<style scoped>
+.limit-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 32px; }
+.limit-input { display: inline-flex; align-items: center; gap: 8px; }
+.limit-input .el-input-number { width: 120px; }
+.limit-enter-active, .limit-leave-active { transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.limit-enter-from, .limit-leave-to { opacity: 0; transform: translateX(-6px); }
+</style>

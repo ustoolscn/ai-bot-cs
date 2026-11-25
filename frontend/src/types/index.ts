@@ -136,7 +136,40 @@ export interface Conversation {
   systemPrompt: string
   lastActiveAt: string
   enabled: boolean
+  /** 最后一条消息，用于聊天列表预览 */
+  lastMessage?: ChatPreview | null
+  /** 这个群每人每天最多生成几张图；null 表示跟随通用设置 */
+  imageDailyLimit?: number | null
 }
+
+export interface ChatPreview {
+  content: string
+  senderName?: string
+  direction: 'inbound' | 'outbound'
+  at: string
+  mentionNames?: Record<string, string>
+}
+
+/** 聊天界面里的一条消息：用户、机器人、人工/管理员、系统 */
+export interface ChatItem {
+  id: string
+  direction: 'inbound' | 'outbound'
+  role: 'user' | 'bot' | 'human' | 'system'
+  senderId?: string
+  senderName?: string
+  content: string
+  mentionNames?: Record<string, string>
+  attachments: MessageAttachment[]
+  at: string
+  status?: 'pending' | 'processing' | 'sent' | 'failed' | string
+  error?: string
+  replyToId?: string
+  messageId?: string
+  canReply?: boolean
+  quotable?: boolean
+}
+
+export interface ChatPage { items: ChatItem[]; nextBefore: string | null }
 
 export interface TimingStage {
   label: string
@@ -247,6 +280,8 @@ export interface KnowledgeBase {
   documentList: KnowledgeDocument[]
 }
 
+export type PipelineOutcome = 'replied' | 'handoff' | 'skipped' | 'merged' | 'failed' | 'processing'
+
 export interface PipelineRow {
   timeline?: MessageTimeline
   id: string
@@ -267,6 +302,10 @@ export interface PipelineRow {
   senderId?: string
   /** 消息里 <@openid> 对应的昵称 */
   mentionNames?: Record<string, string>
+  /** 处理结果，和消息记录的筛选一致 */
+  outcome?: PipelineOutcome
+  ticketNumber?: string
+  error?: string
 }
 
 export interface AlertItem {
@@ -316,6 +355,8 @@ export interface SystemSettings {
   defaultContextLimit: number
   aiRequestTimeoutSeconds: number
   messageRetentionDays: number
+  /** 每人每天在一个会话里最多用生图模型生成几张，0 表示不限制 */
+  imageDailyLimitDefault: number
   updatedAt?: string
 }
 

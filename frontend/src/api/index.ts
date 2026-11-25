@@ -1,13 +1,14 @@
 import { ApiError, mockFallbackEnabled, request } from './client'
 import { connection } from '@/utils/connection'
 import { modelProviderPresets } from '@/utils/model-providers'
-import { mockBots, mockConversations, mockHumanOperators, mockKnowledgeBases, mockMessages, mockModels, mockOverview, mockProxies, mockCosts } from '@/mock/data'
-import type { ActiveTask, AlertItem, Bot, Conversation, KnowledgeBase, KnowledgeDocument, MessageAttachment, MessageTimeline, MessageRecord, HandoffStatus, HumanOperator, ModelKind, ModelProfile, ModelProviderId, ModelProviderPreset, ModelProxy, ModelProxyInput, WebSearchMode, ModelTestInput, ProxyTestResult, ModelTestResult, CostRange, CostSummary, Status, SystemOverview, SystemSettings } from '@/types'
+import { mockBots, mockConversations, mockHumanOperators, mockKnowledgeBases, mockMessages, mockModels, mockOverview, mockProxies, mockCosts, mockChat } from '@/mock/data'
+import type { ActiveTask, AlertItem, Bot, Conversation, KnowledgeBase, KnowledgeDocument, MessageAttachment, MessageTimeline, MessageRecord, HandoffStatus, HumanOperator, ModelKind, ModelProfile, ModelProviderId, ModelProviderPreset, ModelProxy, ModelProxyInput, WebSearchMode, ModelTestInput, ProxyTestResult, ModelTestResult, CostRange, CostSummary, Status, SystemOverview, SystemSettings, PipelineOutcome, ChatItem, ChatPage, ChatPreview } from '@/types'
 import { createEmptyOverview } from '@/utils/overview'
+import { rememberMentionNames } from '@/utils/mentions'
 
 type BackendBot = { id: string; name: string; appId: string; enabled: boolean; status: string; lastEventAt?: string; hasSecret: boolean; callbackUrl?: string }
 type BackendModel = { id: string; name: string; kind: ModelKind; baseUrl: string; model: string; dimension?: number; enabled: boolean; isDefault: boolean; hasApiKey: boolean; provider?: ModelProviderId; webSearchMode?: WebSearchMode; reasoningEffort?: 'default' | 'none' | 'minimal' | 'low' | 'medium' | 'high'; extraBody?: Record<string, unknown>; inputPricePerMillion?: number | null; outputPricePerMillion?: number | null; cacheReadPricePerMillion?: number | null; cacheWritePricePerMillion?: number | null; pricePerImage?: number | null; proxyId?: string | null }
-type BackendConversation = { id: string; botId: string; serviceId?: string; channel: string; platformId: string; type: 'group' | 'private'; name: string; enabled: boolean; triggerMode: 'mention_only' | 'always' | 'smart'; contextLimit: number; systemPrompt: string; chatProfileId?: string; botName: string; updatedAt?: string; messageCount?: number | string; memberCount?: number | string; hasFullMessageEvents?: boolean; knowledgeBaseIds?: string[] }
+type BackendConversation = { lastMessage?: ChatPreview | null; imageDailyLimit?: number | null; id: string; botId: string; serviceId?: string; channel: string; platformId: string; type: 'group' | 'private'; name: string; enabled: boolean; triggerMode: 'mention_only' | 'always' | 'smart'; contextLimit: number; systemPrompt: string; chatProfileId?: string; botName: string; updatedAt?: string; messageCount?: number | string; memberCount?: number | string; hasFullMessageEvents?: boolean; knowledgeBaseIds?: string[] }
 type BackendMessagePart = { waveUrl?:string; transcript?:string; type: string; text?: string; filename?: string; contentType?: string; sizeBytes?: number; width?: number; height?: number; previewUrl?: string; url?: string }
 type BackendContextMessage = { name?: string; Name?: string; role?: string; Role?: string; content?: string; Content?: string; parts?: unknown; Parts?: unknown }
 type BackendAgentRun = { contextMessages?: BackendContextMessage[]; retrievedChunks?: Array<{ content?: string; score?: number; documentId?: string; id?: string }> }
@@ -47,9 +48,10 @@ function mapModel(item: BackendModel): ModelProfile {
   return { id: item.id, name: item.name, kind: item.kind, provider: item.provider || 'compatible', model: item.model, baseUrl: item.baseUrl, maskedKey: item.hasApiKey ? '••••••••••••' : '未配置', status: item.enabled ? 'online' : 'offline', latency: 0, dimension: item.dimension, webSearchMode: item.webSearchMode || 'disabled', reasoningEffort: item.reasoningEffort || 'default', extraBody: item.extraBody || {}, inputPricePerMillion: item.inputPricePerMillion ?? null, outputPricePerMillion: item.outputPricePerMillion ?? null, cacheReadPricePerMillion: item.cacheReadPricePerMillion ?? null, cacheWritePricePerMillion: item.cacheWritePricePerMillion ?? null, pricePerImage: item.pricePerImage ?? null, proxyId: item.proxyId || null }
 }
 function mapConversation(item: BackendConversation): Conversation {
-  return { id: item.id, botId: item.botId, serviceId: item.serviceId || '', platformId: item.platformId, botName: item.botName, name: item.name || item.platformId, platform: 'QQ', type: item.type === 'private' ? 'c2c' : 'group', triggerMode: item.enabled ? (item.triggerMode === 'always' && item.type === 'group' ? 'smart' : item.triggerMode) : 'disabled', messageCount: Number(item.messageCount || 0), memberCount: Number(item.memberCount || 0), hasFullMessageEvents: Boolean(item.hasFullMessageEvents), contextLimit: item.contextLimit, knowledgeBaseNames: [], knowledgeBaseIds: item.knowledgeBaseIds || [], chatProfileId: item.chatProfileId || '', systemPrompt: item.systemPrompt, lastActiveAt: dateText(item.updatedAt), enabled: item.enabled }
+  return { id: item.id, botId: item.botId, serviceId: item.serviceId || '', platformId: item.platformId, botName: item.botName, name: item.name || item.platformId, platform: 'QQ', type: item.type === 'private' ? 'c2c' : 'group', triggerMode: item.enabled ? (item.triggerMode === 'always' && item.type === 'group' ? 'smart' : item.triggerMode) : 'disabled', messageCount: Number(item.messageCount || 0), memberCount: Number(item.memberCount || 0), hasFullMessageEvents: Boolean(item.hasFullMessageEvents), contextLimit: item.contextLimit, knowledgeBaseNames: [], knowledgeBaseIds: item.knowledgeBaseIds || [], chatProfileId: item.chatProfileId || '', systemPrompt: item.systemPrompt, lastActiveAt: dateText(item.updatedAt), enabled: item.enabled, lastMessage: item.lastMessage ? (rememberMentionNames(item.lastMessage.mentionNames), item.lastMessage) : null, imageDailyLimit: item.imageDailyLimit ?? null }
 }
 function mapMessage(item: BackendMessage): MessageRecord {
+  rememberMentionNames(item.mentionNames)
   const inputTokens = Number(item.inputTokens || 0)
   const outputTokens = Number(item.outputTokens || 0)
   const run = item.agentRuns?.[0]
@@ -99,6 +101,7 @@ export const api = {
   },
   overview: () => loadOrMock(async () => {
     const raw = await request<BackendOverview>({ url: '/system/overview' })
+    raw.pipelines?.forEach(row => rememberMentionNames(row.mentionNames))
     const view = createEmptyOverview()
     const totalEvents = raw.totalEvents ?? raw.messages24h
     const triggered = raw.triggered ?? 0
@@ -166,7 +169,14 @@ export const api = {
     remove: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/conversations/${id}` }),
     list: () => loadOrMock(async () => (await request<BackendConversation[]>({ url: '/conversations' })).map(mapConversation), mockConversations),
     detail: (id: string) => request<BackendConversation & { knowledgeBaseIds: string[] }>({ url: `/conversations/${id}` }),
-    save: (id: string, data: Partial<Conversation>) => request<{ id: string }>({ method: 'PUT', url: `/conversations/${id}`, data: { name: data.name, enabled: data.triggerMode !== 'disabled', triggerMode: data.triggerMode === 'disabled' ? 'mention_only' : data.triggerMode, contextLimit: data.contextLimit, serviceId: data.serviceId, systemPrompt: data.systemPrompt || '', chatProfileId: data.chatProfileId || '', knowledgeBaseIds: data.knowledgeBaseIds || [] } }, { id }),
+    chat: async (id: string, before?: string | null, limit = 50): Promise<ChatPage> => {
+      const page = await request<{ items?: Array<Omit<ChatItem, 'attachments'> & { attachments?: unknown }>; nextBefore?: string | null }>({ url: `/conversations/${id}/chat`, params: { before: before || undefined, limit } }, before ? { items: [], nextBefore: null } : mockChat(id))
+      const items = (page.items || []).map(item => { rememberMentionNames(item.mentionNames); return { ...item, content: item.content || '', attachments: mapMessageParts(item.attachments) } })
+      return { items, nextBefore: page.nextBefore ?? null }
+    },
+    sendText: (id: string, text: string, target?: { reply?: string; reference?: string }) => request<unknown>({ method: 'POST', url: `/conversations/${id}/delivery/send`, data: { kind: 'text', text, title: '', description: '', url: '', picture: '', keyboard: '', reference: target?.reference || '', event: '', reply: target?.reply || '', asset: '', seconds: 10, privateReply: false, wakeup: false } }),
+    sendImage: (id: string, file: File) => { const data = new FormData(); data.set('kind', '1'); data.set('direct', 'true'); data.set('file', file); return request<unknown>({ method: 'POST', url: `/conversations/${id}/delivery/upload`, data, timeout: 600000 }) },
+    save: (id: string, data: Partial<Conversation>) => request<{ id: string }>({ method: 'PUT', url: `/conversations/${id}`, data: { name: data.name, enabled: data.triggerMode !== 'disabled', triggerMode: data.triggerMode === 'disabled' ? 'mention_only' : data.triggerMode, contextLimit: data.contextLimit, serviceId: data.serviceId, systemPrompt: data.systemPrompt || '', chatProfileId: data.chatProfileId || '', knowledgeBaseIds: data.knowledgeBaseIds || [], imageDailyLimit: data.imageDailyLimit === undefined ? undefined : data.imageDailyLimit } }, { id }),
   },
   messages: {
     list: () => loadOrMock(async () => (await request<BackendMessage[]>({ url: '/messages' })).map(mapMessage), mockMessages),
@@ -193,6 +203,6 @@ export const api = {
       remove: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/system/proxies/${id}` }),
       test: (id: string) => request<ProxyTestResult>({ method: 'POST', url: `/system/proxies/${id}/test`, timeout: 15000 }),
     },
-    updateSettings: (settings: SystemSettings) => request<SystemSettings>({ method: 'PUT', url: '/system/settings', data: { publicBaseUrl: settings.publicBaseUrl, defaultContextLimit: settings.defaultContextLimit, aiRequestTimeoutSeconds: settings.aiRequestTimeoutSeconds, messageRetentionDays: settings.messageRetentionDays } }),
+    updateSettings: (settings: SystemSettings) => request<SystemSettings>({ method: 'PUT', url: '/system/settings', data: { publicBaseUrl: settings.publicBaseUrl, defaultContextLimit: settings.defaultContextLimit, aiRequestTimeoutSeconds: settings.aiRequestTimeoutSeconds, messageRetentionDays: settings.messageRetentionDays, imageDailyLimitDefault: settings.imageDailyLimitDefault } }),
   },
 }

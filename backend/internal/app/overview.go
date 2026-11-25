@@ -9,6 +9,9 @@ import (
 )
 
 type overviewPipeline struct {
+	Outcome      string          `json:"outcome"`
+	TicketNumber *string         `json:"ticketNumber,omitempty"`
+	Error        string          `json:"error,omitempty"`
 	Sender       string          `json:"sender"`
 	SenderID     string          `json:"senderId"`
 	MentionNames json.RawMessage `json:"mentionNames"`
@@ -107,7 +110,14 @@ func (a *App) overview(c *gin.Context) {
 
 func (a *App) overviewPipelines(c *gin.Context) []overviewPipeline {
 	rows, err := a.db.Query(c, `
-		SELECT coalesce(nullif(m.sender_name,''),nullif(cm.display_name,''),cm.qq_username,''),m.sender_id,message_mention_names(m,m.content),message_timeline(m),m.id::text,m.event_at,b.name,c.name,left(m.content,160),m.event_type,
+		SELECT CASE WHEN h.id IS NOT NULL THEN 'handoff'
+ WHEN delivery.failed OR t.status='failed' THEN 'failed'
+ WHEN t.status='merged' THEN 'merged'
+ WHEN delivery.waiting OR t.status IN ('processing','pending') OR gr.status='pending' THEN 'processing'
+ WHEN delivery.sent THEN 'replied'
+ WHEN ar.status='failed' THEN 'failed'
+ ELSE 'skipped' END,h.ticket_number::text,
+ left(coalesce(nullif(delivery.error,''),nullif(t.last_error,''),nullif(ar.error,''),nullif(mc.error,''),'消息处理失败'),120),coalesce(nullif(m.sender_name,''),nullif(cm.display_name,''),cm.qq_username,''),m.sender_id,message_mention_names(m,m.content),message_timeline(m),m.id::text,m.event_at,b.name,c.name,left(m.content,160),m.event_type,
 		       GREATEST(EXTRACT(EPOCH FROM (t.created_at-m.created_at))*1000,0)::bigint,
 		       COALESCE(ar.context_latency_ms,0),COALESCE(ar.retrieval_latency_ms,0),
 		       CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END,
@@ -117,7 +127,7 @@ func (a *App) overviewPipelines(c *gin.Context) []overviewPipeline {
 		       COALESCE(GREATEST(EXTRACT(EPOCH FROM (ot.updated_at-ot.created_at))*1000,0),0)::bigint,
 		       COALESCE(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ot.updated_at,ar.completed_at,t.updated_at)-m.created_at))*1000,0),0)::bigint
 		FROM messages m
- LEFT JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id
+ LEFT JOIN group_reviews gr ON gr.message_id=m.id LEFT JOIN handoffs h ON h.id=m.handoff_id LEFT JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id
  LEFT JOIN inbox_tasks t ON t.message_id=m.id
 		JOIN conversations c ON c.id=m.conversation_id
 		JOIN bots b ON b.id=m.bot_id
@@ -126,7 +136,14 @@ func (a *App) overviewPipelines(c *gin.Context) []overviewPipeline {
 		LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
 		LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true
 		LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
-		WHERE t.id IS NOT NULL OR EXISTS(SELECT FROM group_reviews gr WHERE gr.message_id=m.id)
+		LEFT JOIN LATERAL (
+ SELECT bool_or(coalesce(task.status,x.status) IN ('failed','expired')) AS failed,
+ bool_or(coalesce(task.status,x.status) IN ('pending','processing')) AS waiting,
+ bool_or(coalesce(task.status,x.status)='sent') AS sent,
+ max(task.last_error) FILTER(WHERE task.status IN ('failed','expired')) AS error
+ FROM messages x LEFT JOIN outbox_tasks task ON task.message_id=x.id WHERE x.conversation_id=m.conversation_id
+ AND x.direction='outbound' AND x.event_type<>'PROCESSING_ACK' AND x.reply_to_message_id=m.platform_message_id) delivery ON true
+ WHERE t.id IS NOT NULL OR gr.message_id IS NOT NULL
  ORDER BY m.event_at DESC LIMIT 10`)
 	if err != nil {
 		a.log.Warn("overview pipelines", "error", err)
@@ -138,9 +155,12 @@ func (a *App) overviewPipelines(c *gin.Context) []overviewPipeline {
 		var p overviewPipeline
 		var contextMS, retrievalMS, hits, modelMS, deliveryMS int64
 		var taskStatus, runStatus, modelName, modelError, deliveryStatus string
-		if err := rows.Scan(&p.Sender, &p.SenderID, &p.MentionNames, &p.Timeline, &p.ID, &p.Time, &p.Bot, &p.Conversation, &p.Content, &p.EventType, &p.EventMS, &contextMS, &retrievalMS, &hits, &taskStatus, &runStatus, &modelMS, &modelName, &modelError, &deliveryStatus, &deliveryMS, &p.TotalMS); err != nil {
+		if err := rows.Scan(&p.Outcome, &p.TicketNumber, &p.Error, &p.Sender, &p.SenderID, &p.MentionNames, &p.Timeline, &p.ID, &p.Time, &p.Bot, &p.Conversation, &p.Content, &p.EventType, &p.EventMS, &contextMS, &retrievalMS, &hits, &taskStatus, &runStatus, &modelMS, &modelName, &modelError, &deliveryStatus, &deliveryMS, &p.TotalMS); err != nil {
 			a.log.Warn("scan overview pipeline", "error", err)
 			continue
+		}
+		if p.Outcome != "failed" {
+			p.Error = ""
 		}
 		p.ContextMS = contextMS
 		switch {
@@ -197,10 +217,10 @@ func (a *App) overviewAlerts(c *gin.Context) []map[string]any {
  WHEN detail ~* 'unauthorized|forbidden|permission denied' THEN '服务拒绝访问，请检查凭据和权限'
  ELSE NULL END AS reason FROM (
  SELECT t.id::text,t.updated_at AS time,b.name AS bot,'inbox' AS kind,m.id::text AS "messageId",NULL::text AS "documentId",NULL::text AS "knowledgeBaseId",
- '处理用户消息失败：'||left(m.content,80) AS content,t.last_error AS detail,'消息未生成回复' AS impact,'critical' AS level,false AS recovered
+ '处理用户消息失败：'||left(display_mentions(m,m.content),80) AS content,t.last_error AS detail,'消息未生成回复' AS impact,'critical' AS level,false AS recovered
  FROM inbox_tasks t JOIN messages m ON m.id=t.message_id JOIN bots b ON b.id=m.bot_id WHERE t.status='failed' AND t.dismissed_at IS NULL
  UNION ALL SELECT t.id::text,t.updated_at,b.name,'outbox',i.id::text,NULL,NULL,
- CASE WHEN t.status='expired' THEN '回复已超过发送时限：' ELSE '发送 QQ 消息失败：' END||left(m.content,80),t.last_error,'回复未送达','critical',false
+ CASE WHEN t.status='expired' THEN '回复已超过发送时限：' ELSE '发送 QQ 消息失败：' END||left(display_mentions(m,m.content),80),t.last_error,'回复未送达','critical',false
  FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN bots b ON b.id=m.bot_id
  LEFT JOIN messages i ON i.conversation_id=m.conversation_id AND i.direction='inbound' AND i.platform_message_id=m.reply_to_message_id
  WHERE t.status IN ('failed','expired') AND t.dismissed_at IS NULL AND m.event_type<>'PROCESSING_ACK'

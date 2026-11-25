@@ -12,6 +12,7 @@ import (
 const runtimeSettingsKey = "runtime_defaults"
 
 type RuntimeSettings struct {
+	ImageDailyLimitDefault  int32      `json:"imageDailyLimitDefault"`
 	PublicBaseURL           string     `json:"publicBaseUrl"`
 	DefaultContextLimit     int        `json:"defaultContextLimit"`
 	AIRequestTimeoutSeconds int        `json:"aiRequestTimeoutSeconds"`
@@ -37,6 +38,9 @@ func (a *App) seededRuntimeSettings() RuntimeSettings {
 	return RuntimeSettings{PublicBaseURL: base, DefaultContextLimit: contextLimit, AIRequestTimeoutSeconds: timeout, MessageRetentionDays: retention, UpdatedAt: &now}
 }
 func validateRuntimeSettings(s RuntimeSettings) error {
+	if s.ImageDailyLimitDefault < 0 {
+		return fmt.Errorf("生图每日限额必须为非负整数")
+	}
 	if s.DefaultContextLimit < 1 || s.DefaultContextLimit > 100 {
 		return fmt.Errorf("默认上下文条数必须在 1 到 100 之间")
 	}

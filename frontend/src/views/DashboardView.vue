@@ -25,7 +25,7 @@
                     <i class="alert-dot" />
                     <div class="alert-main">
                       <strong>{{ alertTitle(alert) }}</strong>
-                      <p>{{ alertReason(alert) }}</p>
+                      <p>{{ $at(alertReason(alert)) }}</p>
                       <code v-if="alert.detail" class="alert-detail" :title="alert.detail">{{ alert.detail }}</code>
                       <span class="alert-meta">{{ alert.impact }} · {{ alert.bot }} · {{ alert.time }}</span>
                     </div>
@@ -103,16 +103,19 @@
               <span class="stage-run"><i />{{ task.stage }}</span>
             </div>
           </li>
-          <li v-for="row in recent" :key="row.id" class="live-item" role="link" tabindex="0" :title="'查看这条消息的处理详情'" @click="openMessage(row.id)" @keydown.enter="openMessage(row.id)">
+          <li v-for="row in recent" :key="row.id" class="live-item" :class="{ selected: traceScope === row.id }" role="button" tabindex="0" :aria-pressed="traceScope === row.id" title="在左侧查看这条消息各环节的用时" @click="pickRow(row.id)" @keydown.enter.self="pickRow(row.id)" @keydown.space.self.prevent="pickRow(row.id)">
             <LiveDot :tone="rowTone(row)" />
             <div class="live-main">
               <span class="who"><b>{{ row.sender || '未知用户' }}</b><template v-if="row.conversation"> · {{ row.conversation }}</template> · {{ row.bot }}</span>
               <strong>{{ mentions(row.content, row.mentionNames) || '（没有文字内容）' }}</strong>
             </div>
             <span class="live-side">
-              <span class="live-time">{{ row.time }}</span>
-              <span class="live-ms" :class="{ slow: rowTotal(row) > 5000, failed: rowTone(row) === 'danger' }">{{ rowTone(row) === 'danger' ? '失败' : rowTotal(row) ? (rowTotal(row) / 1000).toFixed(1) + 's' : '—' }}</span>
+              <span class="pill" :class="outcomeOf(row).tone" :title="outcomeOf(row).title">{{ outcomeOf(row).text }}</span>
+              <span class="live-meta"><span>{{ row.time }}</span><span class="live-ms" :class="{ slow: rowTotal(row) > 5000 }">{{ rowTotal(row) ? (rowTotal(row) / 1000).toFixed(1) + 's' : '—' }}</span></span>
             </span>
+            <el-tooltip content="查看处理详情" placement="left" :show-after="300">
+              <button type="button" class="live-open" aria-label="查看这条消息的处理详情" @click.stop="openMessage(row.id)"><el-icon><ArrowRight /></el-icon></button>
+            </el-tooltip>
           </li>
         </TransitionGroup>
         <EmptyState v-if="!overview.active.length && !recent.length" compact title="还没有消息" description="机器人被 @ 或收到私聊后会出现在这里。" />
@@ -125,7 +128,7 @@
 <script setup lang="ts">
 import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, onMounted, ref } from 'vue'
-import { Refresh } from '@element-plus/icons-vue'
+import { ArrowRight, Refresh } from '@element-plus/icons-vue'
 import { api } from '@/api'
 import { agentApi, type LearningStats } from '@/api/agent'
 import EmptyState from '@/components/EmptyState.vue'
@@ -194,12 +197,30 @@ const activeIds = computed(() => new Set(overview.value.active.map(task => task.
 const recent = computed(() => overview.value.pipelines.filter(row => !activeIds.value.has(row.id)).slice(0, 20))
 
 const rowTotal = (row: PipelineRow) => row.timeline ? row.timeline.totalMs ?? 0 : row.totalMs
-function rowTone(row: PipelineRow) {
-  const stages = row.timeline?.stages
-  if (stages?.some(s => s.status === 'failed') || row.delivery.status === 'failed') return 'danger'
+function rowFailed(row: PipelineRow) {
+  return row.outcome ? row.outcome === 'failed' : !!row.timeline?.stages?.some(s => s.status === 'failed') || row.delivery.status === 'failed'
+}
+function rowTone(row: PipelineRow): 'success' | 'warning' | 'danger' | 'muted' {
+  if (rowFailed(row)) return 'danger'
+  if (row.outcome === 'handoff') return 'warning'
+  if (row.outcome === 'skipped' || row.outcome === 'merged') return 'muted'
   if (rowTotal(row) > 5000) return 'warning'
   return 'success'
 }
+// 处理结果：后端给 outcome 就用它，旧数据只能分出失败和完成
+function outcomeOf(row: PipelineRow): { text: string; tone: string; title?: string } {
+  switch (row.outcome) {
+    case 'handoff': return { text: row.ticketNumber ? `转人工 #${row.ticketNumber}` : '转人工', tone: 'warn' }
+    case 'skipped': return { text: '无需回复', tone: 'idle' }
+    case 'merged': return { text: '已合并', tone: 'idle', title: '和同一人前后几条消息合在一起回复' }
+    case 'processing': return { text: '处理中', tone: 'busy' }
+    case 'failed': return { text: '失败', tone: 'bad', title: row.error }
+    case 'replied': return { text: '已回复', tone: 'good' }
+  }
+  return rowFailed(row) ? { text: '失败', tone: 'bad' } : { text: '已完成', tone: 'good' }
+}
+// 点一行：左边“各环节用时”切到这条；再点一次回到平均
+function pickRow(id: string) { traceScope.value = traceScope.value === id ? 'average' : id }
 function average(values: Array<number | null | undefined>) {
   const measured = values.filter((value): value is number => typeof value === 'number' && value > 0)
   return measured.length ? measured.reduce((sum, value) => sum + value, 0) / measured.length : null
@@ -298,8 +319,15 @@ useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_c
 
 .live-scroll { position: relative; flex: 1; min-height: 0; margin: 0 -20px -20px; overflow-y: auto; border-top: 1px solid var(--line); }
 .live-list { position: relative; margin: 0; padding: 0; list-style: none; }
-.live-item { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 56px; padding: 8px 20px; border-bottom: 1px solid var(--line); cursor: pointer; transition: background var(--dur-fast) var(--ease); }
+.live-item { position: relative; display: grid; grid-template-columns: 10px minmax(0, 1fr) auto 28px; align-items: center; gap: 12px; min-height: 56px; padding: 8px 12px 8px 20px; border-bottom: 1px solid var(--line); cursor: pointer; transition: background var(--dur-fast) var(--ease); }
 .live-item:hover { background: var(--surface-2); }
+.live-item::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--primary); transform: scaleY(0); transition: transform var(--dur) var(--ease); }
+.live-item.selected { background: var(--primary-light); }
+.live-item.selected::before { transform: scaleY(1); }
+.live-open { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--faint); cursor: pointer; transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease); }
+.live-open:hover { background: var(--surface-3); color: var(--primary-text); transform: translateX(2px); }
+.live-open:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.live-meta { display: inline-flex; gap: 8px; color: var(--faint, var(--muted)); font-size: 12px; font-variant-numeric: tabular-nums; }
 .live-item.is-active { grid-template-columns: 10px minmax(0, 1fr); background: var(--primary-light); cursor: default; }
 .live-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .live-main strong { overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }

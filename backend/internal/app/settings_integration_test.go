@@ -14,6 +14,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,7 +205,7 @@ func TestImageGenerationConfigurationAndTool(t *testing.T) {
 	if err != nil || settings.ImageProfileID != profile {
 		t.Fatal("selected profile missing", err)
 	}
-	rt := turnRuntime{settings: settings, dryRun: true}
+	rt := turnRuntime{conversationID: cid, senderID: "user", settings: settings, dryRun: true}
 	call := domain.ToolCall{Name: "generate_image", Arguments: `{"prompt":"蓝色的山"}`}
 	if result, err := a.executeTool(ctx, &rt, call, nil); err != nil || result != `{"preview":true}` {
 		t.Fatal(result, err)
@@ -216,6 +217,10 @@ func TestImageGenerationConfigurationAndTool(t *testing.T) {
 	data, err := a.images.Read(ctx, rt.screenshot.StorageKey)
 	if err != nil || !bytes.Equal(data, generated.Bytes()) || calls != 1 {
 		t.Fatal("generated image was not saved once", err)
+	}
+	requestJSON(t, client, "PUT", api+"/system/settings", map[string]int{"imageDailyLimitDefault": 1}, 200)
+	if _, err := a.executeTool(ctx, &rt, call, nil); err == nil || !strings.Contains(err.Error(), "次数已用完") || calls != 1 {
+		t.Fatalf("quota: %v calls=%d", err, calls)
 	}
 	rt.settings.ToolNames = []string{}
 	if _, err := a.executeTool(ctx, &rt, call, nil); err == nil {

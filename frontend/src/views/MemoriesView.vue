@@ -14,31 +14,36 @@
           <span class="spacer" />
           <el-button type="danger" plain :style="{ visibility: selectedIds.length ? 'visible' : 'hidden' }" :loading="deleting" @click="deleteSelected('memories', '用户记忆')">删除选中的 {{ selectedIds.length }} 条</el-button>
         </div>
+        <div class="memory-split fill" :class="{ solo: !currentMember }">
         <section v-if="currentMember" class="panel profile-panel" v-loading="profileLoading">
           <header>
-            <h2>用户档案</h2>
-            <span class="muted">约 {{ profileTokens }} / 2000 token<template v-if="profile.updatedAt"> · {{ formatTime(profile.updatedAt) }} 更新</template></span>
+            <el-segmented v-model="profileTab" :options="[{ label: '人格画像', value: 'persona' }, { label: '文字档案', value: 'text' }]" />
             <span class="spacer" />
-            <el-button v-if="profileSaved" size="small" type="danger" plain @click="clearProfile">清空</el-button>
-            <el-button size="small" type="primary" :disabled="profileDraft === profileSaved" :loading="profileSaving" @click="saveProfile">保存档案</el-button>
+            <el-button v-if="profileSaved || profile.persona" size="small" type="danger" plain @click="clearProfile">清空</el-button>
+            <el-button v-if="profileTab === 'text'" size="small" type="primary" :disabled="profileDraft === profileSaved" :loading="profileSaving" @click="saveProfile">保存档案</el-button>
           </header>
-          <div class="token-meter" :class="{ over: profileTokens > 2000 }"><i :style="{ transform: `scaleX(${Math.min(1, profileTokens / 2000)})` }" /></div>
-          <el-input v-model="profileDraft" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" placeholder="还没有档案。对话后会自动总结，也可以直接填写。" />
+          <div class="profile-scroll">
+            <Transition name="tab" mode="out-in">
+              <PersonaCard v-if="profileTab === 'persona'" key="persona" :persona="profile.persona" />
+              <div v-else key="text" class="profile-text">
+                <p class="muted">AI 每次对话后整体改写，回复时会带上。约 {{ profileTokens }} / 2000 token<template v-if="profile.updatedAt"> · {{ formatTime(profile.updatedAt) }} 更新</template></p>
+                <div class="token-meter" :class="{ over: profileTokens > 2000 }"><i :style="{ transform: `scaleX(${Math.min(1, profileTokens / 2000)})` }" /></div>
+                <el-input v-model="profileDraft" type="textarea" :autosize="{ minRows: 8, maxRows: 24 }" placeholder="还没有档案。对话后会自动总结，也可以直接填写。" />
+              </div>
+            </Transition>
+          </div>
         </section>
         <section class="table-panel">
           <el-table row-key="id" height="100%" :key="JSON.stringify([memoryGroup,memoryUser,memoryQuery])" v-loading="loading" :data="memories" @selection-change="(rows: {id:string}[]) => selectRows(rows)">
             <template #empty><EmptyState :mood="memoryUser ? 'sleepy' : 'thinking'" :title="!directory.length ? '还没有用户记忆' : !memoryGroup ? '先选一个群聊或私聊' : !memoryUser ? '再选一位用户' : '没有匹配的记忆'" :description="!directory.length ? '机器人和用户聊过之后，会自动记下关键信息。' : !memoryGroup ? '在上方选择要查看的会话。' : !memoryUser ? '选择后显示这位用户的全部记忆和档案。' : '换个关键词试试。'" /></template>
             <el-table-column type="selection" reserve-selection width="48" />
-            <el-table-column label="用户" width="150"><template #default="{ row }"><div class="stacked-cell"><strong>{{ row.displayName || '—' }}</strong><span>{{ row.userId }}</span></div></template></el-table-column>
-            <el-table-column label="记忆" min-width="300"><template #default="{ row }"><span v-if="row.pinned" class="pill busy pinned">常驻</span>{{ row.content }}</template></el-table-column>
-            <el-table-column label="类型 / 来源" width="110"><template #default="{ row }"><div class="stacked-cell"><strong>{{ kindText[row.kind] || row.kind }}</strong><span>{{ memorySourceText[row.source] || row.source }}</span></div></template></el-table-column>
-            <el-table-column label="向量" width="88">
-              <template #default="{ row }"><span :class="{ faint: row.hasEmbedding !== true }">{{ row.hasEmbedding === true ? '已生成' : row.hasEmbedding === false ? '未生成' : '—' }}</span></template>
-            </el-table-column>
-            <el-table-column label="发生 / 更新" width="150"><template #default="{ row }"><div class="stacked-cell"><strong>{{ formatTime(row.eventAt || row.updatedAt) }}</strong><span>更新于 {{ formatTime(row.updatedAt) }}</span></div></template></el-table-column>
-            <el-table-column label="操作" width="112" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="editMemory(row)">编辑</el-button><el-button link type="danger" @click="removeMemory(row)">删除</el-button></template></el-table-column>
+            <el-table-column label="记忆" min-width="170"><template #default="{ row }"><span v-if="row.pinned" class="pill busy pinned">常驻</span>{{ $at(row.content) }}</template></el-table-column>
+            <el-table-column label="类型 / 来源" width="110"><template #default="{ row }"><div class="stacked-cell"><strong>{{ kindText[row.kind] || row.kind }}</strong><span>{{ memorySourceText[row.source] || row.source }}<template v-if="row.hasEmbedding === false"> · 无向量</template></span></div></template></el-table-column>
+            <el-table-column label="发生 / 更新" width="112"><template #default="{ row }"><div class="stacked-cell" :title="'更新于 ' + formatTime(row.updatedAt)"><strong>{{ formatTime(row.eventAt || row.updatedAt).slice(5) }}</strong><span>更新 {{ formatTime(row.updatedAt).slice(5, 10) }}</span></div></template></el-table-column>
+            <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="editMemory(row)">编辑</el-button><el-button link type="danger" @click="removeMemory(row)">删除</el-button></template></el-table-column>
           </el-table>
         </section>
+        </div>
     <el-dialog v-model="memoryDialog" title="编辑记忆" width="520px">
       <el-form label-position="top">
         <el-form-item label="内容"><el-input v-model="memoryForm.content" type="textarea" :rows="3" /></el-form-item>
@@ -58,6 +63,7 @@ import { Search, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import EmptyState from '@/components/EmptyState.vue'
 import PageHeader from '@/components/PageHeader.vue'
+import PersonaCard from '@/components/memory/PersonaCard.vue'
 import { agentApi, formatTime, type Memory, type MemoryMember, type UserProfile } from '@/api/agent'
 const kindText: Record<string, string> = { fact: '事实', preference: '偏好', issue: '问题', profile: '资料' }
 const memorySourceText: Record<string, string> = { extracted: '自动', tool: 'AI 记录', admin: '手动' }
@@ -110,6 +116,7 @@ async function loadMemoryTab() {
 const currentMember = computed(() => memoryMembers.value.find(m => m.userId === memoryUser.value))
 const profile = ref<Partial<UserProfile>>({})
 const profileDraft = ref('')
+const profileTab = ref<'persona' | 'text'>('persona')
 const profileSaved = ref('')
 const profileLoading = ref(false)
 const profileSaving = ref(false)
@@ -128,14 +135,14 @@ async function saveProfile() {
   const member = currentMember.value
   if (!member) return
   profileSaving.value = true
-  try { applyProfile(await agentApi.memories.profile(member.conversationId, member.userId).save(profileDraft.value)); ElMessage.success('档案已保存') }
+  try { const saved = await agentApi.memories.profile(member.conversationId, member.userId).save(profileDraft.value); applyProfile({ persona: profile.value.persona, ...saved }); ElMessage.success('档案已保存') }
   catch (error) { ElMessage.error(error instanceof Error ? error.message : '保存失败') }
   finally { profileSaving.value = false }
 }
 async function clearProfile() {
   const member = currentMember.value
   if (!member) return
-  try { await ElMessageBox.confirm('清空这位用户的档案？AI 之后会重新总结。', '清空档案', { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消' }) } catch { return }
+  try { await ElMessageBox.confirm('清空这位用户的人格画像和文字档案？AI 之后会从新的对话里重新总结。', '清空档案', { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消' }) } catch { return }
   applyProfile(await agentApi.memories.profile(member.conversationId, member.userId).clear())
 }
 watch(currentMember, (now, before) => { if (now?.userId !== before?.userId || now?.conversationId !== before?.conversationId) loadProfile() })
@@ -165,7 +172,17 @@ useAdminEvents(['user_profiles'], () => { if (profileDraft.value === profileSave
 </script>
 
 <style scoped>
-.profile-panel { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; padding: 16px 20px; flex: none; }
+.memory-split { display: grid; grid-template-columns: minmax(400px, 1fr) minmax(0, 1fr); gap: 16px; min-height: 0; }
+.memory-split.solo { grid-template-columns: minmax(0, 1fr); }
+.memory-split > .table-panel { display: flex; flex-direction: column; min-height: 0; margin-top: 0; }
+.memory-split > .table-panel > .el-table { flex: 1; min-height: 0; }
+.profile-panel { display: flex; flex-direction: column; gap: 12px; min-height: 0; margin: 0; padding: 16px 20px; }
+.profile-scroll { flex: 1; min-height: 0; margin: 0 -20px -16px; padding: 4px 20px 16px; overflow-y: auto; overscroll-behavior: contain; }
+.profile-text { display: flex; flex-direction: column; gap: 8px; }
+.tab-enter-active, .tab-leave-active { transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.tab-enter-from { opacity: 0; transform: translateY(6px); }
+.tab-leave-to { opacity: 0; }
+@media (max-width: 1100px) { .memory-split { grid-template-columns: 1fr; } .memory-split > .table-panel { min-height: 480px; } .profile-scroll { max-height: 640px; } }
 .pinned { margin-right: 6px; }
 .profile-panel header { display: flex; align-items: center; gap: 10px; min-height: 28px; }
 .profile-panel header .el-button + .el-button { margin-left: 0; }

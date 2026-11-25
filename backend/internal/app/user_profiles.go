@@ -19,12 +19,13 @@ func (a *App) userProfile(c *gin.Context) {
 		fail(c, 400, "invalid_request", "无效会话")
 		return
 	}
+	var persona json.RawMessage
 	var content string
 	var updated *time.Time
 	var err error
 	switch c.Request.Method {
 	case "GET":
-		err = a.db.QueryRow(c, `SELECT coalesce(p.content,''),p.updated_at FROM conversations c LEFT JOIN user_profiles p ON p.conversation_id=c.id AND p.platform_user_id=$2 WHERE c.id=$1`, cid, uid).Scan(&content, &updated)
+		err = a.db.QueryRow(c, `SELECT coalesce(p.content,''),p.updated_at,p.persona FROM conversations c LEFT JOIN user_profiles p ON p.conversation_id=c.id AND p.platform_user_id=$2 WHERE c.id=$1`, cid, uid).Scan(&content, &updated, &persona)
 	case "PUT":
 		var in struct{ Content *string }
 		if c.ShouldBindJSON(&in) != nil || in.Content == nil || privateMemory(*in.Content) || agent.EstimateTokens(*in.Content) > 2000 {
@@ -32,7 +33,7 @@ func (a *App) userProfile(c *gin.Context) {
 			return
 		}
 		content = strings.TrimSpace(*in.Content)
-		err = a.db.QueryRow(c, `INSERT INTO user_profiles(conversation_id,platform_user_id,content) SELECT id,$2,$3 FROM conversations WHERE id=$1 ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET content=excluded.content,updated_at=now() RETURNING updated_at`, cid, uid, content).Scan(&updated)
+		err = a.db.QueryRow(c, `INSERT INTO user_profiles(conversation_id,platform_user_id,content) SELECT id,$2,$3 FROM conversations WHERE id=$1 ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET content=excluded.content,updated_at=now() RETURNING updated_at,persona`, cid, uid, content).Scan(&updated, &persona)
 	case "DELETE":
 		_, err = a.db.Exec(c, "DELETE FROM user_profiles WHERE conversation_id=$1 AND platform_user_id=$2", cid, uid)
 	}
@@ -44,7 +45,7 @@ func (a *App) userProfile(c *gin.Context) {
 		fail(c, 500, "database_error", "读写档案失败")
 		return
 	}
-	ok(c, gin.H{"conversationId": cid, "userId": uid, "content": content, "updatedAt": updated})
+	ok(c, gin.H{"persona": persona, "conversationId": cid, "userId": uid, "content": content, "updatedAt": updated})
 }
 
 func (a *App) applyExtractedMemory(ctx context.Context, ev evaluation, previous, existing, cid, uid, name, bot, mid string, at time.Time, s agent.Settings) error {
@@ -82,8 +83,8 @@ func (a *App) applyExtractedMemory(ctx context.Context, ev evaluation, previous,
 	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", cid+"/"+uid); err != nil {
 		return err
 	}
-	var excluded bool
-	if err = tx.QueryRow(ctx, "SELECT context_excluded FROM messages WHERE id=$1 FOR SHARE", mid).Scan(&excluded); err != nil {
+	var excluded, personaApplied bool
+	if err = tx.QueryRow(ctx, "SELECT context_excluded,persona_applied FROM messages WHERE id=$1 FOR SHARE", mid).Scan(&excluded, &personaApplied); err != nil {
 		return err
 	}
 	if excluded {
@@ -101,6 +102,22 @@ func (a *App) applyExtractedMemory(ctx context.Context, ev evaluation, previous,
 		}
 		if tag.RowsAffected() == 0 {
 			return errors.New("用户档案已更新，重新提取")
+		}
+	}
+	if !personaApplied && len(ev.Persona) > 0 {
+		var old map[string]any
+		err = tx.QueryRow(ctx, `SELECT (SELECT persona FROM user_profiles WHERE conversation_id=$1 AND platform_user_id=$2)`, cid, uid).Scan(&old)
+		if err != nil {
+			return err
+		}
+		if next := mergePersona(old, ev.Persona, time.Now()); next != nil {
+			if _, err = tx.Exec(ctx, "UPDATE messages SET persona_applied=true WHERE id=$1", mid); err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `INSERT INTO user_profiles(conversation_id,platform_user_id,display_name,persona) VALUES($1,$2,$3,$4) ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET persona=excluded.persona,updated_at=now()`, cid, uid, name, next)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	for i, m := range ev.Memories {

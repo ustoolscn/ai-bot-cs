@@ -13,7 +13,7 @@ export const navGroups: NavGroup[] = [
     { path: '/handoffs', label: '人工台', description: '转人工的用户，在这里直接回复', icon: icon(Headset), badge: 'handoffs', keywords: '转人工 回复 结单' },
   ] },
   { title: 'QQ 群', items: [
-    { path: '/conversations', label: '群与会话', description: '每个群的接待设置、成员、群管理和发消息', icon: icon(ChatDotRound), keywords: '成员 入群 审批 禁言 发言审核 发送 群管理 客服学习' },
+    { path: '/conversations', label: '群与会话', description: '像 QQ 一样直接在群里聊天，接待设置和群管理在设置里', icon: icon(ChatDotRound), keywords: '成员 入群 审批 禁言 发言审核 发送 群管理 客服学习' },
     { path: '/schedules', label: '定时任务', description: '每天定时向群里发送内容', icon: icon(Clock), keywords: '定时 发送 天气 日报' },
     { path: '/blacklist', label: '黑名单', description: '拉黑的群成员，机器人不理睬并可自动踢出', icon: icon(CircleClose), keywords: '拉黑 踢人' },
   ] },

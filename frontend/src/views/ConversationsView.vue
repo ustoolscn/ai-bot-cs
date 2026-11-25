@@ -1,75 +1,167 @@
 <template>
-  <div class="content-page page-fill">
-    <PageHeader title="群与会话" description="机器人加入的群和私聊。点任意一行进入这个会话，设置接待方式、管理成员和群规则、发消息。">
+  <div class="content-page wide page-fill">
+    <PageHeader title="群与会话" description="左边选一个群或私聊，右边直接以机器人身份聊天；接待方式、成员、群管理在右上角的“设置”里。">
       <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
     </PageHeader>
-    <div class="toolbar">
-      <el-input v-model="search" placeholder="搜索名称或会话 ID" :prefix-icon="Search" clearable />
-      <el-segmented v-model="type" :options="[{ label: '全部', value: 'all' }, { label: '群聊', value: 'group' }, { label: '私聊', value: 'c2c' }]" />
-      <el-select v-model="trigger" aria-label="按回复方式筛选">
-        <el-option label="全部回复方式" value="all" /><el-option label="被 @ 时回复" value="mention_only" /><el-option label="AI 判断后回复" value="smart" /><el-option label="已停用" value="disabled" />
-      </el-select>
-      <span class="spacer" />
-      <span class="muted">{{ filtered.length }} 个会话</span>
+
+    <div class="inbox chat-workspace">
+      <aside class="inbox-list">
+        <div class="inbox-filter list-tools">
+          <el-input v-model="search" placeholder="搜索群名或会话 ID" :prefix-icon="Search" clearable />
+          <el-segmented v-model="type" :options="[{ label: '全部', value: 'all' }, { label: '群聊', value: 'group' }, { label: '私聊', value: 'c2c' }]" />
+        </div>
+        <div v-loading="loading && !conversations.length" class="inbox-items">
+          <button v-for="c in filtered" :key="c.id" type="button" class="inbox-item conv-item" :class="{ active: c.id === props.id, off: c.triggerMode === 'disabled' }" @click="open(c)">
+            <span class="conv-avatar" :class="c.type"><el-icon><component :is="c.type === 'group' ? ChatDotRound : User" /></el-icon></span>
+            <span class="conv-text">
+              <span class="inbox-item-top"><strong>{{ c.name }}</strong><time>{{ shortTime(c.lastMessage?.at) }}</time></span>
+              <p>{{ preview(c) }}</p>
+              <small>{{ c.botName }}<template v-if="c.triggerMode === 'disabled'"> · 已停用</template><template v-else-if="c.type === 'group' && c.triggerMode === 'smart' && !c.hasFullMessageEvents"> · <b class="danger-text">未收到群全量消息</b></template></small>
+            </span>
+          </button>
+          <EmptyState v-if="!loading && !filtered.length" compact :title="conversations.length ? '没有匹配的会话' : '还没有会话'" :description="conversations.length ? '换个关键词或筛选试试。' : '把机器人拉进 QQ 群，或有人私聊它之后，会自动出现在这里。'" />
+        </div>
+      </aside>
+
+      <section class="inbox-detail">
+        <template v-if="current">
+          <header class="inbox-detail-head">
+            <span class="conv-avatar" :class="current.type"><el-icon><component :is="current.type === 'group' ? ChatDotRound : User" /></el-icon></span>
+            <div>
+              <h2>{{ current.name }}</h2>
+              <p>{{ summary }}</p>
+            </div>
+            <div class="head-actions">
+              <el-button :icon="Setting" @click="openSettings()">设置</el-button>
+              <el-dropdown trigger="click" @command="onCommand">
+                <el-button :icon="MoreFilled" aria-label="更多操作" />
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="messages" :icon="ChatLineSquare">消息记录</el-dropdown-item>
+                    <el-dropdown-item v-if="current.type === 'group'" command="sync" :icon="Refresh">同步群名</el-dropdown-item>
+                    <el-dropdown-item command="delete" :icon="Delete" divided class="danger-item">删除会话</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+          </header>
+          <ChatPanel :conversation="current" @open-settings="openSettings" />
+        </template>
+        <div v-else class="inbox-placeholder"><EmptyState :title="props.id && !loading ? '找不到这个会话' : '选择左侧的一个群或私聊'" :description="props.id && !loading ? '它可能已被删除，或者机器人已经退出了这个群。' : '可以查看聊天记录，并直接以机器人身份发消息。'" /></div>
+      </section>
     </div>
-    <section class="table-panel">
-      <el-table v-loading="loading" :data="filtered" row-key="id" class="clickable-rows" height="100%" @row-click="open">
-        <template #empty><EmptyState title="还没有会话" description="把机器人拉进 QQ 群，或有人私聊它之后，会自动出现在这里。" /></template>
-        <el-table-column label="会话" min-width="260">
-          <template #default="{ row }">
-            <div class="cell-primary">
-              <span class="entity-icon small"><el-icon><component :is="row.type === 'group' ? ChatDotRound : User" /></el-icon></span>
-              <span><strong>{{ row.name }}</strong><small>{{ row.botName }} · {{ row.type === 'group' ? '群聊' : '私聊' }}</small></span>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="回复方式" width="170">
-          <template #default="{ row }">
-            <div class="stacked-cell">
-              <StatusBadge :status="row.triggerMode === 'disabled' ? 'offline' : 'online'" :text="triggerText(row.triggerMode)" />
-              <span v-if="row.type === 'group' && row.triggerMode === 'smart' && !row.hasFullMessageEvents" class="danger-text">未收到群全量消息</span>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="知识库" min-width="180"><template #default="{ row }"><span :class="{ faint: !row.knowledgeBaseNames.length }">{{ row.knowledgeBaseNames.join('、') || '未绑定' }}</span></template></el-table-column>
-        <el-table-column label="成员" width="90" align="right"><template #default="{ row }"><span class="num">{{ row.memberCount }}</span></template></el-table-column>
-        <el-table-column label="消息" width="100" align="right"><template #default="{ row }"><span class="num">{{ row.messageCount.toLocaleString() }}</span></template></el-table-column>
-        <el-table-column prop="lastActiveAt" label="最近活跃" width="130" />
-        <el-table-column width="96" align="right">
-          <template #default="{ row }">
-            <div class="row-tail">
-              <el-tooltip content="删除这个会话" placement="top"><button type="button" class="row-delete" :aria-label="'删除 ' + row.name" @click.stop="remove(row)"><el-icon><Delete /></el-icon></button></el-tooltip>
-              <el-icon class="row-chevron"><ArrowRight /></el-icon>
-            </div>
-          </template>
-        </el-table-column>
-      </el-table>
-    </section>
+
+    <el-drawer v-model="drawer" :size="drawerSize" :title="current ? current.name + ' · 设置' : '设置'" class="conv-drawer" append-to-body destroy-on-close @closed="clearTab">
+      <template v-if="current">
+        <nav class="drawer-tabs" aria-label="设置分区">
+          <button v-for="s in sections" :key="s.id" type="button" :class="{ active: section === s.id }" @click="section = s.id">
+            <strong>{{ s.label }}</strong><small>{{ s.hint }}</small>
+          </button>
+        </nav>
+        <Transition name="tab" mode="out-in">
+          <div :key="section" class="drawer-body">
+            <ConversationSettings v-if="section === 'settings'" :conversation="current" @saved="load" />
+            <MembersPanel v-else-if="section === 'members'" :conversation-id="current.id" :conversation-name="current.name" :is-group="current.type === 'group'" :bot-id="current.botId" :bot-name="current.botName" @synced="load" />
+            <GroupRulesPanel v-else-if="section === 'rules'" :conversation-id="current.id" />
+            <QQGroupPanel v-else-if="section === 'qq'" :conversation-id="current.id" />
+            <ComposePanel v-else-if="section === 'send'" :row="current" />
+          </div>
+        </Transition>
+      </template>
+    </el-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
-import { useAdminEvents } from '@/composables/useAdminEvents'
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { ArrowRight, ChatDotRound, Delete, Refresh, Search, User } from '@element-plus/icons-vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ChatDotRound, ChatLineSquare, Delete, MoreFilled, Refresh, Search, Setting, User } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
+import { useAdminEvents } from '@/composables/useAdminEvents'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
-import StatusBadge from '@/components/StatusBadge.vue'
+import ChatPanel from '@/components/conversation/ChatPanel.vue'
+import ConversationSettings from '@/components/conversation/ConversationSettings.vue'
+import MembersPanel from '@/components/conversation/MembersPanel.vue'
+import GroupRulesPanel from '@/components/conversation/GroupRulesPanel.vue'
+import QQGroupPanel from '@/components/conversation/QQGroupPanel.vue'
+import ComposePanel from '@/components/conversation/ComposePanel.vue'
+import { formatMentions } from '@/utils/mentions'
 import type { Conversation } from '@/types'
 
+const props = defineProps<{ id?: string }>()
+const route = useRoute()
 const router = useRouter()
 const conversations = ref<Conversation[]>([])
 const loading = ref(false)
 const search = ref('')
 const type = ref('all')
-const trigger = ref('all')
-const filtered = computed(() => conversations.value.filter(c => (!search.value || `${c.name}${c.id}`.includes(search.value)) && (type.value === 'all' || c.type === type.value) && (trigger.value === 'all' || c.triggerMode === trigger.value)))
 
-function triggerText(value: string) { return ({ mention_only: '被 @ 时回复', smart: 'AI 判断后回复', always: '每条都回复', disabled: '已停用' } as Record<string, string>)[value] || value }
-function open(row: Conversation) { router.push({ name: 'conversation', params: { id: row.id } }) }
+const atOf = (c: Conversation) => c.lastMessage?.at ? new Date(c.lastMessage.at).getTime() : 0
+const filtered = computed(() => conversations.value
+  .filter(c => (!search.value || `${c.name}${c.id}${c.platformId}`.includes(search.value)) && (type.value === 'all' || c.type === type.value))
+  .sort((a, b) => atOf(b) - atOf(a)))
+const current = computed(() => conversations.value.find(c => c.id === props.id))
+
+const triggerText: Record<string, string> = { mention_only: '被 @ 时回复', smart: 'AI 判断后回复', always: '每条都回复', disabled: '已停用' }
+const summary = computed(() => {
+  const c = current.value
+  if (!c) return ''
+  return [c.botName, c.type === 'group' ? `群聊 · ${c.memberCount} 人` : '私聊', triggerText[c.triggerMode], c.knowledgeBaseNames.length ? '知识库：' + c.knowledgeBaseNames.join('、') : ''].filter(Boolean).join(' · ')
+})
+function preview(c: Conversation) {
+  const m = c.lastMessage
+  if (!m) return '还没有消息'
+  const who = m.direction === 'outbound' ? m.senderName || '机器人' : m.senderName || '群成员'
+  return `${who}：${formatMentions(m.content, m.mentionNames) || '[图片]'}`
+}
+function shortTime(value?: string) {
+  if (!value) return ''
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  if (d.toDateString() === now.toDateString()) return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  const days = Math.round((new Date(now.toDateString()).getTime() - new Date(d.toDateString()).getTime()) / 86400000)
+  if (days === 1) return '昨天'
+  return d.getFullYear() === now.getFullYear() ? `${d.getMonth() + 1}/${d.getDate()}` : `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`
+}
+
+function open(c: Conversation) { if (c.id !== props.id) router.push({ name: 'conversation', params: { id: c.id } }) }
+
+// 设置抽屉：原来详情页的各个分区。?tab= 打开对应分区（别处的链接还能用）
+const drawer = ref(false)
+const section = ref('settings')
+const drawerSize = 'min(920px, 94vw)'
+const sections = computed(() => {
+  const group = current.value?.type === 'group'
+  return [
+    { id: 'settings', label: '接待设置', hint: '客服、回复方式、知识库、生图限额' },
+    { id: 'members', label: group ? '成员与客服学习' : '用户', hint: group ? '官方客服、拉黑、记忆' : '记忆、拉黑' },
+    ...(group ? [
+      { id: 'rules', label: '群规则', hint: '自动审批、发言审核' },
+      { id: 'qq', label: '入群与禁言', hint: '群资料、入群申请、禁言' },
+    ] : []),
+    { id: 'send', label: '高级发送', hint: 'Markdown、卡片、按钮、素材' },
+  ]
+})
+function openSettings(tab?: string) {
+  section.value = tab && sections.value.some(s => s.id === tab) ? tab : 'settings'
+  drawer.value = true
+}
+function clearTab() { if (route.query.tab) router.replace({ query: {} }) }
+watch(() => [route.query.tab, current.value?.id], () => { const tab = route.query.tab; if (tab && current.value) openSettings(String(tab)) }, { immediate: true })
+
+async function onCommand(cmd: string) {
+  const c = current.value
+  if (!c) return
+  if (cmd === 'messages') router.push('/messages')
+  else if (cmd === 'sync') {
+    try { const { name } = await api.conversations.syncName(c.id); c.name = name; ElMessage.success(`已同步群名：${name}`) }
+    catch (e) { ElMessage.error(e instanceof Error ? e.message : '群名同步失败') }
+  } else if (cmd === 'delete') remove(c)
+}
 async function remove(row: Conversation) {
   const kind = row.type === 'group' ? '群' : '私聊'
   try {
@@ -79,14 +171,18 @@ async function remove(row: Conversation) {
     await api.conversations.remove(row.id)
     conversations.value = conversations.value.filter(c => c.id !== row.id)
     ElMessage.success(`已删除「${row.name}」`)
+    router.replace({ name: 'conversations' })
   } catch (e) { ElMessage.error(e instanceof Error ? e.message : '删除失败') }
 }
+
 async function load() {
   loading.value = true
   try {
     const [items, kbs] = await Promise.all([api.conversations.list(), api.knowledge.list()])
     for (const item of items) item.knowledgeBaseNames = (item.knowledgeBaseIds || []).map(id => kbs.find(kb => kb.id === id)?.name || id)
     conversations.value = items
+    // 没选会话时默认打开最近活跃的那个，和 QQ 一样进来就能聊
+    if (!props.id && filtered.value.length && window.innerWidth > 900) router.replace({ name: 'conversation', params: { id: filtered.value[0].id } })
   } catch (e) { ElMessage.error(e instanceof Error ? e.message : '会话加载失败') } finally { loading.value = false }
 }
 onMounted(load)
@@ -94,9 +190,32 @@ useAdminEvents(['conversations', 'messages', 'conversation_members', 'bots', 'kn
 </script>
 
 <style scoped>
-.row-tail { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; }
-.row-delete { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--faint); cursor: pointer; opacity: 0; transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), transform var(--dur) var(--ease); transform: translateX(4px); }
-.el-table__row:hover .row-delete, .row-delete:focus-visible { opacity: 1; transform: none; }
-.row-delete:hover { background: var(--danger-light); color: var(--danger); }
-@media (hover: none) { .row-delete { opacity: 1; } }
+.chat-workspace { grid-template-columns: 300px minmax(0, 1fr); min-height: 520px; }
+.list-tools { flex-direction: column; align-items: stretch; gap: 8px; height: auto; padding: 12px; }
+.conv-item { display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: center; gap: 10px; padding: 10px 14px; }
+.conv-item.off { opacity: .62; }
+.conv-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.conv-avatar { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: 50%; background: var(--primary-light); color: var(--primary-text); font-size: 17px; }
+.conv-avatar.c2c { background: var(--success-light); color: var(--success); }
+.inbox-detail-head .conv-avatar { width: 32px; height: 32px; font-size: 15px; }
+.inbox-detail-head .head-actions { display: flex; gap: 8px; }
+.inbox-detail-head .head-actions .el-button + .el-button { margin-left: 0; }
+.danger-text { color: var(--danger); font-weight: 400; }
+:deep(.danger-item) { color: var(--danger); }
+
+.drawer-tabs { display: flex; gap: 4px; margin: -4px 0 16px; padding: 4px; border-radius: var(--radius-md); background: var(--surface-3); overflow-x: auto; }
+.drawer-tabs button { display: flex; flex: 1 0 auto; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 120px; padding: 6px 12px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text-2); text-align: left; cursor: pointer; transition: background var(--dur) var(--ease), color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
+.drawer-tabs button:hover { color: var(--text); }
+.drawer-tabs button.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(17, 24, 39, .08); }
+.drawer-tabs strong { font-size: 13px; font-weight: 600; }
+.drawer-tabs small { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.tab-enter-active, .tab-leave-active { transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.tab-enter-from { opacity: 0; transform: translateY(6px); }
+.tab-leave-to { opacity: 0; }
+
+@media (max-width: 900px) {
+  .chat-workspace { grid-template-columns: 1fr; }
+  .chat-workspace .inbox-list { max-height: 260px; }
+  .chat-workspace .inbox-detail { min-height: 560px; }
+}
 </style>

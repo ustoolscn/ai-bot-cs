@@ -49,6 +49,7 @@
       </el-table-column>
       <el-table-column label="入群时间" width="150"><template #default="{ row }">{{ row.joinedAt ? formatTime(row.joinedAt) : '—' }}</template></el-table-column>
       <el-table-column label="消息" width="80" align="right"><template #default="{ row }"><span class="num">{{ row.messageCount }}</span></template></el-table-column>
+      <el-table-column label="今日生图" width="90" align="right"><template #default="{ row }"><span class="num" :class="{ faint: !row.imagesToday }">{{ row.imagesToday ?? 0 }}</span></template></el-table-column>
       <el-table-column label="记忆" width="80" align="right">
         <template #default="{ row }"><el-button v-if="Number(row.memoryCount) > 0" link type="primary" @click="showMemories(row)">{{ row.memoryCount }}</el-button><span v-else class="faint">0</span></template>
       </el-table-column>
@@ -69,7 +70,7 @@
 
   <el-dialog v-model="memDialog" :title="`${memUser} 的记忆`" width="520px" append-to-body>
     <div class="record-list">
-      <div v-for="m in mems" :key="m.id" class="record-item"><span>{{ m.content }}</span><small>{{ formatTime(m.updatedAt) }}</small></div>
+      <div v-for="m in mems" :key="m.id" class="record-item"><span>{{ $at(m.content) }}</span><small>{{ formatTime(m.updatedAt) }}</small></div>
     </div>
   </el-dialog>
 </template>
