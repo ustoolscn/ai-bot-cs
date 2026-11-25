@@ -14,7 +14,7 @@ type BackendContextMessage = { name?: string; Name?: string; role?: string; Role
 type BackendAgentRun = { contextMessages?: BackendContextMessage[]; retrievedChunks?: Array<{ content?: string; score?: number; documentId?: string; id?: string }> }
 type BackendMessage = { mentionNames?: Record<string, string>; timeline?: MessageTimeline; id: string; question: string; parts?: unknown; answer?: string; answerParts?: unknown; senderName?: string; senderId?: string; senderBlockedIds?: string[] | null; botId?: string; conversationId?: string; conversationType?: string; eventType?: string; status: string; eventAt?: string; platformMessageId?: string; conversationName: string; botName: string; model?: string; inputTokens?: number; outputTokens?: number; cachedInputTokens?: number; cacheWriteTokens?: number; cacheHitRate?: number | null; estimatedCost?: number | null; modelLatencyMs?: number; contextLatencyMs?: number; retrievalLatencyMs?: number; deliveryLatencyMs?: number; latencyMs?: number; knowledgeHits?: number; deliveryStatus?: string; deliveryError?: string; traceId?: string; agentRuns?: BackendAgentRun[]; handoffStatus?: HandoffStatus | null; ticketNumber?: string | null; humanRepliedAt?: string | null; humanRepliedBy?: string | null; humanReplyContent?: string | null; humanDeliveryStatus?: MessageRecord['humanDeliveryStatus']; humanDeliveryError?: string | null }
 type BackendKnowledgeBase = { id: string; name: string; description: string; embeddingProfileId?: string; embeddingModel: string; documentCount: number | string; entryCount?: number | string; chunkCount: number | string; createdAt?: string }
-type BackendKnowledgeDocument = { id: string; name: string; status: string; sizeBytes: number; chunkCount?: number | string; lastError?: string; createdAt?: string; updatedAt?: string }
+type BackendKnowledgeDocument = { id: string; name: string; status: string; sizeBytes: number; chunkCount?: number | string; imageCount?: number | string; lastError?: string; createdAt?: string; updatedAt?: string }
 type BackendKnowledgeDetail = BackendKnowledgeBase & { documents: BackendKnowledgeDocument[] }
 type BackendPipeline = { sender?: string; senderId?: string; mentionNames?: Record<string, string>; timeline?: MessageTimeline; id: string; time: string; bot: string; conversation: string; content: string; eventType?: string; eventMs: number; contextMs: number; contextLabel?: string; contextStatus?: Status; retrieval: { status: Status; ms: number; hit: string }; model: { status: Status; ms?: number; name?: string }; delivery: { status: Status; ms?: number }; totalMs: number }
 type BackendAlert = AlertItem
@@ -81,7 +81,7 @@ export function sanitizeServiceError(value?: string): string | undefined {
     .replace(/((?:[?&]|\b)(?:api[_-]?key|token|access[_-]?token)=)[^&\s]+/gi, '$1[已隐藏凭证]')
 }
 export function mapDocument(item: BackendKnowledgeDocument): KnowledgeDocument {
-  return { id: item.id, name: item.name, type: (item.name.split('.').pop() || 'TXT').toUpperCase().replace('JPEG', 'JPG'), size: `${Math.max(1, Math.round(item.sizeBytes / 1024))} KB`, chunks: Number(item.chunkCount || 0), status: asStatus(item.status), updatedAt: dateText(item.updatedAt || item.createdAt), lastError: sanitizeServiceError(item.lastError) }
+  return { id: item.id, name: item.name, type: (item.name.split('.').pop() || 'TXT').toUpperCase().replace('JPEG', 'JPG'), size: `${Math.max(1, Math.round(item.sizeBytes / 1024))} KB`, chunks: Number(item.chunkCount || 0), images: Number(item.imageCount || 0), status: asStatus(item.status), updatedAt: dateText(item.updatedAt || item.createdAt), lastError: sanitizeServiceError(item.lastError) }
 }
 function mapKnowledgeBase(item: BackendKnowledgeBase, documents: BackendKnowledgeDocument[] = []): KnowledgeBase {
   const documentCount = Number(item.documentCount ?? documents.length)
@@ -89,7 +89,7 @@ function mapKnowledgeBase(item: BackendKnowledgeBase, documents: BackendKnowledg
   const ready = documents.filter((document) => document.status === 'ready').length
   const progress = documents.length ? Math.round(ready / documents.length * 100) : (chunkCount > 0 ? 100 : 0)
   const hasFailure = documents.some((document) => document.status === 'failed')
-  return { id: item.id, name: item.name, description: item.description, scope: 'global', documents: documentCount, entries: Number(item.entryCount || 0), chunks: chunkCount, progress, status: hasFailure ? 'failed' : progress === 100 ? 'success' : documents.some((document) => document.status === 'processing') ? 'processing' : 'pending', model: item.embeddingModel, updatedAt: dateText(item.createdAt), documentList: documents.map(mapDocument) }
+  return { id: item.id, name: item.name, description: item.description, scope: 'global', documents: documentCount, entries: Number(item.entryCount || 0), chunks: chunkCount, progress, status: hasFailure ? 'failed' : progress === 100 ? 'success' : documents.some((document) => document.status === 'processing') ? 'processing' : 'pending', model: item.embeddingModel, embeddingProfileId: item.embeddingProfileId || '', updatedAt: dateText(item.createdAt), documentList: documents.map(mapDocument) }
 }
 
 export const api = {
@@ -190,7 +190,9 @@ export const api = {
     retryDocument: (id: string, documentId: string) => request<{ queued: boolean }>({ method: 'POST', url: `/knowledge-bases/${id}/documents/${documentId}/retry` }, { queued: true }),
     deleteDocument: (id: string, documentId: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/knowledge-bases/${id}/documents/${documentId}` }, { deleted: true }),
     deleteDocumentIndex: (id: string, documentId: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/knowledge-bases/${id}/documents/${documentId}/index` }, { deleted: true }),
-    test: (id: string, query: string) => loadOrMock(() => request<Array<{ content: string; score: number }>>({ method: 'POST', url: `/knowledge-bases/${id}/search`, data: { query, limit: 8 } }), [{ content: '命中知识片段：机器人通过统一消息入口接收 QQ Webhook 事件。', score: 0.92 }]),
+    changeModel: (id: string, embeddingProfileId: string) => request<{ changed: boolean }>({ method: 'PUT', url: `/knowledge-bases/${id}/embedding-profile`, data: { embeddingProfileId } }),
+    chunkImageUrl: (id: string, chunkId: string) => `/api/knowledge-bases/${id}/chunks/${chunkId}/image`,
+    test: (id: string, query: string) => loadOrMock(() => request<Array<{ id?: string; content: string; score: number; hasImage?: boolean }>>({ method: 'POST', url: `/knowledge-bases/${id}/search`, data: { query, limit: 8 } }), [{ content: '命中知识片段：机器人通过统一消息入口接收 QQ Webhook 事件。', score: 0.92 }]),
   },
   system: {
     retryFailed: () => request<{ queued: number }>({ method: 'POST', url: '/system/retry-failed' }, { queued: 0 }),

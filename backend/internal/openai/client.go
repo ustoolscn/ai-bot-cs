@@ -55,9 +55,19 @@ func (c *Client) do(ctx context.Context, path string, payload any, out any) erro
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		if c.Provider == "google" {
+			req.Header.Set("x-goog-api-key", c.APIKey)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		}
 	}
-	resp, err := c.HTTP.Do(req)
+	httpClient := c.HTTP
+	if c.Provider == "google" {
+		clone := *c.HTTP
+		clone.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		httpClient = &clone
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -478,6 +488,9 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 }
 
 func (c *Client) EmbedWithUsage(ctx context.Context, texts []string) ([][]float32, domain.ChatResult, error) {
+	if c.Provider == "google" {
+		return c.GoogleTexts(ctx, texts, false)
+	}
 	var resp struct {
 		Usage tokenUsage `json:"usage"`
 		Data  []struct {

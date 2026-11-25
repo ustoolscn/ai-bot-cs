@@ -3,6 +3,14 @@ import type { ModelProviderId, ModelProviderPreset, WebSearchMode } from '@/type
 /** 官方服务商预置。后端提供 /model-provider-presets 时以后端为准，这里是兜底。 */
 export const modelProviderPresets: ModelProviderPreset[] = [
   {
+    id: 'google',
+    name: 'Google Gemini 官方',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    webSearchMode: 'disabled',
+    keyUrl: 'https://aistudio.google.com/apikey',
+    models: [{ kind: 'embedding', model: 'gemini-embedding-2', label: 'Gemini Embedding 2（图文）' }],
+  },
+  {
     id: 'deepseek',
     name: 'DeepSeek 官方',
     baseUrl: 'https://api.deepseek.com',

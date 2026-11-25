@@ -341,7 +341,16 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 	}
 
 	finishShape := a.startStage(ctx, j.MessageID, "回复整理与分段")
-	caption, attached := extractOutboundImage(out.content)
+	cleaned, imageID := selectedKnowledgeImage(out.content, rt.hits)
+	caption, attached := extractOutboundImage(cleaned)
+	if imageID != "" && !rt.handoff && rt.screenshot == nil && rt.statusImage == nil {
+		part, e := a.prepareKnowledgeImage(ctx, imageID)
+		if e == nil {
+			attached = []domain.ContentPart{part}
+		} else {
+			a.log.Warn("knowledge image unavailable", "chunk", imageID, "error", e)
+		}
+	}
 	replyParts := a.shapeReply(settings, j.ConversationType, caption)
 	finishShape(fmt.Sprintf("生成 %d 段回复", len(replyParts)), nil)
 	hitsJSON, _ := json.Marshal(rt.hits)
@@ -892,10 +901,10 @@ func (a *App) retrieve(ctx context.Context, kbIDs []string, query string, embedd
 			lastErr = e
 			continue
 		}
-		rs, e := a.db.Query(ctx, `SELECT c.id::text,c.document_id::text,c.entry_id::text AS entry_id,c.content,1-(c.embedding <=> $1::vector) AS score
+		rs, e := a.db.Query(ctx, `SELECT c.id::text,c.document_id::text,c.entry_id::text AS entry_id,c.content,EXISTS(SELECT FROM knowledge_chunk_images ci WHERE ci.chunk_id=c.id) AS "hasImage",1-(c.embedding <=> $1::vector) AS score
 			FROM knowledge_chunks c LEFT JOIN knowledge_entries e ON e.id=c.entry_id
-			WHERE c.knowledge_base_id=$2 AND (c.entry_id IS NULL OR e.status='published')
-			ORDER BY c.embedding <=> $1::vector LIMIT 8`, vectorLiteral(v), kbID)
+			WHERE c.knowledge_base_id=$2 AND EXISTS(SELECT FROM knowledge_bases WHERE id=$2 AND embedding_profile_id=$3) AND (c.entry_id IS NULL OR e.status='published')
+			ORDER BY c.embedding <=> $1::vector LIMIT 8`, vectorLiteral(v), kbID, *pid)
 		if e != nil {
 			lastErr = e
 			continue
@@ -910,6 +919,9 @@ func (a *App) retrieve(ctx context.Context, kbIDs []string, query string, embedd
 	var b strings.Builder
 	for i, h := range all {
 		fmt.Fprintf(&b, "[%d] %v\n", i+1, h["content"])
+		if h["hasImage"] == true {
+			fmt.Fprintf(&b, "本段附图。如回答实际使用本段且配图能帮助用户，请在答复末尾加 [[kb-image:%s]]。每次最多一张。\n", h["id"])
+		}
 	}
 	if len(all) == 0 && lastErr != nil {
 		return "", nil, lastErr

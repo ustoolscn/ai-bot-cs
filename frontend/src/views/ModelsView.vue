@@ -1,6 +1,6 @@
 <template>
   <div class="content-page">
-    <PageHeader title="模型" description="机器人用到的 AI 模型。DeepSeek、智谱 GLM、TypeSafe 官方接口只需填 API Key，也支持任何 OpenAI 兼容接口。改完可以点“测试”确认能用。"><el-button type="primary" :icon="Plus" @click="openCreate('chat')">添加模型</el-button></PageHeader>
+    <PageHeader title="模型" description="机器人用到的 AI 模型。DeepSeek、智谱 GLM、TypeSafe、Google Gemini 官方接口只需填 API Key，也支持任何 OpenAI 兼容接口。改完可以点“测试”确认能用。"><el-button type="primary" :icon="Plus" @click="openCreate('chat')">添加模型</el-button></PageHeader>
     <template v-for="group in groups" :key="group.kind">
       <div class="list-group-title"><h2>{{ group.title }}</h2><span>{{ group.hint }}</span></div>
       <div v-if="group.items.length" class="entity-list">
@@ -24,7 +24,7 @@
       <el-form label-position="top">
         <el-form-item label="接口来源">
           <el-segmented v-model="providerChoice" :options="providerOptions" class="provider-switch" />
-          <small class="form-tip" v-if="currentPreset">{{ presetModels('chat').length ? '官方接口，地址和联网方式已预置，只需要填 API Key。' : '只判断群消息要不要回复，不生成文字。地址已预置，只需要填 API Key。' }}<a v-if="currentPreset.keyUrl" :href="currentPreset.keyUrl" target="_blank" rel="noopener">去{{ currentPreset.name.replace(' 官方','') }}获取 Key</a></small>
+          <small class="form-tip" v-if="currentPreset">{{ presetModels('chat').length ? '官方接口，地址和联网方式已预置，只需要填 API Key。' : presetModels('embedding').length ? '图文多模态向量，知识库里的图片和截图可以直接检索。地址已预置，只需要填 API Key。' : '只判断群消息要不要回复，不生成文字。地址已预置，只需要填 API Key。' }}<a v-if="currentPreset.keyUrl" :href="currentPreset.keyUrl" target="_blank" rel="noopener">去{{ currentPreset.name.replace(' 官方','') }}获取 Key</a></small>
           <small class="form-tip" v-else>任何 OpenAI 兼容接口，包括第三方中转。</small>
         </el-form-item>
         <div class="form-grid">
@@ -43,7 +43,7 @@
             </div>
             <small class="form-tip">{{ discoverTip }}</small>
           </el-form-item>
-          <el-form-item v-if="form.kind==='embedding'" label="向量维度"><el-input-number v-model="form.dimension" :min="128" :max="4096" /></el-form-item>
+          <el-form-item v-if="form.kind==='embedding'" label="向量维度"><el-input-number v-model="form.dimension" :min="128" :max="form.provider==='google' ? 3072 : 4096" /></el-form-item>
           <el-form-item v-else-if="form.kind==='chat'" label="思考等级"><el-select v-model="form.reasoningEffort"><el-option label="模型默认" value="default" /><el-option label="关闭（none）" value="none" /><el-option label="最小（minimal）" value="minimal" /><el-option label="低（low）" value="low" /><el-option label="中（medium）" value="medium" /><el-option label="高（high）" value="high" /></el-select><small class="form-tip">仅支持推理等级的模型会生效；不确定时使用“模型默认”。</small></el-form-item>
         </div>
         <el-form-item v-if="currentPreset && form.kind==='chat'" label="联网搜索">

@@ -14,7 +14,7 @@ export interface Bot {
   lastEventAt: string
 }
 
-export type ModelProviderId = 'compatible' | 'deepseek' | 'zhipu' | 'typesafe'
+export type ModelProviderId = 'compatible' | 'deepseek' | 'zhipu' | 'typesafe' | 'google'
 /** decision = 只做判断、不生成文字的模型（目前仅 TypeSafe Jev） */
 export type ModelKind = 'chat' | 'embedding' | 'image' | 'decision'
 export type WebSearchMode = 'disabled' | 'qwen' | 'openai' | 'responses' | 'custom' | 'deepseek' | 'zhipu'
@@ -266,6 +266,7 @@ export interface KnowledgeDocument {
   type: string
   size: string
   chunks: number
+  images?: number
   status: Status
   updatedAt: string
   lastError?: string
@@ -282,6 +283,7 @@ export interface KnowledgeBase {
   progress: number
   status: Status
   model: string
+  embeddingProfileId?: string
   updatedAt: string
   documentList: KnowledgeDocument[]
 }

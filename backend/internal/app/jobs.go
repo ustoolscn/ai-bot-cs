@@ -539,6 +539,13 @@ func (a *App) jobIndexEntry(ctx context.Context, entryID string) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	var current *string
+	if err = tx.QueryRow(ctx, "SELECT embedding_profile_id::text FROM knowledge_bases WHERE id=$1 FOR SHARE", kbID).Scan(&current); err != nil {
+		return err
+	}
+	if current == nil || *current != *pid {
+		return nil
+	}
 	if _, err = tx.Exec(ctx, "DELETE FROM knowledge_chunks WHERE entry_id=$1", entryID); err == nil {
 		_, err = tx.Exec(ctx, "INSERT INTO knowledge_chunks(knowledge_base_id,entry_id,chunk_index,content,embedding,metadata) VALUES($1,$2,0,$3,$4::vector,$5::jsonb)", kbID, entryID, text, vectorLiteral(v[0]), jsonString(map[string]any{"type": "faq"}))
 	}

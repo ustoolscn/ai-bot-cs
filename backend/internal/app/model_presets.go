@@ -19,6 +19,7 @@ type providerPreset struct {
 }
 
 var modelProviderPresets = []providerPreset{
+	{"google", "Google Gemini 官方", "https://generativelanguage.googleapis.com/v1beta", "disabled", "https://aistudio.google.com/apikey", []presetModel{{"embedding", "gemini-embedding-2", "Gemini Embedding 2", false}}},
 	{"deepseek", "DeepSeek 官方", "https://api.deepseek.com", "deepseek", "https://platform.deepseek.com/api_keys", []presetModel{
 		{"chat", "deepseek-flash", "DeepSeek Flash", true},
 		{"chat", "deepseek-v4-pro", "DeepSeek V4 Pro", true},

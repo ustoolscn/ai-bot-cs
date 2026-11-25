@@ -802,7 +802,7 @@ func (m *upstreamMock) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		m.qqRetractions = append(m.qqRetractions, qqSendRequest{Path: r.URL.Path, Authorization: r.Header.Get("Authorization")})
 		m.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
-	case strings.HasPrefix(r.URL.Path, "/v2/groups/") && strings.HasSuffix(r.URL.Path, "/files"):
+	case (strings.HasPrefix(r.URL.Path, "/v2/groups/") || strings.HasPrefix(r.URL.Path, "/v2/users/")) && strings.HasSuffix(r.URL.Path, "/files"):
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -812,7 +812,7 @@ func (m *upstreamMock) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		m.qqUploads = append(m.qqUploads, qqSendRequest{Path: r.URL.Path, Authorization: r.Header.Get("Authorization"), Body: body})
 		m.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{"file_info": "mock-file-info"})
-	case strings.HasPrefix(r.URL.Path, "/v2/groups/") && strings.HasSuffix(r.URL.Path, "/messages"):
+	case (strings.HasPrefix(r.URL.Path, "/v2/groups/") || strings.HasPrefix(r.URL.Path, "/v2/users/")) && strings.HasSuffix(r.URL.Path, "/messages"):
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)

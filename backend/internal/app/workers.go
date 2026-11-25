@@ -256,8 +256,8 @@ func (a *App) retryInbox(ctx context.Context, j inboxJob, cause error) error {
 }
 
 type documentJob struct {
-	ID, KBID, StorageKey, ProfileID, Description string
-	Attempts                                     int
+	ID, KBID, StorageKey, ProfileID, Description, Name string
+	Attempts                                           int
 }
 
 func (a *App) claimDocument(ctx context.Context) (documentJob, error) {
@@ -267,7 +267,7 @@ func (a *App) claimDocument(ctx context.Context) (documentJob, error) {
 	}
 	defer tx.Rollback(ctx)
 	var j documentJob
-	err = tx.QueryRow(ctx, `SELECT d.id::text,d.knowledge_base_id::text,d.storage_key,k.embedding_profile_id::text,d.attempts,d.image_description FROM knowledge_documents d JOIN knowledge_bases k ON k.id=d.knowledge_base_id WHERE d.status='pending' AND d.next_attempt_at<=now() ORDER BY d.created_at FOR UPDATE OF d SKIP LOCKED LIMIT 1`).Scan(&j.ID, &j.KBID, &j.StorageKey, &j.ProfileID, &j.Attempts, &j.Description)
+	err = tx.QueryRow(ctx, `SELECT d.id::text,d.knowledge_base_id::text,d.storage_key,k.embedding_profile_id::text,d.attempts,d.image_description,d.name FROM knowledge_documents d JOIN knowledge_bases k ON k.id=d.knowledge_base_id WHERE d.status='pending' AND d.next_attempt_at<=now() ORDER BY d.created_at FOR UPDATE OF d SKIP LOCKED FOR SHARE OF k SKIP LOCKED LIMIT 1`).Scan(&j.ID, &j.KBID, &j.StorageKey, &j.ProfileID, &j.Attempts, &j.Description, &j.Name)
 	if err != nil {
 		return j, err
 	}
@@ -286,14 +286,6 @@ func (a *App) processDocument(ctx context.Context) error {
 	if err != nil {
 		return a.retryDocumentJob(ctx, j, fmt.Errorf("读取原始文件失败: %w", err))
 	}
-	body, err := knowledge.Extract(ctx, j.StorageKey, data, j.Description)
-	if err != nil {
-		return a.retryDocumentJob(ctx, j, err)
-	}
-	chunks := knowledge.Chunk(body, 1000, 150)
-	if len(chunks) == 0 {
-		return a.retryDocumentJob(ctx, j, fmt.Errorf("文档内容为空，无法建立索引"))
-	}
 	client, kind, _, configuredDimension, err := a.loadModelDetails(ctx, j.ProfileID)
 	if err != nil {
 		return a.retryDocumentJob(ctx, j, fmt.Errorf("加载 Embedding 模型配置失败: %w", err))
@@ -301,14 +293,59 @@ func (a *App) processDocument(ctx context.Context) error {
 	if kind != "embedding" {
 		return a.retryDocumentJob(ctx, j, fmt.Errorf("模型配置错误：知识库绑定的配置类型为 %s，不是 embedding", kind))
 	}
+	var sections []knowledge.Section
+	if client.Provider == "google" {
+		resolve := func(name string) ([]byte, error) {
+			var keys []string
+			e := a.db.QueryRow(ctx, "SELECT ARRAY(SELECT storage_key FROM knowledge_documents WHERE knowledge_base_id=$1 AND name=$2 LIMIT 2)", j.KBID, name).Scan(&keys)
+			if e != nil {
+				return nil, e
+			}
+			if len(keys) != 1 {
+				return nil, fmt.Errorf("Markdown 配图 %s 需要在同一知识库中有一个同名图片，请上传或排除重名后重试", name)
+			}
+			return a.files.Read(ctx, keys[0])
+		}
+		sections, err = knowledge.Multimodal(ctx, j.StorageKey, data, j.Description, resolve)
+	} else {
+		var body string
+		body, err = knowledge.Extract(ctx, j.StorageKey, data, j.Description)
+		for _, ch := range knowledge.Chunk(body, 1000, 150) {
+			sections = append(sections, knowledge.Section{Text: ch})
+		}
+	}
+	if err != nil {
+		return a.retryDocumentJob(ctx, j, err)
+	}
+	if len(sections) == 0 {
+		return a.retryDocumentJob(ctx, j, fmt.Errorf("文档没有可索引的文字或图片"))
+	}
+	chunks := make([]string, len(sections))
+	for i, s := range sections {
+		chunks[i] = s.Text
+		if s.Text == "" && len(s.Image) > 0 {
+			chunks[i] = "配图：" + j.Name
+		}
+	}
 	vectors := make([][]float32, 0, len(chunks))
 	actualDimension := 0
-	for start := 0; start < len(chunks); start += 16 {
-		end := start + 16
-		if end > len(chunks) {
-			end = len(chunks)
+	for start := 0; start < len(chunks); {
+		end := start + 1
+		var v [][]float32
+		var e error
+		if s := sections[start]; len(s.Image) > 0 {
+			began := time.Now()
+			var vec []float32
+			var usage domain.ChatResult
+			vec, usage, e = client.GoogleImage(ctx, s.Text, s.MIME, s.Image)
+			a.recordModelCall(ctx, "", "", j.ProfileID, "embedding_index", usage, time.Since(began).Milliseconds(), e)
+			v = [][]float32{vec}
+		} else {
+			for end < len(chunks) && end-start < 16 && len(sections[end].Image) == 0 {
+				end++
+			}
+			v, e = a.embed(ctx, client, j.ProfileID, "embedding_index", chunks[start:end])
 		}
-		v, e := a.embed(ctx, client, j.ProfileID, "embedding_index", chunks[start:end])
 		if e != nil {
 			return a.retryDocumentJob(ctx, j, fmt.Errorf("生成 Embedding 失败（批次 %d-%d，共 %d 个分块）: %w", start+1, end, len(chunks), e))
 		}
@@ -329,6 +366,7 @@ func (a *App) processDocument(ctx context.Context) error {
 			}
 		}
 		vectors = append(vectors, v...)
+		start = end
 	}
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
@@ -338,7 +376,11 @@ func (a *App) processDocument(ctx context.Context) error {
 	_, err = tx.Exec(ctx, "DELETE FROM knowledge_chunks WHERE document_id=$1", j.ID)
 	for i, ch := range chunks {
 		if err == nil {
-			_, err = tx.Exec(ctx, "INSERT INTO knowledge_chunks(knowledge_base_id,document_id,chunk_index,content,embedding) VALUES($1,$2,$3,$4,$5::vector)", j.KBID, j.ID, i, ch, vectorLiteral(vectors[i]))
+			var id string
+			err = tx.QueryRow(ctx, "INSERT INTO knowledge_chunks(knowledge_base_id,document_id,chunk_index,content,embedding) VALUES($1,$2,$3,$4,$5::vector) RETURNING id::text", j.KBID, j.ID, i, ch, vectorLiteral(vectors[i])).Scan(&id)
+			if err == nil && len(sections[i].Image) > 0 {
+				_, err = tx.Exec(ctx, "INSERT INTO knowledge_chunk_images(chunk_id,mime_type,data) VALUES($1,$2,$3)", id, sections[i].MIME, sections[i].Image)
+			}
 		}
 	}
 	if err == nil {

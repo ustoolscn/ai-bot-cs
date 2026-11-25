@@ -7,7 +7,7 @@
       <el-upload :show-file-list="false" :accept="accept" :before-upload="upload"><el-button type="primary" :icon="Upload">上传文档</el-button></el-upload>
     </div>
     <el-table :data="base.documentList" row-key="id">
-      <el-table-column label="文件名" min-width="200"><template #default="{ row }"><div class="cell-primary"><span class="file-type">{{ row.type }}</span><span><strong>{{ row.name }}</strong><small>{{ row.size }} · {{ row.chunks }} 个分块</small></span></div></template></el-table-column>
+      <el-table-column label="文件名" min-width="200"><template #default="{ row }"><div class="cell-primary"><span class="file-type">{{ row.type }}</span><span><strong>{{ row.name }}</strong><small>{{ row.size }} · {{ row.chunks }} 个分块<template v-if="row.images"> · {{ row.images }} 张图</template></small></span></div></template></el-table-column>
       <el-table-column label="状态" width="130"><template #default="{ row }"><div class="stacked-cell"><StatusBadge :status="row.status" /><button v-if="row.lastError" type="button" class="error-link" :title="row.lastError" @click="showError(row.name, row.lastError)">查看失败原因</button></div></template></el-table-column>
       <el-table-column prop="updatedAt" label="更新时间" width="110" />
       <el-table-column label="操作" width="216" fixed="right"><template #default="{ row }"><el-button v-if="row.status === 'failed' || row.status === 'unindexed' || row.lastError" link type="primary" @click="retryDocument(row.id)">重新索引</el-button><el-button v-if="row.chunks > 0" link @click="deleteIndex(row)">删除索引</el-button><el-button link type="danger" @click="deleteFile(row)">删除文件</el-button></template></el-table-column>
@@ -25,7 +25,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { CopyDocument, Document, Refresh, Upload } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, sanitizeServiceError } from '@/api'
@@ -36,6 +36,8 @@ const props = defineProps<{ base: KnowledgeBase }>()
 const emit = defineEmits<{ changed: [] }>()
 const errorVisible = ref(false), errorTitle = ref('失败原因'), selectedError = ref('')
 const accept = '.txt,.md,.pdf,.docx,.png,.jpg,.jpeg,.webp'
+// 图文向量模型直接理解图片，不必再填说明
+const multimodal = computed(() => /gemini-embedding/i.test(props.base.model))
 const imageVisible = ref(false), imageFile = ref<File | null>(null), imagePreview = ref(''), imageDescription = ref(''), uploading = ref(false)
 
 function showError(name: string, error: string) { errorTitle.value = `${name} · 失败原因`; selectedError.value = error; errorVisible.value = true }
@@ -59,7 +61,7 @@ async function upload(file: File) {
   const ext = file.name.split('.').pop()?.toLowerCase() || ''
   if (!accept.split(',').includes(`.${ext}`)) { ElMessage.error(ext === 'doc' ? '旧版 .doc 请另存为 .docx 后上传' : '仅支持 TXT、MD、PDF、DOCX、PNG、JPG、WEBP'); return false }
   if (file.size > 10 * 1024 * 1024) { ElMessage.error('单文件不能超过 10 MB'); return false }
-  if (file.type.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
+  if (!multimodal.value && (file.type.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp'].includes(ext))) {
     imageFile.value = file; imagePreview.value = URL.createObjectURL(file); imageDescription.value = ''; imageVisible.value = true
     return false
   }

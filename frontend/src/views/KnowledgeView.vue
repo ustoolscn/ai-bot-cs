@@ -67,7 +67,7 @@
           <div><span>文档</span><strong>{{ current.documents }}</strong></div>
           <div><span>问答</span><strong>{{ current.entries ?? 0 }}</strong></div>
           <div><span>分块</span><strong>{{ current.chunks.toLocaleString() }}</strong></div>
-          <div><span>Embedding 模型</span><strong class="truncate kb-model" :title="current.model">{{ current.model }}</strong></div>
+          <div><span>Embedding 模型</span><div class="kb-model-line"><strong class="truncate kb-model" :title="current.model">{{ current.model }}</strong><button type="button" class="summary-action" @click="openModelSwitch">更换</button></div></div>
           <div><span>索引进度</span><strong>{{ current.progress }}%</strong><div class="progress-line" :class="{ 'is-failed': current.status === 'failed' }"><i :style="{ width: current.progress + '%' }" /></div></div>
         </div>
 
@@ -185,8 +185,16 @@
         <el-form-item label="测试问题"><el-input v-model="testQuery" type="textarea" :rows="3" placeholder="输入一个真实用户问题，Ctrl/⌘ + Enter 开始检索" @keydown.enter.ctrl.exact.prevent="runTest" @keydown.enter.meta.exact.prevent="runTest" /></el-form-item>
         <el-button type="primary" :loading="testing" @click="runTest">开始检索</el-button>
       </el-form>
-      <div v-if="testResults.length" class="test-results"><div v-for="result in testResults" :key="result.content"><strong>相似度 {{ (result.score * 100).toFixed(1) }}%</strong><p>{{ result.content }}</p></div></div>
+      <div v-if="testResults.length" class="test-results"><div v-for="result in testResults" :key="result.id || result.content"><strong>相似度 {{ (result.score * 100).toFixed(1) }}%<span v-if="result.hasImage" class="hit-image-tag">带截图</span></strong><p>{{ result.content }}</p><a v-if="result.hasImage && result.id && current" :href="api.knowledge.chunkImageUrl(current.id, result.id)" target="_blank" rel="noopener" class="hit-image"><img :src="api.knowledge.chunkImageUrl(current.id, result.id)" alt="命中片段的截图" loading="lazy"></a></div></div>
     </el-drawer>
+
+    <el-dialog v-model="modelSwitchVisible" title="更换向量模型" width="480px">
+      <el-form label-position="top">
+        <el-form-item label="Embedding 模型"><el-select v-model="modelSwitchId"><el-option v-for="model in embeddingModels" :key="model.id" :label="`${model.name} · ${model.model}`" :value="model.id" /></el-select></el-form-item>
+      </el-form>
+      <p class="switch-note">切换后会用新模型重新处理这个知识库的全部文档和问答，不用重新上传。处理完成前，只能查到已经处理好的部分；重新处理会按新模型计费。</p>
+      <template #footer><el-button @click="modelSwitchVisible = false">取消</el-button><el-button type="primary" :loading="modelSwitching" :disabled="!modelSwitchId || modelSwitchId === current?.embeddingProfileId" @click="switchModel">切换并重建</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
@@ -427,7 +435,17 @@ async function createKb() {
 }
 
 // ---- 检索测试（针对当前知识库）----
-const testVisible = ref(false), testQuery = ref(''), testing = ref(false), testResults = ref<Array<{ content: string; score: number }>>([])
+const testVisible = ref(false), testQuery = ref(''), testing = ref(false), testResults = ref<Array<{ id?: string; content: string; score: number; hasImage?: boolean }>>([])
+
+// ---- 更换向量模型（会重建索引）----
+const modelSwitchVisible = ref(false), modelSwitchId = ref(''), modelSwitching = ref(false)
+function openModelSwitch() { modelSwitchId.value = current.value?.embeddingProfileId || ''; modelSwitchVisible.value = true }
+async function switchModel() {
+  if (!current.value || !modelSwitchId.value) return
+  modelSwitching.value = true
+  try { await api.knowledge.changeModel(current.value.id, modelSwitchId.value); modelSwitchVisible.value = false; ElMessage.success('已切换，正在重建索引'); await refreshCurrent() }
+  catch (e) { ElMessage.error(e instanceof Error ? e.message : '切换失败') } finally { modelSwitching.value = false }
+}
 async function runTest() {
   if (!current.value || !testQuery.value.trim()) return
   testing.value = true
@@ -446,6 +464,14 @@ useAdminEvents(['knowledge_bases', 'knowledge_documents', 'knowledge_entries', '
 .list-divider { margin: 8px 0 4px; padding: 12px 10px 4px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12px; }
 .knowledge-list-item .count-pill { margin-left: 0; animation: pop-in var(--dur) var(--ease); }
 .kb-model { font-size: 14px; }
+.kb-model-line { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.kb-model-line .kb-model { min-width: 0; }
+.summary-action { flex: none; padding: 0; border: 0; background: none; color: var(--primary-text); font-size: 12px; cursor: pointer; }
+.summary-action:hover { text-decoration: underline; }
+.switch-note { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.hit-image-tag { margin-left: 8px; padding: 1px 6px; border-radius: var(--radius-xs); background: var(--surface-3); color: var(--text-2); font-weight: 500; }
+.hit-image { display: block; margin-top: 8px; }
+.hit-image img { display: block; max-width: 100%; max-height: 240px; border: 1px solid var(--line); border-radius: var(--radius-sm); object-fit: contain; background: var(--surface-2); animation: rise var(--dur-slow) var(--ease) backwards; }
 .kb-tabs { padding: 0 20px 20px; }
 .kb-tabs :deep(.el-tabs__header) { margin-bottom: 12px; }
 .kb-toolbar { margin-bottom: 12px; }

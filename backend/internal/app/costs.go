@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"ai-bot/backend/internal/domain"
 	"ai-bot/backend/internal/openai"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -15,7 +16,13 @@ type usageScope struct{ run, message, conversation string }
 
 func (a *App) embed(ctx context.Context, cl *openai.Client, profile, kind string, inputs []string) ([][]float32, error) {
 	start := time.Now()
-	vectors, usage, err := cl.EmbedWithUsage(ctx, inputs)
+	embed := cl.EmbedWithUsage
+	if cl.Provider == "google" {
+		embed = func(ctx context.Context, texts []string) ([][]float32, domain.ChatResult, error) {
+			return cl.GoogleTexts(ctx, texts, kind == "embedding_index")
+		}
+	}
+	vectors, usage, err := embed(ctx, inputs)
 	a.recordModelCall(ctx, "", "", profile, kind, usage, time.Since(start).Milliseconds(), err)
 	return vectors, err
 }

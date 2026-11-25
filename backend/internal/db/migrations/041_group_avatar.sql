@@ -1,4 +1,4 @@
-ALTER TABLE conversations ADD COLUMN qq_group_info_checked_at timestamptz;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS qq_group_info_checked_at timestamptz;
 
 INSERT INTO agent_jobs(kind,payload,dedupe_key)
 SELECT 'qq_group_identity',jsonb_build_object('conversationId',id),'qq_group_identity:'||id::text

@@ -148,6 +148,8 @@ func (a *App) Router() http.Handler {
 	auth.DELETE("/knowledge-bases/:id/documents/:documentId", a.deleteDocument)
 	auth.DELETE("/knowledge-bases/:id/documents/:documentId/index", a.deleteDocumentIndex)
 	auth.POST("/knowledge-bases/:id/documents/:documentId/retry", a.retryDocument)
+	auth.GET("/knowledge-bases/:id/chunks/:chunkId/image", a.knowledgeImage)
+	auth.PUT("/knowledge-bases/:id/embedding-profile", a.changeKnowledgeProfile)
 	auth.POST("/knowledge-bases/:id/search", a.searchKB)
 	auth.GET("/system/overview", a.overview)
 	auth.GET("/system/settings", a.getSystemSettings)
@@ -468,6 +470,10 @@ func (a *App) saveModel(c *gin.Context) {
 		fail(c, 400, "invalid_request", "模型配置不完整")
 		return
 	}
+	if in.Provider == "google" && (in.Model != "gemini-embedding-2" || (in.Dimension != nil && (*in.Dimension < 128 || *in.Dimension > 3072))) {
+		fail(c, 400, "invalid_request", "Google 渠道支持 gemini-embedding-2，维度范围为 128 至 3072")
+		return
+	}
 	if in.Kind == "image" || in.Kind == "decision" {
 		in.Dimension = nil
 	}
@@ -516,6 +522,18 @@ func (a *App) saveModel(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback(c)
+	if id != "" {
+		var bound bool
+		err = tx.QueryRow(c, `SELECT EXISTS(SELECT FROM knowledge_bases k WHERE k.embedding_profile_id=p.id) AND (provider<>$2 OR model<>$3 OR dimension IS DISTINCT FROM $4::int OR kind<>$5 OR base_url<>$6) FROM model_profiles p WHERE id=$1 FOR UPDATE`, id, in.Provider, in.Model, in.Dimension, in.Kind, strings.TrimRight(in.BaseURL, "/")).Scan(&bound)
+		if err != nil {
+			fail(c, 400, "invalid_model", "无法读取要更新的模型配置")
+			return
+		}
+		if bound {
+			fail(c, 409, "profile_in_use", "该配置已绑定知识库，请新建模型配置并切换知识库以重建索引")
+			return
+		}
+	}
 	if id != "" && in.APIKey == "" {
 		var savedBase string
 		if err := tx.QueryRow(c, "SELECT base_url FROM model_profiles WHERE id=$1 FOR UPDATE", id).Scan(&savedBase); err != nil {
@@ -958,9 +976,9 @@ func (a *App) createKB(c *gin.Context) {
 }
 func (a *App) getKB(c *gin.Context) {
 	rows, err := a.db.Query(c, `SELECT k.id::text,k.name,k.description,k.embedding_profile_id::text AS "embeddingProfileId",k.embedding_model AS "embeddingModel",
-		count(d.id) AS "documentCount",(SELECT count(*) FROM knowledge_entries e WHERE e.knowledge_base_id=k.id AND e.status='published') AS "entryCount",COALESCE(json_agg(json_build_object('id',d.id::text,'name',d.name,'status',d.status,'sizeBytes',d.size_bytes,'chunkCount',COALESCE(dc.chunk_count,0),'lastError',d.last_error,'createdAt',d.created_at,'updatedAt',d.updated_at) ORDER BY d.created_at DESC) FILTER(WHERE d.id IS NOT NULL),'[]') AS documents
+		count(d.id) AS "documentCount",(SELECT count(*) FROM knowledge_entries e WHERE e.knowledge_base_id=k.id AND e.status='published') AS "entryCount",COALESCE(json_agg(json_build_object('id',d.id::text,'name',d.name,'status',d.status,'sizeBytes',d.size_bytes,'chunkCount',COALESCE(dc.chunk_count,0),'imageCount',dc.image_count,'lastError',d.last_error,'createdAt',d.created_at,'updatedAt',d.updated_at) ORDER BY d.created_at DESC) FILTER(WHERE d.id IS NOT NULL),'[]') AS documents
 	FROM knowledge_bases k LEFT JOIN knowledge_documents d ON d.knowledge_base_id=k.id
-	LEFT JOIN LATERAL (SELECT count(*) AS chunk_count FROM knowledge_chunks WHERE document_id=d.id) dc ON true
+	LEFT JOIN LATERAL (SELECT count(*) AS chunk_count,count(ci.chunk_id) AS image_count FROM knowledge_chunks c LEFT JOIN knowledge_chunk_images ci ON ci.chunk_id=c.id WHERE c.document_id=d.id) dc ON true
 	WHERE k.id=$1 GROUP BY k.id`, c.Param("id"))
 	if err != nil {
 		fail(c, 500, "database_error", "读取失败")
@@ -1104,7 +1122,7 @@ func (a *App) searchKB(c *gin.Context) {
 		fail(c, 502, "model_error", err.Error())
 		return
 	}
-	rows, err := a.db.Query(c, `SELECT id::text,document_id::text,content,1-(embedding <=> $1::vector) AS score FROM knowledge_chunks WHERE knowledge_base_id=$2 ORDER BY embedding <=> $1::vector LIMIT $3`, vectorLiteral(vs[0]), c.Param("id"), in.Limit)
+	rows, err := a.db.Query(c, `SELECT id::text,document_id::text,content,EXISTS(SELECT FROM knowledge_chunk_images ci WHERE ci.chunk_id=knowledge_chunks.id) AS "hasImage",1-(embedding <=> $1::vector) AS score FROM knowledge_chunks WHERE knowledge_base_id=$2 AND EXISTS(SELECT FROM knowledge_bases WHERE id=$2 AND embedding_profile_id=$4) ORDER BY embedding <=> $1::vector LIMIT $3`, vectorLiteral(vs[0]), c.Param("id"), in.Limit, pid)
 	if err != nil {
 		fail(c, 500, "search_error", "检索失败")
 		return

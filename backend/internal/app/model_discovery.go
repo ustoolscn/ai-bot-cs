@@ -99,7 +99,14 @@ func fetchModelIDs(ctx context.Context, client *http.Client, base, key, provider
 	if err != nil {
 		return nil, errors.New("服务地址无效")
 	}
-	req.Header.Set("Authorization", "Bearer "+key)
+	if provider == "google" {
+		req.Header.Set("x-goog-api-key", key)
+		q := req.URL.Query()
+		q.Set("pageSize", "1000")
+		req.URL.RawQuery = q.Encode()
+	} else {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -122,7 +129,7 @@ func fetchModelIDs(ctx context.Context, client *http.Client, base, key, provider
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if json.Unmarshal(body, &list) != nil || (provider == "typesafe" && list.Models == nil) || (provider != "typesafe" && list.Data == nil) {
+	if json.Unmarshal(body, &list) != nil || ((provider == "typesafe" || provider == "google") && list.Models == nil) || (provider != "typesafe" && provider != "google" && list.Data == nil) {
 		return nil, errors.New("服务返回的模型列表格式无效")
 	}
 	ids := make([]string, 0, len(list.Data))
@@ -134,7 +141,13 @@ func fetchModelIDs(ctx context.Context, client *http.Client, base, key, provider
 			seen[id] = true
 		}
 	}
-	if provider == "typesafe" {
+	if provider == "google" {
+		for _, m := range list.Models {
+			if m.Name == "models/gemini-embedding-2" {
+				add("gemini-embedding-2")
+			}
+		}
+	} else if provider == "typesafe" {
 		for _, m := range list.Models {
 			add(m.Name)
 		}
