@@ -30,7 +30,7 @@
         <el-tag v-if="evaluation.knowledge_gap" type="danger" size="small" effect="plain">缺口：{{ evaluation.knowledge_gap }}</el-tag>
       </div>
       <ol v-if="(detail.replies || []).length > 1" class="ap-replies">
-        <li v-for="(r, i) in detail.replies" :key="r.id"><small>第 {{ i + 1 }} 段 · {{ r.eventType === 'HUMAN_REPLY' ? '人工' : 'AI' }} · <StatusBadge :status="replyStatus(r.status)" :text="replyText_[r.status]" /></small><p>{{ $at(r.content) }}</p></li>
+        <li v-for="(r, i) in detail.replies" :key="r.id"><small>第 {{ i + 1 }} 段 · {{ r.eventType === 'HUMAN_REPLY' ? '人工' : 'AI' }} · <StatusBadge :status="replyStatus(r.status)" :text="replyText_[r.status]" /></small><p><MsgText :text="r.content" /></p></li>
       </ol>
     </section>
 
@@ -69,6 +69,7 @@ import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, ref, watch } from 'vue'
 import { ArrowRight, Cpu, EditPen, SetUp } from '@element-plus/icons-vue'
 import StatusBadge from '@/components/StatusBadge.vue'
+import MsgText from '@/components/MsgText.vue'
 import { stageSeconds } from '@/utils/stage-meta'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api'

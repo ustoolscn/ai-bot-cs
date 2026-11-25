@@ -11,14 +11,14 @@
       <TransitionGroup name="msg" tag="div" class="feed-list">
         <template v-for="(m, i) in items" :key="m.id">
           <div v-if="showTime(i)" :key="m.id + '-t'" class="feed-time">{{ timeLabel(m.at) }}</div>
-          <div v-if="isEvent(m)" :key="m.id + '-s'" class="feed-system">{{ $at(m.content, m.mentionNames) || '系统消息' }}</div>
+          <div v-if="isEvent(m)" :key="m.id + '-s'" class="feed-system"><MsgText :text="m.content" :names="m.mentionNames" fallback="系统消息" /></div>
           <div v-else :key="m.id + '-m'" class="feed-row" :class="[m.direction, { target: m.id === target?.id }]">
             <AvatarImage class="feed-avatar" :src="m.senderAvatar" :name="whoOf(m)" :tone="m.direction === 'outbound' ? 'primary' : ''" />
             <div class="feed-body">
               <small class="feed-who"><span>{{ whoOf(m) }}</span><em v-for="t in tagsOf(m)" :key="t" class="feed-tag" :class="{ human: t.startsWith('人工') }">{{ t }}</em></small>
-              <div v-if="m.replyToId && byId.get(m.replyToId)" class="feed-quote">{{ whoOf(byId.get(m.replyToId)!) }}：{{ textOf(byId.get(m.replyToId)!) || '[图片]' }}</div>
+              <div v-if="m.replyToId && byId.get(m.replyToId)" class="feed-quote">{{ whoOf(byId.get(m.replyToId)!) }}：<MsgText :text="byId.get(m.replyToId)!.content" :names="byId.get(m.replyToId)!.mentionNames" fallback="[图片]" /></div>
               <div class="feed-bubble">
-                <span v-if="m.content">{{ textOf(m) }}</span>
+                <MsgText v-if="m.content" :text="m.content" :names="m.mentionNames" />
                 <div v-if="images(m).length" class="feed-images">
                   <el-image v-for="(img, k) in images(m)" :key="k" :src="img.previewUrl" :preview-src-list="images(m).map(x => x.previewUrl!)" :initial-index="k" fit="cover" preview-teleported />
                 </div>
@@ -50,7 +50,7 @@
       <Transition name="fade">
         <div v-if="target" class="composer-target">
           <el-icon><ChatLineSquare /></el-icon>
-          <span>回复 {{ whoOf(target) }}：{{ textOf(target) || '[图片]' }}</span>
+          <span>回复 {{ whoOf(target) }}：<MsgText :text="target.content" :names="target.mentionNames" fallback="[图片]" /></span>
           <button type="button" class="target-clear" aria-label="取消回复" @click="target = undefined"><el-icon><Close /></el-icon></button>
         </div>
       </Transition>
@@ -78,7 +78,7 @@ import { api } from '@/api'
 import { useAdminEvents } from '@/composables/useAdminEvents'
 import EmptyState from '@/components/EmptyState.vue'
 import AvatarImage from '@/components/AvatarImage.vue'
-import { formatMentions } from '@/utils/mentions'
+import MsgText from '@/components/MsgText.vue'
 import type { ChatItem, Conversation, MessageAttachment } from '@/types'
 
 const props = defineProps<{ conversation: Conversation }>()
@@ -110,8 +110,6 @@ function tagsOf(m: ChatItem) {
   const k = m.kind && kindName[m.kind]
   return k ? [k] : []
 }
-// 后端返回的是 QQ 里实际发出的文字（人工消息已带【人工客服】前缀）
-const textOf = (m: ChatItem) => formatMentions(m.content, m.mentionNames)
 const images = (m: ChatItem) => m.attachments.filter((a: MessageAttachment) => a.type === 'image' && a.previewUrl)
 const files = (m: ChatItem) => m.attachments.filter((a: MessageAttachment) => !(a.type === 'image' && a.previewUrl))
 const friendly = (v: string) => v.replace(/^[a-z_]+:\s*/, '')

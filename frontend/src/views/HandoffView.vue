@@ -17,7 +17,7 @@
               <span class="pill" :class="stateOf(h).tone">{{ stateOf(h).text }}</span>
               <time>{{ relativeTime(h.createdAt) }}</time>
             </div>
-            <p>{{ $at(h.messageContent || lastInbound(h)?.content) || '—' }}</p>
+            <p><MsgText :text="h.messageContent || lastInbound(h)?.content" fallback="—" /></p>
             <small>{{ h.conversationName }} · {{ h.reason || '转人工' }}</small>
           </button>
           <EmptyState v-if="!loading && !items.length" :mood="status === 'active' ? 'happy' : 'sleepy'" :title="status === 'active' ? '没有进行中的工单' : '这里还没有记录'" :description="status === 'active' ? '用户说“找人工”或机器人答不上来时，会出现在这里。' : undefined" />
@@ -41,7 +41,7 @@
           <div ref="chatBox" class="chat-scroll">
             <div v-for="m in current.recent" :key="m.id" class="chat-row" :class="[m.direction, { human: m.eventType === 'HUMAN_REPLY', selected: m.id === targetId }]">
               <small>{{ m.direction === 'inbound' ? (m.senderName || '用户') : m.eventType === 'HUMAN_REPLY' ? '人工客服' + (m.senderName ? ' ' + m.senderName : '') : '机器人' }} · {{ formatTime(m.eventAt) }}</small>
-              <div class="chat-bubble">{{ $at(m.content) }}</div>
+              <div class="chat-bubble"><MsgText :text="m.content" /></div>
               <span v-if="m.status === 'failed'" class="send-failed" :title="m.deliveryError"><el-icon><WarningFilled /></el-icon>发送失败{{ m.deliveryError ? `：${friendlyError(m.deliveryError)}` : '' }}</span>
               <span v-else-if="m.eventType === 'HUMAN_REPLY' && (m.status === 'pending' || m.status === 'processing')" class="send-pending"><el-icon class="is-loading"><Loading /></el-icon>发送中</span>
               <el-button v-if="m.direction === 'inbound' && mine && m.id !== targetId" link type="primary" size="small" @click="targetId = m.id">回复这条</el-button>
@@ -51,7 +51,7 @@
           <div v-if="current.status === 'open'" class="composer-gate"><span>接单后才能回复，用户会收到“人工客服已接入”。</span><el-button type="primary" :icon="Headset" :loading="acting" @click="claim(current)">接单</el-button></div>
           <div v-else-if="current.status === 'processing' && !mine" class="composer-gate"><span>{{ current.claimedByName || '其他客服' }}{{ current.claimedVia === 'qq' ? ' 正在手机 QQ 上处理' : ' 正在处理' }}，只有接单人可以回复和结单。</span></div>
           <footer v-else-if="current.status === 'processing'" class="composer">
-            <div v-if="target" class="composer-target"><el-icon><ChatLineSquare /></el-icon><span>回复：{{ $at(target.content) }}</span></div>
+            <div v-if="target" class="composer-target"><el-icon><ChatLineSquare /></el-icon><span>回复：<MsgText :text="target.content" /></span></div>
             <el-input v-model="replyText" type="textarea" :rows="3" resize="none" :disabled="!target" :placeholder="target ? '输入回复，会以机器人身份发到 QQ。Ctrl/⌘ + Enter 发送' : '这位用户没有可回复的消息'" @keydown.enter.ctrl.exact.prevent="send" @keydown.enter.meta.exact.prevent="send" />
             <div class="composer-actions">
               <el-checkbox v-model="learn">同时把这次回答提交为候选知识</el-checkbox>
@@ -72,6 +72,7 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { ChatLineSquare, CircleCheck, Headset, Loading, Promotion, Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import EmptyState from '@/components/EmptyState.vue'
+import MsgText from '@/components/MsgText.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import { agentApi, formatTime, type Handoff } from '@/api/agent'
 import { useShellStore } from '@/stores/shell'
