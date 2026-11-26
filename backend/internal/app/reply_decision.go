@@ -22,7 +22,10 @@ const alreadyAnsweredSQL = `EXISTS (
             SELECT FROM messages r WHERE r.conversation_id=m.conversation_id
             AND r.reply_to_message_id IN (
                 SELECT m.platform_message_id UNION ALL
-                SELECT anchor.platform_message_id FROM messages anchor WHERE anchor.reply_batch=m.reply_batch
+                SELECT anchor.platform_message_id FROM messages anchor WHERE anchor.reply_batch=m.reply_batch AND NOT EXISTS (
+                    SELECT FROM messages withdrawn WHERE withdrawn.conversation_id=m.conversation_id
+                    AND withdrawn.reply_to_message_id=anchor.platform_message_id AND withdrawn.context_exclusion_reason='reply_merged'
+                    AND r.event_type='AI_RESPONSE')
             ) AND r.event_type IN ('AI_RESPONSE','HUMAN_REPLY')
             AND r.status IN ('pending','sent') AND NOT r.context_excluded
         )`

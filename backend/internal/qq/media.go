@@ -184,5 +184,10 @@ func (c *Client) SendConfigured(ctx context.Context, prefix string, payload map[
 	if err != nil {
 		return Receipt{}, err
 	}
+	if c.BeforeMessage != nil {
+		if err := c.BeforeMessage(ctx); err != nil {
+			return Receipt{}, err
+		}
+	}
 	return c.sendPayload(ctx, token, prefix+"/messages", payload)
 }

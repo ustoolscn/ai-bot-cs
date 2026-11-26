@@ -230,7 +230,7 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 		skipKB = skipKB || (decision.SocialOnly && len(imageParts) == 0)
 		if !*decision.Reply {
 			_, err = a.db.Exec(ctx, `WITH recovered AS (`+clearModerationStreakSQL+`)
-              UPDATE inbox_tasks SET status='skipped',last_error=NULL,updated_at=now() WHERE id=$2`, j.ConversationID, j.TaskID)
+              UPDATE inbox_tasks SET status='skipped',last_error=NULL,updated_at=now() WHERE id=$2 AND status='processing'`, j.ConversationID, j.TaskID)
 			return err
 		}
 	}
@@ -314,11 +314,48 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 		if err != nil {
 			a.log.Warn("knowledge retrieval failed", "message", j.MessageID, "error", err)
 		}
+		if len(hits) > 0 {
+			checkpoint, _ := json.Marshal(hits)
+			_, err = a.db.Exec(ctx, "UPDATE agent_runs SET retrieved_chunks=$1 WHERE id=$2", checkpoint, runID)
+			if err != nil {
+				return a.retryInbox(ctx, j, err)
+			}
+		}
 		rt.hits = append(rt.hits, hits...)
+	}
+	if len(segments) > 1 && len(rt.knowledgeBases) > 0 {
+		var prior string
+		err = a.db.QueryRow(ctx, `SELECT coalesce(string_agg(content,E'\n'),'') FROM (
+		SELECT DISTINCT c.id,left(c.content,2000) content FROM messages anchor
+		JOIN messages m ON m.reply_batch=anchor.reply_batch JOIN inbox_tasks t ON t.message_id=m.id AND t.status='merged'
+		JOIN agent_runs r ON r.message_id=m.id CROSS JOIN LATERAL jsonb_array_elements(
+		CASE WHEN jsonb_typeof(r.retrieved_chunks)='array' THEN r.retrieved_chunks ELSE '[]'::jsonb END) hit
+		JOIN knowledge_chunks c ON c.id::text=hit->>'id' LEFT JOIN knowledge_entries e ON e.id=c.entry_id
+		WHERE anchor.id=$1 AND `+visibleContextSQL+` AND c.knowledge_base_id::text=ANY($2)
+		AND (c.entry_id IS NULL OR e.status='published') LIMIT 5) saved`, j.MessageID, rt.knowledgeBases).Scan(&prior)
+		if err != nil {
+			return a.retryInbox(ctx, j, err)
+		}
+		if prior != "" {
+			kbContext += "\n前序提问已检索的参考资料：\n" + prior
+		}
 	}
 	retrievalLatency := time.Since(retrievalStarted).Milliseconds()
 
 	userContent := strings.TrimSpace(j.Content)
+	if len(segments) > 1 {
+		var draft string
+		err = a.db.QueryRow(ctx, `SELECT coalesce(left(string_agg(o.content,E'\n' ORDER BY o.created_at,o.id),2400),'')
+		FROM messages anchor JOIN messages m ON m.reply_batch=anchor.reply_batch
+		JOIN messages o ON o.conversation_id=m.conversation_id AND o.reply_to_message_id=m.platform_message_id
+		WHERE anchor.id=$1 AND o.event_type='AI_RESPONSE' AND o.context_exclusion_reason='reply_merged' AND `+visibleContextSQL, j.MessageID).Scan(&draft)
+		if err != nil {
+			return a.retryInbox(ctx, j, err)
+		}
+		if draft != "" {
+			userContent += "\n（以下是此前未发送的草稿，仅供参考，请结合全部提问重新作答。）\n" + draft
+		}
+	}
 	if priorImage {
 		userContent += "\n（附图来自这位用户上一条尚未得到答复的消息。）"
 	}
@@ -351,6 +388,9 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 			a.log.Warn("knowledge image unavailable", "chunk", imageID, "error", e)
 		}
 	}
+	if len(segments) > 1 {
+		settings.SplitLongReplies = false
+	}
 	replyParts := a.shapeReply(settings, j.ConversationType, caption)
 	finishShape(fmt.Sprintf("生成 %d 段回复", len(replyParts)), nil)
 	hitsJSON, _ := json.Marshal(rt.hits)
@@ -362,6 +402,16 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 	var extended bool
 	if err = tx.QueryRow(ctx, "SELECT qq_extended_replies FROM conversations WHERE id=$1 FOR UPDATE", j.ConversationID).Scan(&extended); err != nil {
 		return a.retryInbox(ctx, j, err)
+	}
+	var merged bool
+	if err = tx.QueryRow(ctx, "SELECT status='merged' FROM inbox_tasks WHERE id=$1", j.TaskID).Scan(&merged); err != nil {
+		return err
+	}
+	if merged {
+		if _, err = tx.Exec(ctx, "UPDATE agent_runs SET status='skipped',completed_at=now() WHERE id=$1", runID); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
 	}
 	// A background job may have isolated this message during generation.
 	// Check under the same lock used to quarantine its existing AI replies.

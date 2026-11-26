@@ -11,7 +11,7 @@
             <el-button v-else-if="canBlock" key="block" class="md-block-btn" link type="danger" @click="blockDialog = true">拉黑发送者</el-button>
           </Transition>
         </div>
-        <p v-if="selected.status === 'merged'" class="md-merged">同一个人连续发了几条，这条已合并到后面的消息里，由最后一条一起回复。</p>
+        <p v-if="selected.status === 'merged'" class="md-merged">{{ botAnswer || selected.answerAttachments?.length ? '已发出部分回复后，同一个人又发来新消息，剩下的没有再发，合并到后面一起重新回复。' : '同一个人连续发了几条，这条已合并到后面的消息里，由最后一条一起回复。' }}</p>
         <dl class="md-facts">
           <div><dt>时间</dt><dd class="num">{{ selected.time }}</dd></div>
           <div><dt>总用时</dt><dd class="num">{{ selected.latency ? formatDuration(selected.latency) : '—' }}</dd></div>
@@ -28,7 +28,7 @@
             <p>{{ mentions(selected.question, selected.mentionNames) }}</p>
             <div v-if="selected.attachments?.length" class="message-image-grid"><div v-for="(v,i) in selected.attachments.filter(p=>p.type==='voice')" :key="i"><audio v-if="v.waveUrl" controls preload="none" :src="v.waveUrl"/><p>{{v.transcript}}</p></div><el-image v-for="(image,index) in selected.attachments.filter(p=>p.type==='image')" :key="image.previewUrl || index" :src="image.previewUrl" :preview-src-list="previewUrls(selected.attachments)" fit="cover" loading="lazy" /></div>
           </div>
-          <div v-if="selected.status !== 'merged' && (!selected.handoffStatus || botAnswer || selected.answerAttachments?.length)" class="md-bubble is-bot" :class="{ 'is-empty': !selected.answer && !selected.answerAttachments?.length }">
+          <div v-if="(selected.status !== 'merged' || botAnswer || selected.answerAttachments?.length) && (!selected.handoffStatus || botAnswer || selected.answerAttachments?.length)" class="md-bubble is-bot" :class="{ 'is-empty': !selected.answer && !selected.answerAttachments?.length }">
             <small>{{ selected.botName }}</small>
             <p>{{ botAnswer || (selected.answerAttachments?.length ? '图片回复' : selected.status === 'skipped' ? '判断这条消息无需回复。' : '处理尚未完成或失败，未生成回复。') }}</p>
             <div v-if="selected.answerAttachments?.length" class="message-image-grid"><el-image v-for="(image,index) in selected.answerAttachments" :key="image.previewUrl || index" :src="image.previewUrl" :preview-src-list="previewUrls(selected.answerAttachments)" fit="cover" loading="lazy" /></div>

@@ -21,6 +21,8 @@ import (
 type Client struct {
 	AppID, AppSecret, APIBase, TokenURL string
 	HTTP                                *http.Client
+	// BeforeMessage runs after credentials and media are ready, immediately before sending.
+	BeforeMessage func(context.Context) error
 }
 
 func NewClient(appID, secret, apiBase, tokenURL string) *Client {
@@ -124,6 +126,11 @@ func (c *Client) SendWithReceipt(ctx context.Context, m domain.OutboundMessage) 
 			payload["content"] = textPayload(m)["content"]
 		}
 		delete(payload, "markdown")
+	}
+	if c.BeforeMessage != nil {
+		if err := c.BeforeMessage(ctx); err != nil {
+			return Receipt{}, err
+		}
 	}
 	id, err := c.sendPayload(ctx, token, prefix+"/messages", payload)
 	if err != nil && isAck {

@@ -220,7 +220,7 @@ func (a *App) excludeModeratedMessage(ctx context.Context, j inboxJob, cause err
 		return err
 	}
 
-	if _, err = tx.Exec(ctx, `UPDATE inbox_tasks SET status='failed',last_error=$1,next_attempt_at=now(),updated_at=now() WHERE id=$2`, cause.Error(), j.TaskID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE inbox_tasks SET status='failed',last_error=$1,next_attempt_at=now(),updated_at=now() WHERE id=$2 AND status='processing'`, cause.Error(), j.TaskID); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, "UPDATE agent_runs SET status='failed',error=$2,completed_at=now() WHERE message_id=$1 AND completed_at IS NULL", j.MessageID, cause.Error()); err != nil {
@@ -243,7 +243,7 @@ func hitScore(hit map[string]any) float64 {
 	}
 }
 func (a *App) finishInbox(ctx context.Context, id, status string, err error) error {
-	_, e := a.db.Exec(ctx, "UPDATE inbox_tasks SET status=$1,last_error=$2,updated_at=now() WHERE id=$3", status, errorText(err), id)
+	_, e := a.db.Exec(ctx, "UPDATE inbox_tasks SET status=$1,last_error=$2,updated_at=now() WHERE id=$3 AND status='processing'", status, errorText(err), id)
 	return e
 }
 func (a *App) retryInbox(ctx context.Context, j inboxJob, cause error) error {
@@ -251,7 +251,7 @@ func (a *App) retryInbox(ctx context.Context, j inboxJob, cause error) error {
 	if j.Attempts+1 >= 3 {
 		status = "failed"
 	}
-	_, err := a.db.Exec(ctx, "UPDATE inbox_tasks SET status=$1,last_error=$2,next_attempt_at=now()+interval '5 seconds',updated_at=now() WHERE id=$3", status, cause.Error(), j.TaskID)
+	_, err := a.db.Exec(ctx, "UPDATE inbox_tasks SET status=$1,last_error=$2,next_attempt_at=now()+interval '5 seconds',updated_at=now() WHERE id=$3 AND status='processing'", status, cause.Error(), j.TaskID)
 	if err == nil && status == "failed" {
 		err = a.scheduleProcessingAckRetraction(ctx, j.BotID, j.ConversationID, j.PlatformMessageID)
 	}
@@ -462,7 +462,7 @@ func (a *App) handleOutbox(ctx context.Context, j outboxJob) error {
 			return a.retryOutbox(ctx, j, err)
 		}
 		if blocked {
-			_, err = a.db.Exec(ctx, `UPDATE outbox_tasks SET status='expired',last_error='blacklisted or excluded',updated_at=now() WHERE id=$1`, j.TaskID)
+			_, err = a.db.Exec(ctx, `UPDATE outbox_tasks SET status='expired',last_error='blacklisted or excluded',updated_at=now() WHERE id=$1 AND status='processing'`, j.TaskID)
 			return err
 		}
 	}
@@ -491,8 +491,8 @@ func (a *App) handleOutbox(ctx context.Context, j outboxJob) error {
 		return err
 	}
 	if j.EventType != "HUMAN_REPLY" && j.EventType != "HANDOFF_UPDATE" && j.Deadline != nil && time.Now().After(*j.Deadline) {
-		_, err = a.db.Exec(ctx, "UPDATE outbox_tasks SET status='expired',last_error='reply deadline exceeded',updated_at=now() WHERE id=$1", j.TaskID)
-		_, _ = a.db.Exec(ctx, "UPDATE messages SET status='expired' WHERE id=$1", j.MessageID)
+		_, err = a.db.Exec(ctx, `WITH expired AS (UPDATE outbox_tasks SET status='expired',last_error='reply deadline exceeded',updated_at=now() WHERE id=$1 AND status='processing' RETURNING message_id)
+		UPDATE messages SET status='expired' WHERE id IN (SELECT message_id FROM expired)`, j.TaskID)
 		if err == nil && j.EventType == "AI_RESPONSE" {
 			err = a.scheduleProcessingAckRetraction(ctx, j.BotID, j.ConversationRecordID, j.ReplyTo)
 		}
@@ -579,6 +579,35 @@ func (a *App) handleOutbox(ctx context.Context, j outboxJob) error {
 			reference = selected
 		}
 	}
+	// Linearize AI delivery with webhook arrival. Hold the conversation lock
+	// from the final eligibility check through the QQ receipt commit.
+	var tx pgx.Tx
+	superseded := errors.New("reply superseded")
+	if j.EventType == "AI_RESPONSE" {
+		client.BeforeMessage = func(ctx context.Context) error {
+			var err error
+			tx, err = a.db.Begin(ctx)
+			if err != nil {
+				return err
+			}
+			if _, err = tx.Exec(ctx, "SELECT id FROM conversations WHERE id=$1 FOR NO KEY UPDATE", j.ConversationRecordID); err != nil {
+				return err
+			}
+			var active bool
+			if err = tx.QueryRow(ctx, "SELECT status='processing' FROM outbox_tasks WHERE id=$1", j.TaskID).Scan(&active); err != nil {
+				return err
+			}
+			if !active {
+				return superseded
+			}
+			return nil
+		}
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
 	var receipt qq.Receipt
 	if len(j.Payload) > 0 {
 		var p map[string]any
@@ -594,6 +623,12 @@ func (a *App) handleOutbox(ctx context.Context, j outboxJob) error {
 		receipt, err = client.SendWithReceipt(sendCtx, domain.OutboundMessage{ID: j.MessageID, Channel: "qq", BotID: j.BotID, ConversationType: j.ConversationType, ConversationID: j.ConversationID, ReplyToMessageID: replyTo, MentionUserID: mention, MentionUserName: mentionName, ReferenceMessageID: reference, Text: j.Text, Format: format, Parts: j.Parts, ReplyDeadline: j.Deadline, Sequence: j.Sequence})
 	}
 	if err != nil {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
+		if errors.Is(err, superseded) {
+			return nil
+		}
 		if hasContentPart(j.Parts, "ark_ack") {
 			a.log.Warn("QQ processing ARK failed", "bot_id", j.BotID, "conversation_type", j.ConversationType, "conversation_id", j.ConversationID, "error", err)
 			_, _ = a.db.Exec(ctx, "UPDATE outbox_tasks SET status='failed',last_error=$1,updated_at=now() WHERE id=$2", err.Error(), j.TaskID)
@@ -605,11 +640,12 @@ func (a *App) handleOutbox(ctx context.Context, j outboxJob) error {
 		}
 		return a.retryOutbox(ctx, j, err)
 	}
-	tx, err := a.db.Begin(ctx)
-	if err != nil {
-		return err
+	if tx == nil {
+		tx, err = a.db.Begin(ctx)
+		if err != nil {
+			return err
+		}
 	}
-	defer tx.Rollback(ctx)
 	_, err = tx.Exec(ctx, "UPDATE outbox_tasks SET status='sent',platform_message_id=$1,updated_at=now() WHERE id=$2", receipt.ID, j.TaskID)
 	if err == nil {
 		_, err = tx.Exec(ctx, "UPDATE messages SET status='sent',platform_message_id=$1,qq_ref_idx=$3,qq_sent_at=$4,qq_delivered_text=CASE WHEN event_type='HUMAN_REPLY' THEN $5::text END WHERE id=$2", nullString(receipt.ID), j.MessageID, receipt.Ext.Index, parseQQTime(receipt.Timestamp), j.Text)
@@ -655,8 +691,8 @@ func (a *App) retryOutbox(ctx context.Context, j outboxJob, cause error) error {
 	if j.Attempts+1 >= 3 {
 		status = "failed"
 	}
-	_, err := a.db.Exec(ctx, "UPDATE outbox_tasks SET status=$1,last_error=$2,next_attempt_at=now()+interval '5 seconds',updated_at=now() WHERE id=$3", status, cause.Error(), j.TaskID)
-	if status == "failed" {
+	tag, err := a.db.Exec(ctx, "UPDATE outbox_tasks SET status=$1,last_error=$2,next_attempt_at=now()+interval '5 seconds',updated_at=now() WHERE id=$3 AND status='processing'", status, cause.Error(), j.TaskID)
+	if err == nil && tag.RowsAffected() > 0 && status == "failed" {
 		_, _ = a.db.Exec(ctx, "UPDATE messages SET status='failed' WHERE id=$1", j.MessageID)
 		if err == nil && j.EventType == "AI_RESPONSE" {
 			err = a.scheduleProcessingAckRetraction(ctx, j.BotID, j.ConversationRecordID, j.ReplyTo)

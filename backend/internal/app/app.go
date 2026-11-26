@@ -859,7 +859,7 @@ func (a *App) listMessages(c *gin.Context) {
 	}
 	query := `SELECT message_mention_names(m,` + messageMentionText + `) AS "mentionNames",` + messageSenderColumns + `,m.id::text,m.content AS question,m.parts,m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",
 		m.platform_message_id AS "platformMessageId",c.name AS "conversationName",b.name AS "botName",
-		COALESCE((SELECT string_agg(x.content, E'\n\n' ORDER BY x.event_at) FROM messages x WHERE x.conversation_id=m.conversation_id AND x.direction='outbound' AND x.event_type IN ('AI_RESPONSE','HUMAN_REPLY') AND x.reply_to_message_id=m.platform_message_id),'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",` + handoffStatusColumns + `, COALESCE(hs.state,ar.status,t.status,(SELECT status FROM group_reviews WHERE message_id=m.id)) AS status,
+		COALESCE((SELECT string_agg(x.content, E'\n\n' ORDER BY x.event_at) FROM messages x WHERE x.conversation_id=m.conversation_id AND x.direction='outbound' AND x.event_type IN ('AI_RESPONSE','HUMAN_REPLY') AND x.status<>'merged' AND x.reply_to_message_id=m.platform_message_id),'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",` + handoffStatusColumns + `, COALESCE(CASE WHEN t.status='merged' THEN t.status END,hs.state,ar.status,t.status,(SELECT status FROM group_reviews WHERE message_id=m.id)) AS status,
 		COALESCE(mp.name,mp.model,'') AS model,` + messageUsageColumns + `,
 		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
 		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END AS "knowledgeHits",
@@ -876,7 +876,7 @@ func (a *App) listMessages(c *gin.Context) {
 	` + messageUsageJoin + `
  LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY (kind='chat') DESC,created_at DESC LIMIT 1) mc ON true
 	LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
-	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND reply_to_message_id=m.platform_message_id ORDER BY created_at ASC LIMIT 1) om ON true
+	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND status<>'merged' AND reply_to_message_id=m.platform_message_id ORDER BY created_at ASC LIMIT 1) om ON true
 	LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
 	WHERE t.id IS NOT NULL OR EXISTS(SELECT FROM group_reviews WHERE message_id=m.id)
  ORDER BY m.event_at DESC LIMIT $1`
@@ -899,7 +899,7 @@ func (a *App) getMessage(c *gin.Context) {
 	var msg map[string]any
 	rows, err := a.db.Query(c, `SELECT message_mention_names(m,concat_ws(' ',`+messageMentionText+`,(SELECT string_agg(r.context_messages::text,' ') FROM agent_runs r WHERE r.message_id=m.id))) AS "mentionNames",`+messageSenderColumns+`,message_timeline(m) AS timeline,m.id::text,m.content AS question,m.parts,m.sender_name AS "senderName",m.event_type AS "eventType",m.event_at AS "eventAt",m.raw_event AS "rawEvent",
 		m.platform_message_id AS "platformMessageId",c.name AS "conversationName",b.name AS "botName",
-		COALESCE((SELECT string_agg(x.content, E'\n\n' ORDER BY x.event_at) FROM messages x WHERE x.conversation_id=m.conversation_id AND x.direction='outbound' AND x.event_type IN ('AI_RESPONSE','HUMAN_REPLY') AND x.reply_to_message_id=m.platform_message_id),'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",`+handoffStatusColumns+`, COALESCE(hs.state,ar.status,t.status,(SELECT status FROM group_reviews WHERE message_id=m.id)) AS status,
+		COALESCE((SELECT string_agg(x.content, E'\n\n' ORDER BY x.event_at) FROM messages x WHERE x.conversation_id=m.conversation_id AND x.direction='outbound' AND x.event_type IN ('AI_RESPONSE','HUMAN_REPLY') AND x.status<>'merged' AND x.reply_to_message_id=m.platform_message_id),'') AS answer,om.id::text AS "answerId",COALESCE(om.parts,'[]'::jsonb) AS "answerParts",`+handoffStatusColumns+`, COALESCE(CASE WHEN t.status='merged' THEN t.status END,hs.state,ar.status,t.status,(SELECT status FROM group_reviews WHERE message_id=m.id)) AS status,
 		COALESCE(mp.name,mp.model,'') AS model,`+messageUsageColumns+`,
 		COALESCE(mc.latency_ms,0) AS "modelLatencyMs",COALESCE(ar.context_latency_ms,0) AS "contextLatencyMs",
 		COALESCE(ar.retrieval_latency_ms,0) AS "retrievalLatencyMs",CASE WHEN jsonb_typeof(ar.retrieved_chunks)='array' THEN jsonb_array_length(ar.retrieved_chunks) ELSE 0 END AS "knowledgeHits",
@@ -916,7 +916,7 @@ func (a *App) getMessage(c *gin.Context) {
 	`+messageUsageJoin+`
  LEFT JOIN LATERAL (SELECT * FROM model_calls WHERE agent_run_id=ar.id ORDER BY (kind='chat') DESC,created_at DESC LIMIT 1) mc ON true
 	LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
-	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND reply_to_message_id=m.platform_message_id ORDER BY created_at ASC LIMIT 1) om ON true
+	LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND status<>'merged' AND reply_to_message_id=m.platform_message_id ORDER BY created_at ASC LIMIT 1) om ON true
 	LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
 	WHERE m.id=$1`, c.Param("id"))
 	if err == nil {
