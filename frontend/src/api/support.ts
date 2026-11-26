@@ -55,6 +55,7 @@ export function botServices(botId: string) {
       method: record.id ? 'PUT' : 'POST',
       data: liveDataAccessToken === undefined ? record : { ...record, liveDataAccessToken },
     }),
+    remove: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `${base}/${id}` }, { deleted: true }),
     // 人工服务时间（北京时间，每天同一段，可跨午夜）。时间外不会转人工，机器人会告诉用户人工在线时间。
     handoffHours: (id: string) => ({
       get: () => request<HandoffHours>({ url: `${base}/${id}/handoff-hours` }, { enabled: false, start: '09:00', end: '18:00' }),

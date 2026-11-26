@@ -24,6 +24,7 @@ func (a *App) supportRoutes(r *gin.RouterGroup) {
 	r.GET("/bots/:id/services/:item/handoff-hours", a.handoffHoursAPI)
 	r.PUT("/bots/:id/services/:item/handoff-hours", a.handoffHoursAPI)
 	r.GET("/bots/:id/services", a.listServices)
+	r.DELETE("/bots/:id/services/:item", a.deleteBotService)
 	r.GET("/bots/:id/services/:item/live-data", a.getLiveData)
 	r.POST("/bots/:id/services/:item/live-data/refresh", a.refreshLiveDataNow)
 	for _, method := range []string{"POST", "PUT"} {
@@ -74,6 +75,23 @@ func (a *App) saveSupportAgent(c *gin.Context) {
 		return
 	}
 	saveSupportRecord(c, a, "INSERT INTO support_agents(name,instructions,personality_id) VALUES($1,$2,$3) RETURNING id::text", "UPDATE support_agents SET name=$1,instructions=$2,personality_id=$3 WHERE id=$4 RETURNING id::text", strings.TrimSpace(in.Name), strings.TrimSpace(in.Instructions), in.PersonalityID)
+}
+
+func (a *App) deleteBotService(c *gin.Context) {
+	botID, serviceID := c.Param("id"), c.Param("item")
+	if uuid.Validate(botID) != nil || uuid.Validate(serviceID) != nil {
+		fail(c, 404, "not_found", "AI 客服不存在")
+		return
+	}
+	result, err := a.db.Exec(c, "DELETE FROM bot_services WHERE bot_id=$1 AND id=$2", botID, serviceID)
+	switch {
+	case err != nil:
+		fail(c, 500, "database_error", "删除 AI 客服失败")
+	case result.RowsAffected() == 0:
+		fail(c, 404, "not_found", "AI 客服不存在")
+	default:
+		ok(c, gin.H{"deleted": true})
+	}
 }
 
 func (a *App) saveBotService(c *gin.Context) {

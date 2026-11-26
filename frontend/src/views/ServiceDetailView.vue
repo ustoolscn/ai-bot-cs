@@ -1,6 +1,8 @@
 <template>
   <div class="content-page">
-    <PageHeader :title="isNew ? '添加 AI 客服' : form?.name || 'AI 客服'" :back="{ label: (botName || '机器人') + ' 的 AI 客服', to: { name: 'bot-services', params: { id: botId } } }" />
+    <PageHeader :title="isNew ? '添加 AI 客服' : form?.name || 'AI 客服'" :back="{ label: (botName || '机器人') + ' 的 AI 客服', to: { name: 'bot-services', params: { id: botId } } }">
+      <el-button v-if="!isNew && form" :icon="Delete" :loading="removing" @click="remove">删除客服</el-button>
+    </PageHeader>
 
     <div v-if="form" class="settings-layout">
       <nav class="settings-toc" aria-label="设置目录">
@@ -281,6 +283,25 @@ async function save() {
   } finally { saving.value = false }
 }
 
+const removing = ref(false)
+let removed = false
+async function remove() {
+  if (!form.value) return
+  const name = snapshot.value ? JSON.parse(snapshot.value).name || '这个客服' : '这个客服'
+  try {
+    await ElMessageBox.confirm(`删除后无法恢复。原来由「${name}」接待的群会解除绑定，按群自己的接待设置继续运行；它的人设、示例对话、网站接入和人工服务时间一并清除。聊天记录、记忆和质检记录保留。`, `删除 AI 客服「${name}」？`, { confirmButtonText: '删除客服', cancelButtonText: '取消', type: 'warning', confirmButtonClass: 'el-button--danger' })
+  } catch { return }
+  removing.value = true
+  try {
+    await botServices(props.botId).remove(form.value.id)
+    removed = true
+    ElMessage.success(`已删除「${name}」`)
+    await router.replace({ name: 'bot-services', params: { id: props.botId } })
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '删除失败')
+  } finally { removing.value = false }
+}
+
 let observer: IntersectionObserver | undefined
 function observeSections() {
   observer?.disconnect()
@@ -293,7 +314,7 @@ function observeSections() {
 function scrollTo(id: string) { activeSection.value = id; document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
 function beforeUnload(event: BeforeUnloadEvent) { if (dirty.value && !isNew.value) { event.preventDefault(); event.returnValue = '' } }
 onBeforeRouteLeave(async () => {
-  if (!dirty.value || saving.value) return true
+  if (removed || !dirty.value || saving.value) return true
   if (isNew.value && !form.value?.name.trim()) return true
   try {
     await ElMessageBox.confirm('还有未保存的修改，离开后会丢失。', '离开此页？', { confirmButtonText: '不保存，离开', cancelButtonText: '留下', type: 'warning' })
