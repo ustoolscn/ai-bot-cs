@@ -978,7 +978,16 @@ func (a *App) createKB(c *gin.Context) {
 }
 func (a *App) getKB(c *gin.Context) {
 	rows, err := a.db.Query(c, `SELECT k.id::text,k.name,k.description,k.embedding_profile_id::text AS "embeddingProfileId",k.embedding_model AS "embeddingModel",
-		count(d.id) AS "documentCount",(SELECT count(*) FROM knowledge_entries e WHERE e.knowledge_base_id=k.id AND e.status='published') AS "entryCount",COALESCE(json_agg(json_build_object('id',d.id::text,'name',d.name,'status',d.status,'sizeBytes',d.size_bytes,'chunkCount',COALESCE(dc.chunk_count,0),'imageCount',dc.image_count,'lastError',d.last_error,'createdAt',d.created_at,'updatedAt',d.updated_at) ORDER BY d.created_at DESC) FILTER(WHERE d.id IS NOT NULL),'[]') AS documents
+		COALESCE((SELECT json_agg(json_build_object('id',s.id,'name',s.name) ORDER BY s.name,s.id)
+        FROM bot_services s LEFT JOIN system_settings g ON g.key='agent_settings'
+        WHERE COALESCE(s.settings->'knowledgeBaseIds',g.value->'knowledgeBaseIds') ? k.id::text
+           OR COALESCE(s.settings->>'learningKnowledgeBaseId',g.value->>'learningKnowledgeBaseId')=k.id::text),'[]') AS "boundAgents",
+        COALESCE((SELECT json_agg(json_build_object('id',c.id,'name',COALESCE(NULLIF(c.name,''),c.platform_id)) ORDER BY c.name,c.id)
+        FROM conversations c LEFT JOIN bot_services s ON s.id=c.service_id LEFT JOIN system_settings g ON g.key='agent_settings'
+        WHERE COALESCE(s.settings->'knowledgeBaseIds',g.value->'knowledgeBaseIds') ? k.id::text
+           OR COALESCE(s.settings->>'learningKnowledgeBaseId',g.value->>'learningKnowledgeBaseId')=k.id::text
+           OR EXISTS (SELECT FROM conversation_knowledge_bases b WHERE b.conversation_id=c.id AND b.knowledge_base_id=k.id)),'[]') AS "boundConversations",
+        count(d.id) AS "documentCount",(SELECT count(*) FROM knowledge_entries e WHERE e.knowledge_base_id=k.id AND e.status='published') AS "entryCount",COALESCE(json_agg(json_build_object('id',d.id::text,'name',d.name,'status',d.status,'sizeBytes',d.size_bytes,'chunkCount',COALESCE(dc.chunk_count,0),'imageCount',dc.image_count,'lastError',d.last_error,'createdAt',d.created_at,'updatedAt',d.updated_at) ORDER BY d.created_at DESC) FILTER(WHERE d.id IS NOT NULL),'[]') AS documents
 	FROM knowledge_bases k LEFT JOIN knowledge_documents d ON d.knowledge_base_id=k.id
 	LEFT JOIN LATERAL (SELECT count(*) AS chunk_count,count(ci.chunk_id) AS image_count FROM knowledge_chunks c LEFT JOIN knowledge_chunk_images ci ON ci.chunk_id=c.id WHERE c.document_id=d.id) dc ON true
 	WHERE k.id=$1 GROUP BY k.id`, c.Param("id"))
@@ -986,20 +995,16 @@ func (a *App) getKB(c *gin.Context) {
 		fail(c, 500, "database_error", "读取失败")
 		return
 	}
-	d, _ := rowsJSON(rows)
+	d, err := rowsJSON(rows)
+	if err != nil {
+		fail(c, 500, "database_error", "读取知识库详情失败")
+		return
+	}
 	if len(d) == 0 {
 		fail(c, 404, "not_found", "知识库不存在")
 		return
 	}
 	ok(c, d[0])
-}
-func (a *App) deleteKB(c *gin.Context) {
-	_, err := a.db.Exec(c, "DELETE FROM knowledge_bases WHERE id=$1", c.Param("id"))
-	if err != nil {
-		fail(c, 409, "delete_failed", "知识库正在使用中")
-		return
-	}
-	ok(c, gin.H{"deleted": true})
 }
 func (a *App) uploadDocument(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 11<<20)

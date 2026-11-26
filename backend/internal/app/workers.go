@@ -34,6 +34,9 @@ func (a *App) RunWorkers(ctx context.Context) {
 }
 func (a *App) maintenanceLoop(ctx context.Context) {
 	run := func() {
+		if err := a.cleanDeletedKnowledgeFiles(ctx, nil); err != nil {
+			a.log.Error("清理已删除知识库的文件失败", "error", err)
+		}
 		if err := a.queueScheduledPosts(ctx, time.Now()); err != nil && !errors.Is(err, context.Canceled) {
 			a.log.Error("scheduled posts", "error", err)
 		}
@@ -373,6 +376,12 @@ func (a *App) processDocument(ctx context.Context) error {
 		return a.retryDocumentJob(ctx, j, fmt.Errorf("开始写入向量数据库失败: %w", err))
 	}
 	defer tx.Rollback(ctx)
+	var exists int
+	if err = tx.QueryRow(ctx, "SELECT 1 FROM knowledge_bases WHERE id=$1 FOR SHARE", j.KBID).Scan(&exists); errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	} else if err != nil {
+		return err
+	}
 	_, err = tx.Exec(ctx, "DELETE FROM knowledge_chunks WHERE document_id=$1", j.ID)
 	for i, ch := range chunks {
 		if err == nil {

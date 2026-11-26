@@ -563,6 +563,14 @@ code, kbd, pre, .mono { font-family: var(--font-mono); }
 .knowledge-detail-head p { margin-top: 2px; color: var(--muted); font-size: 13px; }
 .knowledge-detail-head > div:last-child { display: flex; gap: 8px; flex: none; }
 .knowledge-detail-head > div:last-child .el-button + .el-button { margin-left: 0; }
+.knowledge-detail-head .kb-delete:hover, .knowledge-detail-head .kb-delete:focus-visible { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: color-mix(in srgb, var(--danger) 6%, transparent); }
+.kb-remove p { margin: 0 0 16px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.kb-remove p strong { color: var(--text); font-weight: 600; }
+.kb-remove .el-form-item { margin-bottom: 0; }
+.kb-remove-bound { margin: -4px 0 16px; padding: 10px 12px; border-radius: 8px; background: var(--surface-3); font-size: 13px; }
+.kb-remove-bound > span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
+.kb-remove-bound p { margin: 0; color: var(--text-2); line-height: 1.7; }
+.kb-remove-bound em { font-style: normal; color: var(--text); font-weight: 600; margin-right: 8px; font-variant-numeric: tabular-nums; }
 .scope-tag { display: inline-block; margin-bottom: 2px; color: var(--muted); font-size: 12px; }
 .knowledge-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .knowledge-summary > div { padding: 12px 20px; border-left: 1px solid var(--line); min-width: 0; }

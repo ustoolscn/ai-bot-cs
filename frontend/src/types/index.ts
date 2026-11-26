@@ -286,6 +286,8 @@ export interface KnowledgeBase {
   embeddingProfileId?: string
   updatedAt: string
   documentList: KnowledgeDocument[]
+  boundConversations?: Array<{ id: string; name: string }>
+  boundAgents?: Array<{ id: string; name: string }>
 }
 
 export type PipelineOutcome = 'replied' | 'handoff' | 'skipped' | 'merged' | 'failed' | 'processing'

@@ -62,7 +62,7 @@
       <section v-else-if="current" :key="current.id" class="knowledge-detail panel-surface">
         <div class="knowledge-detail-head">
           <div><span class="scope-tag">{{ scopeText(current.scope) }}知识库</span><h2>{{ current.name }}</h2><p>{{ current.description || '没有说明' }}</p></div>
-          <div class="kb-head-actions"><el-button :icon="Download" :loading="exporting" @click="exportKb">{{ exporting ? '正在打包' : '导出' }}</el-button><el-button :icon="Search" @click="testVisible = true">检索测试</el-button></div>
+          <div class="kb-head-actions"><el-button :icon="Download" :loading="exporting" @click="exportKb">{{ exporting ? '正在打包' : '导出' }}</el-button><el-button :icon="Search" @click="testVisible = true">检索测试</el-button><el-button class="kb-delete" :icon="Delete" @click="openRemove">删除</el-button></div>
         </div>
         <div class="knowledge-summary">
           <div><span>文档</span><strong>{{ current.documents }}</strong></div>
@@ -171,6 +171,19 @@
       <template #footer><el-button @click="entryDialog = false">取消</el-button><el-button type="primary" @click="submitEntry">{{ entryForm.mode === 'candidate' ? '通过并发布' : entryForm.mode === 'gap' ? '保存答案' : '保存问答' }}</el-button></template>
     </el-dialog>
 
+    <el-dialog v-model="removeVisible" title="删除知识库" width="480px" :close-on-click-modal="!removing">
+      <div v-if="current" class="kb-remove">
+        <p>将永久删除「<strong>{{ current.name }}</strong>」里的 {{ current.documents }} 篇文档和 {{ current.entries ?? 0 }} 条问答，以及它的待审核和没答上记录。删除后不能恢复，需要留底请先导出。</p>
+        <div v-if="boundSummary.length" class="kb-remove-bound">
+          <span>正在使用它的地方会自动解绑</span>
+          <p v-for="group in boundSummary" :key="group.label"><em>{{ group.label }} {{ group.total }}</em>{{ group.names }}</p>
+        </div>
+        <el-form label-position="top" @submit.prevent="removeKb">
+          <el-form-item label="输入知识库名称确认"><el-input v-model="removeConfirm" :placeholder="current.name" :disabled="removing" /></el-form-item>
+        </el-form>
+      </div>
+      <template #footer><el-button :disabled="removing" @click="removeVisible = false">取消</el-button><el-button type="danger" :loading="removing" :disabled="removeConfirm.trim() !== current?.name" @click="removeKb">永久删除</el-button></template>
+    </el-dialog>
     <el-dialog v-model="createVisible" title="新建知识库" width="520px">
       <el-form label-position="top">
         <el-form-item label="知识库名称"><el-input v-model="createForm.name" /></el-form-item>
@@ -225,11 +238,12 @@ import { useAdminEvents } from '@/composables/useAdminEvents'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useShellStore } from '@/stores/shell'
-import { ChatLineSquare, Document, Download, Finished, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
+import { ChatLineSquare, Delete, Document, Download, Finished, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import { api } from '@/api'
+import { ApiError } from '@/api/client'
 import { useBulkDelete } from '@/composables/useBulkDelete'
 import KnowledgeDocuments from './KnowledgeDocuments.vue'
 import { agentApi, feedbackSourceText, formatTime, ratingText, sourceText, type Candidate, type Entry, type Feedback, type Gap, type LearningStats } from '@/api/agent'
@@ -454,6 +468,36 @@ async function createKb() {
     await router.replace({ query: { kb: result.id } })
     await reload()
   } catch (e) { ElMessage.error(e instanceof Error ? e.message : '创建失败') }
+}
+
+// ---- 整库删除 ----
+const removeVisible = ref(false), removing = ref(false), removeConfirm = ref('')
+function openRemove() {
+  removeConfirm.value = ''
+  removeVisible.value = true
+  // 绑定关系可能刚变过，打开时取一次最新的
+  const id = current.value?.id
+  if (id) api.knowledge.get(id).then(d => { if (current.value?.id === id) current.value = d }).catch(() => {})
+}
+const boundSummary = computed(() => {
+  const kb = current.value
+  const list = (label: string, items: Array<{ name: string }> = []) => ({ label, total: items.length, names: items.slice(0, 5).map(i => i.name).join('、') + (items.length > 5 ? ' 等' : '') })
+  return [list('会话', kb?.boundConversations), list('智能体', kb?.boundAgents)].filter(g => g.total)
+})
+async function removeKb() {
+  const kb = current.value
+  if (!kb || removeConfirm.value.trim() !== kb.name || removing.value) return
+  removing.value = true
+  try {
+    // 库已删掉、只是磁盘原件还在后台清理时，后端返回 file_cleanup_pending，按删除成功处理
+    await api.knowledge.remove(kb.id).catch(e => { if (!(e instanceof ApiError && e.code === 'file_cleanup_pending')) throw e })
+    removeVisible.value = false
+    ElMessage.success(`已删除「${kb.name}」`)
+    current.value = undefined
+    const { kb: _drop, ...rest } = route.query
+    await router.replace({ query: rest })
+    await reload()
+  } catch (e) { ElMessage.error(e instanceof Error ? e.message : '删除失败') } finally { removing.value = false }
 }
 
 // ---- 导出 / 导入（迁移到另一套同样的系统）----
