@@ -37,7 +37,15 @@ func TestHumanReplyDelivery(t *testing.T) {
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
 		if strings.HasSuffix(r.URL.Path, "/files") {
-			if body["file_data"] != base64.StdEncoding.EncodeToString(demoPNG(t)) {
+			expected := demoPNG(t)
+			if body["file_type"] == float64(2) {
+				var err error
+				expected, err = os.ReadFile("testdata/knowledge/demo.mp4")
+				if err != nil {
+					t.Error(err)
+				}
+			}
+			if body["file_data"] != base64.StdEncoding.EncodeToString(expected) {
 				t.Error("uploaded image differs")
 			}
 			json.NewEncoder(w).Encode(map[string]string{"file_info": "fixture"})
@@ -70,6 +78,7 @@ func TestHumanReplyDelivery(t *testing.T) {
 		{"group after six minutes", "group", 6 * time.Minute, false, false},
 		{"expired private", "private", 61 * time.Minute, false, false},
 		{"passive private", "private", 30 * time.Minute, false, false},
+		{"ordered private", "private", time.Minute, false, false},
 		{"exhausted", "group", time.Minute, true, false},
 		{"active rejected", "group", time.Hour, false, true},
 	} {
@@ -108,6 +117,15 @@ func TestHumanReplyDelivery(t *testing.T) {
 			if tc.name == "passive group" || tc.name == "expired private" {
 				c.Request = pictureRequest(t, "/reply", map[string]string{"text": "人工回复"}, demoPNG(t))
 			}
+			ordered := tc.name == "ordered private"
+			if ordered {
+				pic := demoPNG(t)
+				clip, err := os.ReadFile("testdata/knowledge/demo.mp4")
+				if err != nil {
+					t.Fatal(err)
+				}
+				c.Request = mediaRequest(t, "/reply", map[string]string{"text": "人工回复"}, "files", pic, clip, pic, clip, pic)
+			}
 			c.Params = gin.Params{{Key: "id", Value: inboundID}}
 			c.Set("userId", adminID)
 			c.Set("username", "admin")
@@ -118,6 +136,9 @@ func TestHumanReplyDelivery(t *testing.T) {
 
 			assertHandoffReplyDelivery(t, a, convID, "pending", "")
 			attempts := 1
+			if ordered {
+				attempts = 5
+			}
 			if reject {
 				attempts = 3
 			}
@@ -133,7 +154,20 @@ func TestHumanReplyDelivery(t *testing.T) {
 			if len(bodies) != attempts {
 				t.Fatalf("calls=%d want=%d", len(bodies), attempts)
 			}
-			for _, body := range bodies {
+			for idx, body := range bodies {
+				if ordered {
+					if body["msg_type"] != float64(7) || (idx == 0) != (body["content"] != nil) {
+						t.Fatal(body)
+					}
+					if idx < 4 {
+						if body["msg_seq"] != float64(idx+1) || body["msg_id"] != tc.name {
+							t.Fatal(body)
+						}
+					} else if body["msg_seq"] != nil || body["msg_id"] != nil {
+						t.Fatal(body)
+					}
+					continue
+				}
 				if tc.name == "passive group" || tc.name == "expired private" {
 					if body["msg_type"] != float64(7) || !strings.Contains(fmt.Sprint(body["content"]), "人工回复") {
 						t.Fatal(body)

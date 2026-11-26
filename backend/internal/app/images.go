@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -234,7 +235,8 @@ func (a *App) getMessageAttachment(c *gin.Context) {
 	}
 	c.Header("Cache-Control", "private, max-age=300")
 	c.Header("X-Content-Type-Options", "nosniff")
-	c.Data(http.StatusOK, contentType, data)
+	c.Header("Content-Type", contentType)
+	http.ServeContent(c.Writer, c.Request, parts[index].Filename, time.Time{}, bytes.NewReader(data))
 }
 
 func decorateMessageParts(record map[string]any) {
@@ -278,7 +280,7 @@ func publicContentParts(messageID string, value any) []map[string]any {
 		if part.Height > 0 {
 			item["height"] = part.Height
 		}
-		if part.Type == "image" {
+		if part.Type == "image" || part.Type == "video" {
 			if part.StorageKey != "" && messageID != "" {
 				item["previewUrl"] = fmt.Sprintf("/api/messages/%s/attachments/%d", messageID, index)
 			} else if part.URL != "" {

@@ -39,9 +39,14 @@ func insertCandidate(ctx context.Context, db rowQuerier, kbID, question string, 
 	if kbID != "" {
 		kb = kbID
 	}
+	items, e := img.plan.resolve(nil)
+	if e != nil {
+		return "", e
+	}
+	meta, data := materialColumns(items)
 	var id string
-	err := db.QueryRow(ctx, `INSERT INTO knowledge_candidates(knowledge_base_id,question,aliases,answer,source,evidence,confidence,image_mime,image_data) VALUES($1,$2,$3::jsonb,$4,$5,$6::jsonb,$7,$8,$9) RETURNING id::text`,
-		kb, strings.TrimSpace(question), string(aj), strings.TrimSpace(answer), source, string(ej), confidence, nullString(img.mime), img.data).Scan(&id)
+	err := db.QueryRow(ctx, `INSERT INTO knowledge_candidates(knowledge_base_id,question,aliases,answer,source,evidence,confidence,image_mime,image_data,material_meta,material_data) VALUES($1,$2,$3::jsonb,$4,$5,$6::jsonb,$7,$8,$9,$10,$11) RETURNING id::text`,
+		kb, strings.TrimSpace(question), string(aj), strings.TrimSpace(answer), source, string(ej), confidence, nullString(img.mime), img.data, meta, data).Scan(&id)
 	return id, err
 }
 
@@ -66,10 +71,22 @@ func publishCandidate(ctx context.Context, tx pgx.Tx, candidateID, kbID, questio
 	var source string
 	var evidence []byte
 	var img replyImage
-	if err := tx.QueryRow(ctx, "SELECT source,evidence,coalesce(image_mime,''),image_data FROM knowledge_candidates WHERE id=$1 AND status='pending' FOR UPDATE", candidateID).Scan(&source, &evidence, &img.mime, &img.data); err != nil {
+	if err := tx.QueryRow(ctx, "SELECT source,evidence FROM knowledge_candidates WHERE id=$1 AND status='pending' FOR UPDATE", candidateID).Scan(&source, &evidence); err != nil {
 		return "", fmt.Errorf("候选不存在或已处理")
 	}
-	if replacement != nil {
+	old, err := loadMaterials(ctx, tx, "knowledge_candidates", candidateID, false)
+	if err != nil {
+		return "", err
+	}
+	if replacement == nil {
+		img = replyImage{plan: uploadedPlan(old)}
+	} else if replacement.plan != nil {
+		items, err := replacement.plan.resolve(old)
+		if err != nil {
+			return "", err
+		}
+		img = replyImage{plan: uploadedPlan(items)}
+	} else {
 		img = *replacement
 	}
 	entryID, err := insertEntry(ctx, tx, kbID, question, aliases, answer, source, evidence, reviewer, img)
@@ -114,9 +131,14 @@ func insertEntry(ctx context.Context, tx pgx.Tx, kbID, question string, aliases 
 	if creator != "" {
 		by = creator
 	}
+	items, e := img.plan.resolve(nil)
+	if e != nil {
+		return "", e
+	}
+	meta, data := materialColumns(items)
 	var id string
-	if err := tx.QueryRow(ctx, `INSERT INTO knowledge_entries(knowledge_base_id,question,aliases,answer,source,source_refs,created_by,image_mime,image_data) VALUES($1,$2,$3::jsonb,$4,$5,$6::jsonb,$7,$8,$9) RETURNING id::text`,
-		kbID, question, string(aj), answer, source, string(refs), by, nullString(img.mime), img.data).Scan(&id); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO knowledge_entries(knowledge_base_id,question,aliases,answer,source,source_refs,created_by,image_mime,image_data,material_meta,material_data) VALUES($1,$2,$3::jsonb,$4,$5,$6::jsonb,$7,$8,$9,$10,$11) RETURNING id::text`,
+		kbID, question, string(aj), answer, source, string(refs), by, nullString(img.mime), img.data, meta, data).Scan(&id); err != nil {
 		return "", err
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO agent_jobs(kind,payload,dedupe_key) VALUES('index_entry',jsonb_build_object('entryId',$1::text),'index_entry:'||$1::text)`, id)
@@ -127,7 +149,7 @@ func insertEntry(ctx context.Context, tx pgx.Tx, kbID, question string, aliases 
 
 func (a *App) listCandidates(c *gin.Context) {
 	status := c.DefaultQuery("status", "pending")
-	queryList(c, a, `SELECT k.id::text,k.image_data IS NOT NULL AS "hasImage",CASE WHEN k.image_data IS NOT NULL THEN '/api/knowledge/candidates/'||k.id::text||'/image' END AS "imageUrl",k.knowledge_base_id::text AS "knowledgeBaseId",kb.name AS "knowledgeBaseName",k.question,k.aliases,k.answer,k.source,k.evidence,k.confidence,k.status,k.entry_id::text AS "entryId",k.review_note AS "reviewNote",k.created_at AS "createdAt",k.reviewed_at AS "reviewedAt"
+	queryList(c, a, `SELECT k.id::text,`+materialListSQL("k", "candidates")+` AS materials,k.image_data IS NOT NULL AS "hasImage",CASE WHEN k.image_data IS NOT NULL THEN '/api/knowledge/candidates/'||k.id::text||'/image' END AS "imageUrl",k.knowledge_base_id::text AS "knowledgeBaseId",kb.name AS "knowledgeBaseName",k.question,k.aliases,k.answer,k.source,k.evidence,k.confidence,k.status,k.entry_id::text AS "entryId",k.review_note AS "reviewNote",k.created_at AS "createdAt",k.reviewed_at AS "reviewedAt"
 		FROM knowledge_candidates k LEFT JOIN knowledge_bases kb ON kb.id=k.knowledge_base_id WHERE ($1='all' OR k.status=$1) AND ($2='' OR k.evidence @> jsonb_build_array(jsonb_build_object('conversationId',$2::text))) ORDER BY k.created_at DESC LIMIT 300`, status, c.Query("conversationId"))
 }
 
@@ -139,7 +161,7 @@ func (a *App) approveCandidateAPI(c *gin.Context) {
 		return
 	}
 	var replacement *replyImage
-	if img.data != nil || in.RemoveImage {
+	if img.plan != nil || img.data != nil || in.RemoveImage {
 		replacement = &img
 	}
 	id, err := a.approveCandidate(c, c.Param("id"), in.KnowledgeBaseID, in.Question, in.Aliases, in.Answer, c.GetString("userId"), in.Note, replacement)
@@ -182,7 +204,7 @@ func (a *App) listEntries(c *gin.Context) {
 		n := itoa(len(args))
 		where = append(where, "(e.question ILIKE $"+n+" OR e.answer ILIKE $"+n+")")
 	}
-	queryList(c, a, `SELECT e.id::text,e.image_data IS NOT NULL AS "hasImage",CASE WHEN e.image_data IS NOT NULL THEN '/api/knowledge/entries/'||e.id::text||'/image' END AS "imageUrl",e.knowledge_base_id::text AS "knowledgeBaseId",kb.name AS "knowledgeBaseName",e.question,e.aliases,e.answer,e.source,e.status,e.index_status AS "indexStatus",e.index_error AS "indexError",e.version,e.hit_count AS "hitCount",e.helpful_count AS "helpfulCount",e.unhelpful_count AS "unhelpfulCount",e.last_hit_at AS "lastHitAt",e.created_at AS "createdAt",e.updated_at AS "updatedAt"
+	queryList(c, a, `SELECT e.id::text,`+materialListSQL("e", "entries")+` AS materials,e.image_data IS NOT NULL AS "hasImage",CASE WHEN e.image_data IS NOT NULL THEN '/api/knowledge/entries/'||e.id::text||'/image' END AS "imageUrl",e.knowledge_base_id::text AS "knowledgeBaseId",kb.name AS "knowledgeBaseName",e.question,e.aliases,e.answer,e.source,e.status,e.index_status AS "indexStatus",e.index_error AS "indexError",e.version,e.hit_count AS "hitCount",e.helpful_count AS "helpfulCount",e.unhelpful_count AS "unhelpfulCount",e.last_hit_at AS "lastHitAt",e.created_at AS "createdAt",e.updated_at AS "updatedAt"
 		FROM knowledge_entries e JOIN knowledge_bases kb ON kb.id=e.knowledge_base_id WHERE `+strings.Join(where, " AND ")+` ORDER BY e.updated_at DESC LIMIT 500`, args...)
 }
 
@@ -193,13 +215,20 @@ type entryInput struct {
 	Answer          string   `json:"answer" form:"answer"`
 	Status          string   `json:"status" form:"status"`
 	Note            string   `json:"note" form:"note"`
+	Materials       []string `json:"materials" form:"-"`
 	RemoveImage     bool     `json:"removeImage" form:"removeImage"`
 }
 
 func (in *entryInput) bind(c *gin.Context) (replyImage, error) {
 	img, err := bindReplyImage(c, in)
-	if err == nil && in.RemoveImage && img.data != nil {
+	if in.Materials != nil {
+		img.plan = &materialPlan{order: in.Materials}
+	}
+	if err == nil && in.RemoveImage && (img.data != nil || img.plan != nil) {
 		err = fmt.Errorf("替换图片和移除图片不能同时选择")
+	}
+	if err == nil && in.RemoveImage {
+		img.plan = &materialPlan{}
 	}
 	return img, err
 }
@@ -246,9 +275,24 @@ func (a *App) updateEntryAPI(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback(c)
-	tag, err := tx.Exec(c, `UPDATE knowledge_entries SET image_mime=CASE WHEN $6 THEN $7 ELSE image_mime END,image_data=CASE WHEN $6 THEN $8 ELSE image_data END,question=$1,aliases=$2::jsonb,answer=$3,status=$4,version=version+1,index_status='pending',updated_at=now(),
+	var meta []byte
+	var data [][]byte
+	if img.plan != nil {
+		old, e := loadMaterials(c, tx, "knowledge_entries", c.Param("id"), true)
+		if e != nil {
+			fail(c, 404, "not_found", "条目不存在")
+			return
+		}
+		items, e := img.plan.resolve(old)
+		if e != nil {
+			fail(c, 400, "invalid_request", e.Error())
+			return
+		}
+		meta, data = materialColumns(items)
+	}
+	tag, err := tx.Exec(c, `UPDATE knowledge_entries SET material_meta=coalesce($9,material_meta),material_data=coalesce($10,material_data),image_mime=CASE WHEN $6 THEN $7 ELSE image_mime END,image_data=CASE WHEN $6 THEN $8 ELSE image_data END,question=$1,aliases=$2::jsonb,answer=$3,status=$4,version=version+1,index_status='pending',updated_at=now(),
 		helpful_count=CASE WHEN status='review' AND $4='published' THEN 0 ELSE helpful_count END,unhelpful_count=CASE WHEN status='review' AND $4='published' THEN 0 ELSE unhelpful_count END WHERE id=$5`,
-		strings.TrimSpace(in.Question), string(aj), strings.TrimSpace(in.Answer), in.Status, c.Param("id"), img.data != nil || in.RemoveImage, nullString(img.mime), img.data)
+		strings.TrimSpace(in.Question), string(aj), strings.TrimSpace(in.Answer), in.Status, c.Param("id"), img.data != nil || in.RemoveImage, nullString(img.mime), img.data, meta, data)
 	if err != nil || tag.RowsAffected() == 0 {
 		fail(c, 404, "not_found", "条目不存在")
 		return
@@ -338,7 +382,11 @@ func (a *App) createFeedback(c *gin.Context) {
 		fail(c, 400, "invalid_request", err.Error())
 		return
 	}
-	if img.data != nil && strings.TrimSpace(in.CorrectedAnswer) == "" {
+	if _, err := img.plan.resolve(nil); err != nil {
+		fail(c, 400, "invalid_request", err.Error())
+		return
+	}
+	if (img.data != nil || img.plan != nil && len(img.plan.order) > 0) && strings.TrimSpace(in.CorrectedAnswer) == "" {
 		fail(c, 400, "invalid_request", "附图纠错需要填写纠正答案")
 		return
 	}

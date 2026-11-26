@@ -82,13 +82,13 @@ func (a *App) reviewGroupMessage(ctx context.Context, mid string) (reviewErr err
 	var cid, bot, member, pid, content, role string
 	var when time.Time
 	var policy guardPolicy
-	var enabled, staff, blocked, hasImage bool
+	var enabled, staff, blocked, hasImage, hasVideo bool
 	err := a.db.QueryRow(ctx, `SELECT c.id::text,c.bot_id::text,m.sender_id,m.platform_message_id,m.content,m.event_at,
  COALESCE(NULLIF(m.raw_event#>>'{d,author,member_role}',''),cm.qq_role,''),c.guard_policy,c.enabled AND NOT c.bot_removed AND b.enabled,
- COALESCE(cm.is_staff,false),m.context_excluded AND m.context_exclusion_reason<>'pending_review',m.parts @> '[{"type":"image"}]'::jsonb
+ COALESCE(cm.is_staff,false),m.context_excluded AND m.context_exclusion_reason<>'pending_review',m.parts @> '[{"type":"image"}]'::jsonb,m.parts @> '[{"type":"video"}]'::jsonb
  FROM group_reviews r JOIN messages m ON m.id=r.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=c.bot_id
  LEFT JOIN conversation_members cm ON cm.conversation_id=c.id AND cm.platform_user_id=m.sender_id WHERE r.message_id=$1 AND r.status='pending'`, mid).
-		Scan(&cid, &bot, &member, &pid, &content, &when, &role, &policy, &enabled, &staff, &blocked, &hasImage)
+		Scan(&cid, &bot, &member, &pid, &content, &when, &role, &policy, &enabled, &staff, &blocked, &hasImage, &hasVideo)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -186,7 +186,7 @@ func (a *App) reviewGroupMessage(ctx context.Context, mid string) (reviewErr err
 		if err == nil && queue && !blocked && enabled {
 			_, err = tx.Exec(ctx, "INSERT INTO inbox_tasks(message_id) VALUES($1) ON CONFLICT DO NOTHING", mid)
 		}
-		if err == nil && staff && !blocked && enabled && (strings.TrimSpace(content) != "" || hasImage) {
+		if err == nil && staff && !blocked && enabled && (strings.TrimSpace(content) != "" || hasImage || hasVideo) {
 			_, err = tx.Exec(ctx, `INSERT INTO agent_jobs(kind,payload,dedupe_key) VALUES('staff_answer',jsonb_build_object('messageId',$1::text),'staff_answer:'||$1::text) ON CONFLICT DO NOTHING`, mid)
 		}
 	} else {

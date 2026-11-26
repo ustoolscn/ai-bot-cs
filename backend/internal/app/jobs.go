@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -110,6 +111,11 @@ func (a *App) runJob(ctx context.Context, j agentJob) error {
 		err = a.jobEvalRun(ctx, str("runId"))
 	default:
 		err = fmt.Errorf("unknown job kind %s", j.Kind)
+	}
+	var wait staffWait
+	if errors.As(err, &wait) {
+		_, e := a.db.Exec(ctx, "UPDATE agent_jobs SET status='pending',attempts=greatest(attempts-1,0),next_attempt_at=$1 WHERE id=$2", wait.until, j.ID)
+		return e
 	}
 	if openai.IsHTTPStatus(err, 403) && str("messageId") != "" {
 		err = a.quarantineBackground(ctx, str("messageId"))
@@ -422,10 +428,9 @@ func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool
 	}
 	s := a.agentSettings(ctx)
 
-	var convID, content, source string
-	var rawParts []byte
+	var convID, source string
 	var eventAt time.Time
-	if err := a.db.QueryRow(ctx, "SELECT conversation_id::text,content,event_type,event_at,parts FROM messages WHERE id=$1", messageID).Scan(&convID, &content, &source, &eventAt, &rawParts); err != nil {
+	if err := a.db.QueryRow(ctx, "SELECT conversation_id::text,event_type,event_at FROM messages WHERE id=$1", messageID).Scan(&convID, &source, &eventAt); err != nil {
 		return nil
 	}
 	s, _, profile, err := a.conversationAgent(ctx, convID, s)
@@ -451,15 +456,27 @@ func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool
 			return nil
 		}
 	}
-	var parts []domain.ContentPart
-	if err = json.Unmarshal(rawParts, &parts); err != nil {
+	turns, err := a.staffTurns(ctx, messageID, convID, source, eventAt)
+	if err != nil || len(turns) == 0 {
 		return err
 	}
-	hasImage := hasContentPart(parts, "image")
+	var parts []domain.ContentPart
+	var texts []string
+	var evidence []map[string]any
+	for _, turn := range turns {
+		parts = append(parts, turn.parts...)
+		if turn.content != "" {
+			texts = append(texts, turn.content)
+		}
+		evidence = append(evidence, map[string]any{"messageId": turn.id, "conversationId": convID, "content": agent.TruncateRunes(turn.content, 500)})
+	}
+	content := strings.Join(texts, "\n")
+	eventAt = turns[0].at
+	hasImage := hasContentPart(parts, "image") || hasContentPart(parts, "video")
 	if !hasImage && len([]rune(strings.TrimSpace(content))) < 6 {
 		return nil
 	}
-	rows, err := a.db.Query(ctx, `SELECT direction,sender_name,content,event_type FROM messages WHERE conversation_id=$1 AND event_at<$2 AND event_at>$2-interval '2 hours' AND content<>'' AND NOT context_excluded AND event_type<>'PROCESSING_ACK' ORDER BY event_at DESC LIMIT 15`, convID, eventAt)
+	rows, err := a.db.Query(ctx, `SELECT direction,sender_name,content,event_type FROM messages WHERE conversation_id=$1 AND (event_at,created_at,id)<(SELECT event_at,created_at,id FROM messages WHERE id=$3) AND event_at>$2::timestamptz-interval '2 hours' AND content<>'' AND NOT context_excluded AND event_type<>'PROCESSING_ACK' ORDER BY event_at DESC LIMIT 15`, convID, eventAt, turns[0].id)
 	if err != nil {
 		return err
 	}
@@ -487,12 +504,20 @@ func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool
 	var img replyImage
 	var images []domain.ChatContentPart
 	if hasImage {
-		img, err = a.staffReplyImage(ctx, parts)
-		if err != nil {
-			return err
+		items, e := a.staffMaterials(ctx, parts)
+		if e != nil {
+			return e
 		}
-		images = []domain.ChatContentPart{{Type: "image", ContentType: img.mime, Detail: "auto", DataURL: "data:" + img.mime + ";base64," + base64.StdEncoding.EncodeToString(img.data)}}
-		input += "\n附图是这条客服回答的一部分，请结合图片判断是否可复用。"
+		img.plan = uploadedPlan(items)
+		for _, m := range items {
+			if m.Kind == "image" {
+				images = append(images, domain.ChatContentPart{Type: "image", ContentType: m.MIME, Detail: "auto", DataURL: "data:" + m.MIME + ";base64," + base64.StdEncoding.EncodeToString(m.Data)})
+			} else {
+				input += "\n客服附带 MP4 录屏：" + m.Filename
+			}
+		}
+		input += "\n素材按操作步骤排列，请结合上下文判断是否可复用。"
+
 	}
 	var res staffMining
 
@@ -502,7 +527,7 @@ func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool
 	if !res.Reusable || strings.TrimSpace(res.Question) == "" || strings.TrimSpace(res.Answer) == "" {
 		return nil
 	}
-	evidence := []map[string]any{{"messageId": messageID, "conversationId": convID, "content": agent.TruncateRunes(content, 500), "context": agent.TruncateRunes(strings.Join(lines, "\n"), 1500)}}
+	evidence[0]["context"] = agent.TruncateRunes(strings.Join(lines, "\n"), 1500)
 	candID, fresh, err := a.createStaffCandidate(ctx, messageID, s.LearningKnowledgeBaseID, res, evidence, img)
 	if err != nil {
 		return err

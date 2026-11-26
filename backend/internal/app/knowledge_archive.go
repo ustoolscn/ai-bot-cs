@@ -161,17 +161,19 @@ func (a *App) writeArchive(c *gin.Context, tx pgx.Tx, z *zip.Writer, id string, 
 			filter = "t.entry_id IN (SELECT id FROM knowledge_entries WHERE knowledge_base_id=$1)"
 		}
 
-		imageCol := "NULL::bytea"
+		imageCol := "'[]'::jsonb,ARRAY[]::bytea[]"
 		if t.table == "knowledge_entries" || t.table == "knowledge_candidates" {
-			imageCol = "t.image_data"
+			imageCol = "t.material_meta,t.material_data"
 		}
 		rows, e := tx.Query(c, "SELECT to_jsonb(r),"+imageCol+" FROM "+t.table+" t CROSS JOIN LATERAL (SELECT "+cols+") r WHERE "+filter+" ORDER BY t.id", id)
 		if e != nil {
 			return e
 		}
 		for rows.Next() {
-			var b, data []byte
-			if e = rows.Scan(&b, &data); e != nil {
+			var b []byte
+			var meta []material
+			var blobs [][]byte
+			if e = rows.Scan(&b, &meta, &blobs); e != nil {
 				rows.Close()
 				return e
 			}
@@ -185,13 +187,21 @@ func (a *App) writeArchive(c *gin.Context, tx pgx.Tx, z *zip.Writer, id string, 
 				rows.Close()
 				return e
 			}
-			if data != nil {
+			if len(meta) != len(blobs) {
+				rows.Close()
+				return errors.New("invalid material data")
+			}
+			if len(meta) > 0 {
+				r["materials"], _ = json.Marshal(meta)
+				m.Version = 2
+			}
+			for n, data := range blobs {
 				total += int64(len(data))
 				if total > maxArchive {
 					rows.Close()
 					return tooLarge
 				}
-				name := fmt.Sprintf("images/%s/%d", t.table, len(m.Records[t.table]))
+				name := fmt.Sprintf("materials/%s/%d/%d", t.table, len(m.Records[t.table]), n)
 				w, err := z.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Store})
 				if err == nil {
 					_, err = w.Write(data)
@@ -200,7 +210,7 @@ func (a *App) writeArchive(c *gin.Context, tx pgx.Tx, z *zip.Writer, id string, 
 					rows.Close()
 					return err
 				}
-				r["hasImage"] = json.RawMessage("true")
+
 				m.ImageCount++
 			}
 			m.Records[t.table] = append(m.Records[t.table], r)
@@ -297,7 +307,7 @@ func (a *App) importKnowledge(c *gin.Context) {
 		archiveFailure(c, e, "invalid_archive")
 		return
 	}
-	if json.Unmarshal(b, &m) != nil || m.Version != 1 || m.ImageCount < 0 || m.ImageCount > len(members) || len(m.Documents)+m.ImageCount+1 != len(members) || strings.TrimSpace(m.Name) == "" {
+	if json.Unmarshal(b, &m) != nil || (m.Version != 1 && m.Version != 2) || m.ImageCount < 0 || m.ImageCount > len(members) || len(m.Documents)+m.ImageCount+1 != len(members) || strings.TrimSpace(m.Name) == "" {
 		fail(c, 400, "invalid_archive", "文件包内容或版本无效")
 		return
 	}
@@ -426,7 +436,40 @@ func restoreRecords(c *gin.Context, tx pgx.Tx, kb string, m *knowledgeArchive, m
 			if e = tx.QueryRow(c, stmt, string(b)).Scan(&local); e != nil {
 				return e
 			}
-			if string(r["hasImage"]) == "true" && (t.table == "knowledge_entries" || t.table == "knowledge_candidates") {
+			if raw, ok := r["materials"]; ok {
+				if t.table != "knowledge_entries" && t.table != "knowledge_candidates" {
+					return errors.New("invalid material owner")
+				}
+				var meta []material
+				if json.Unmarshal(raw, &meta) != nil || len(meta) > maxMaterials {
+					return errors.New("invalid materials")
+				}
+				items := make([]material, 0, len(meta))
+				total := 0
+				for n, desc := range meta {
+					data, err := readMember(members[fmt.Sprintf("materials/%s/%d/%d", t.table, index, n)], maxVideo)
+					if err != nil {
+						return err
+					}
+					item, err := validateMaterial(desc.Filename, data)
+					if err != nil {
+						return err
+					}
+					if item.Kind != desc.Kind || item.Size != desc.Size || item.MIME != desc.MIME {
+						return errors.New("archive material mismatch")
+					}
+					total += item.Size
+					if total > maxMaterialTotal {
+						return tooLarge
+					}
+					items = append(items, item)
+					restoredImages++
+				}
+				metadata, blobs := materialColumns(items)
+				if _, err := tx.Exec(c, "UPDATE "+t.table+" SET material_meta=$1,material_data=$2 WHERE id=$3", metadata, blobs, local); err != nil {
+					return err
+				}
+			} else if string(r["hasImage"]) == "true" && (t.table == "knowledge_entries" || t.table == "knowledge_candidates") {
 				data, err := readMember(members[fmt.Sprintf("images/%s/%d", t.table, index)], maxReplyImage)
 				if err != nil {
 					return err

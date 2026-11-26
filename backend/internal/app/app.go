@@ -212,6 +212,8 @@ func (a *App) Router() http.Handler {
 	auth.GET("/knowledge/candidates", a.listCandidates)
 	auth.POST("/knowledge/candidates/:id/approve", a.approveCandidateAPI)
 	auth.POST("/knowledge/candidates/:id/reject", a.rejectCandidate)
+	auth.GET("/knowledge/entries/:id/materials/:materialId", a.materialPreview("knowledge_entries"))
+	auth.GET("/knowledge/candidates/:id/materials/:materialId", a.materialPreview("knowledge_candidates"))
 	auth.GET("/knowledge/entries/:id/image", a.replyImagePreview("knowledge_entries"))
 	auth.GET("/knowledge/candidates/:id/image", a.replyImagePreview("knowledge_candidates"))
 	auth.GET("/knowledge/entries", a.listEntries)
@@ -1367,7 +1369,7 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 	if err = tx.Commit(ctx); err != nil {
 		return err
 	}
-	if !blocked && !needsReview && senderIsStaff && (strings.TrimSpace(msg.Text) != "" || hasContentPart(msg.Parts, "image")) {
+	if !blocked && !needsReview && senderIsStaff && (strings.TrimSpace(msg.Text) != "" || hasContentPart(msg.Parts, "image") || hasContentPart(msg.Parts, "video")) {
 		a.enqueueJob(ctx, "staff_answer", map[string]any{"messageId": mid}, "staff_answer:"+mid)
 	}
 	return nil

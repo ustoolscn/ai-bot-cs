@@ -39,6 +39,22 @@ func TestKnowledgeArchiveRoundTrip(t *testing.T) {
 	for table, key := range map[string]string{"knowledge_entries": entry, "knowledge_candidates": cand} {
 		id("UPDATE "+table+" SET image_mime='image/png',image_data=$2 WHERE id=$1 RETURNING id", key, pic)
 	}
+	clip, err := os.ReadFile("testdata/knowledge/demo.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	video, err := validateMaterial("操作说明.mp4", clip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for table, key := range map[string]string{"knowledge_entries": entry, "knowledge_candidates": cand} {
+		items, err := loadMaterials(ctx, db, table, key, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		meta, data := materialColumns(append(items, video))
+		id("UPDATE "+table+" SET material_meta=$2,material_data=$3 WHERE id=$1 RETURNING id", key, meta, data)
+	}
 	id("INSERT INTO knowledge_gaps(question,knowledge_base_id,candidate_id) VALUES('q',$1,$2) RETURNING id", kb, cand)
 	id("INSERT INTO eval_cases(question,entry_id) VALUES('q',$1) RETURNING id", entry)
 	key, e := files.Save(ctx, "guide.txt", []byte("abc"))
@@ -79,5 +95,5 @@ func TestKnowledgeArchiveRoundTrip(t *testing.T) {
 	if newKey == key || string(b) != "abc" || e != nil {
 		t.Fatal("original file did not round trip")
 	}
-	id("SELECT e.id FROM knowledge_entries e JOIN knowledge_candidates c ON c.entry_id=e.id JOIN knowledge_gaps g ON g.candidate_id=c.id JOIN eval_cases v ON v.entry_id=e.id JOIN agent_jobs j ON j.payload->>'entryId'=e.id::text WHERE e.knowledge_base_id=$1 AND e.image_data=$2 AND c.image_data=$2 AND e.image_mime=c.image_mime", res.Data.ID, pic)
+	id("SELECT e.id FROM knowledge_entries e JOIN knowledge_candidates c ON c.entry_id=e.id JOIN knowledge_gaps g ON g.candidate_id=c.id JOIN eval_cases v ON v.entry_id=e.id JOIN agent_jobs j ON j.payload->>'entryId'=e.id::text WHERE e.knowledge_base_id=$1 AND e.image_data=$2 AND c.image_data=$2 AND e.image_mime=c.image_mime AND e.material_data[2]=$3 AND c.material_data[2]=$3 AND e.material_meta->1->>'filename'='操作说明.mp4'", res.Data.ID, pic, clip)
 }

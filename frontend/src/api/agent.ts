@@ -103,22 +103,38 @@ export interface CustomTool {
   parameters: Record<string, unknown>
 }
 
-/** 图片改动：image 是新选的图；removeImage 表示去掉原来的图。两者都没有就沿用原图。 */
-export interface ImageChange { image?: File | null; removeImage?: boolean }
-/** 带图片（或要移除图片）时改用 multipart，字段名和 JSON 一致；没有图片仍发 JSON。 */
-function withImage<T extends ImageChange>(data: T): T | FormData {
-  if (!data.image && !data.removeImage) { const { image: _i, removeImage: _r, ...rest } = data; return rest as T }
+/** 一条问答、候选或回复带的素材（按顺序发出） */
+export interface Material { id: string; kind: 'image' | 'video'; mime?: string; url: string; filename?: string; sizeBytes?: number; posterUrl?: string | null }
+/** 编辑中的素材：已保存的（existing）或新选的文件（file），数组顺序就是发送顺序 */
+export interface MaterialDraft { key: string; existing?: Material; file?: File }
+/** 素材数量和大小上限，与后端一致 */
+export const materialLimits = { max: 9, imageBytes: 5 << 20, videoBytes: 25 << 20, totalBytes: 64 << 20 }
+/**
+ * 带素材的写请求。drafts 不传：不动原有素材（编辑/审核时保留原组）。
+ * 传了：按数组顺序提交最终结果；有新文件时用 multipart（files + materials 顺序），否则 JSON。
+ */
+function withMaterials<T extends object>(data: T, drafts?: MaterialDraft[]): T | FormData | (T & { materials: string[] }) {
+  if (!drafts) return data
+  const files = drafts.filter(d => d.file).map(d => d.file!)
+  let n = 0
+  const order = drafts.map(d => d.existing ? `keep:${d.existing.id}` : `new:${n++}`)
+  if (!files.length) return { ...data, materials: order }
   const form = new FormData()
   for (const [key, value] of Object.entries(data)) {
-    if (value === undefined || value === null || value === false && key === 'removeImage') continue
+    if (value === undefined || value === null) continue
     if (Array.isArray(value)) value.forEach(v => form.append(key, String(v)))
-    else form.set(key, value instanceof File ? value : String(value))
+    else form.set(key, String(value))
   }
+  files.forEach(f => form.append('files', f))
+  form.set('materials', JSON.stringify(order))
   return form
 }
+/** 把已保存的素材转成编辑草稿 */
+export function draftsOf(materials?: Material[] | null): MaterialDraft[] { return (materials || []).map(m => ({ key: m.id, existing: m })) }
+const uploadTimeout = 180000
 
-export interface Candidate { id: string; hasImage?: boolean; imageUrl?: string | null; knowledgeBaseId?: string; knowledgeBaseName?: string; question: string; aliases: string[]; answer: string; source: string; evidence: Array<Record<string, string>>; confidence: number; status: string; reviewNote: string; createdAt: string }
-export interface Entry { id: string; hasImage?: boolean; imageUrl?: string | null; knowledgeBaseId: string; knowledgeBaseName: string; question: string; aliases: string[]; answer: string; source: string; status: string; indexStatus: string; indexError: string; version: number; hitCount: number; helpfulCount: number; unhelpfulCount: number; updatedAt: string }
+export interface Candidate { id: string; materials?: Material[]; knowledgeBaseId?: string; knowledgeBaseName?: string; question: string; aliases: string[]; answer: string; source: string; evidence: Array<Record<string, string>>; confidence: number; status: string; reviewNote: string; createdAt: string }
+export interface Entry { id: string; materials?: Material[]; knowledgeBaseId: string; knowledgeBaseName: string; question: string; aliases: string[]; answer: string; source: string; status: string; indexStatus: string; indexError: string; version: number; hitCount: number; helpfulCount: number; unhelpfulCount: number; updatedAt: string }
 export interface Gap { id: string; question: string; occurrences: number; status: string; firstSeenAt: string; lastSeenAt: string; knowledgeBaseId?: string | null; knowledgeBaseName?: string }
 export interface Feedback { id: string; source: string; rating: string; comment: string; correctedAnswer: string; createdAt: string; answer: string; question: string; messageId?: string; conversationName: string; read?: boolean; knowledgeBaseId?: string | null; knowledgeBaseName?: string }
 export interface MemoryMember { botId: string; botName: string; conversationId: string; conversationName: string; conversationType: string; userId: string; displayName: string; count: number }
@@ -189,14 +205,14 @@ export const agentApi = {
   learning: {
     stats: () => request<LearningStats>({ url: '/learning/stats' }, mock.mockLearningStats),
     candidates: (status = 'pending', conversationId?: string) => request<Candidate[]>({ url: '/knowledge/candidates', params: { status, conversationId: conversationId || undefined } }, mock.mockCandidates),
-    approve: (id: string, data: { knowledgeBaseId: string; question: string; aliases: string[]; answer: string; note?: string } & ImageChange) => request<{ entryId: string }>({ method: 'POST', url: `/knowledge/candidates/${id}/approve`, data: withImage(data) }),
+    approve: (id: string, data: { knowledgeBaseId: string; question: string; aliases: string[]; answer: string; note?: string }, materials?: MaterialDraft[]) => request<{ entryId: string }>({ method: 'POST', url: `/knowledge/candidates/${id}/approve`, data: withMaterials(data, materials), timeout: uploadTimeout }),
     reject: (id: string, note: string) => request<{ rejected: boolean }>({ method: 'POST', url: `/knowledge/candidates/${id}/reject`, data: { note } }),
     entries: (params: { knowledgeBaseId?: string; status?: string; q?: string }) => request<Entry[]>({ url: '/knowledge/entries', params }, mock.mockEntries),
-    createEntry: (data: { knowledgeBaseId: string; question: string; aliases: string[]; answer: string } & ImageChange) => request<{ id: string }>({ method: 'POST', url: '/knowledge/entries', data: withImage(data) }),
-    updateEntry: (id: string, data: { question: string; aliases: string[]; answer: string; status: string } & ImageChange) => request<{ updated: boolean }>({ method: 'PUT', url: `/knowledge/entries/${id}`, data: withImage(data) }),
+    createEntry: (data: { knowledgeBaseId: string; question: string; aliases: string[]; answer: string }, materials?: MaterialDraft[]) => request<{ id: string }>({ method: 'POST', url: '/knowledge/entries', data: withMaterials(data, materials?.length ? materials : undefined), timeout: uploadTimeout }),
+    updateEntry: (id: string, data: { question: string; aliases: string[]; answer: string; status: string }, materials?: MaterialDraft[]) => request<{ updated: boolean }>({ method: 'PUT', url: `/knowledge/entries/${id}`, data: withMaterials(data, materials), timeout: uploadTimeout }),
     deleteEntry: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/knowledge/entries/${id}` }),
     gaps: (status = 'open', knowledgeBaseId = '') => request<Gap[]>({ url: '/knowledge/gaps', params: { status, ...(knowledgeBaseId ? { knowledgeBaseId } : {}) } }, mock.mockGaps),
-    answerGap: (id: string, data: { knowledgeBaseId: string; question: string; answer: string; aliases: string[] } & ImageChange) => request<{ entryId: string }>({ method: 'POST', url: `/knowledge/gaps/${id}/answer`, data: withImage(data) }),
+    answerGap: (id: string, data: { knowledgeBaseId: string; question: string; answer: string; aliases: string[] }, materials?: MaterialDraft[]) => request<{ entryId: string }>({ method: 'POST', url: `/knowledge/gaps/${id}/answer`, data: withMaterials(data, materials?.length ? materials : undefined), timeout: uploadTimeout }),
     ignoreGap: (id: string) => request<{ ignored: boolean }>({ method: 'POST', url: `/knowledge/gaps/${id}/ignore` }),
     feedback: (rating = '', knowledgeBaseId = '') => request<Feedback[]>({ url: '/feedback', params: { rating, ...(knowledgeBaseId ? { knowledgeBaseId } : {}) } }, mock.mockFeedback),
     markFeedbackRead: (target: { ids: string[] } | { all: true }) => request<{ updated: number }>({ method: 'POST', url: '/feedback/read', data: target }, { updated: 0 }),
@@ -222,8 +238,8 @@ export const agentApi = {
   },
   messages: {
     detail: (id: string) => request<MessageAgentDetail>({ url: `/messages/${id}` }, { ...mock.mockMessageAgentDetail, id }),
-    reply: (id: string, text: string, learn: boolean, image?: File | null) => request<{ id: string }>({ method: 'POST', url: `/messages/${id}/reply`, data: withImage({ text, learn, image }), timeout: 60000 }),
-    feedback: (id: string, data: { rating: string; comment?: string; correctedAnswer?: string; publish?: boolean; knowledgeBaseId?: string; question?: string; image?: File | null }) => request<{ saved: boolean; entryId?: string; candidateId?: string }>({ method: 'POST', url: `/messages/${id}/feedback`, data: withImage(data), timeout: 60000 }),
+    reply: (id: string, text: string, learn: boolean, materials?: MaterialDraft[]) => request<{ id: string; messageIds?: string[] }>({ method: 'POST', url: `/messages/${id}/reply`, data: withMaterials({ text, learn }, materials?.length ? materials : undefined), timeout: uploadTimeout }),
+    feedback: (id: string, data: { rating: string; comment?: string; correctedAnswer?: string; publish?: boolean; knowledgeBaseId?: string; question?: string }, materials?: MaterialDraft[]) => request<{ saved: boolean; entryId?: string; candidateId?: string }>({ method: 'POST', url: `/messages/${id}/feedback`, data: withMaterials(data, materials?.length ? materials : undefined), timeout: uploadTimeout }),
   },
   members: {
     sync:(id:string,refresh:boolean)=>request<{syncedAt:string}>({url:`/conversations/${id}/members/sync`,method:'POST',params:{refresh},timeout:600000}),

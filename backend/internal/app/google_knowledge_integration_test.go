@@ -199,7 +199,11 @@ func TestGoogleKnowledgeScreenshotReply(t *testing.T) {
 	// A published FAQ has its own demonstration image. A verbatim answer also
 	// attaches it when the model omits the optional citation syntax.
 	faqPic := demoPNG(t)
-	req := pictureRequest(t, api+"/knowledge/entries", map[string]string{"knowledgeBaseId": kb, "question": "TOPAZ 如何操作？", "answer": "请打开 TOPAZ 面板。"}, faqPic)
+	video, err := os.ReadFile("testdata/knowledge/demo.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := mediaRequest(t, api+"/knowledge/entries", map[string]string{"knowledgeBaseId": kb, "question": "TOPAZ 如何操作？", "answer": "请打开 TOPAZ 面板。", "materials": `["new:0","new:1"]`}, "files", faqPic, video)
 	response, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -217,10 +221,10 @@ func TestGoogleKnowledgeScreenshotReply(t *testing.T) {
 	})
 	mock.SetNextChatContent("请打开 TOPAZ 面板。")
 	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+bot, secret, qqEventBody(t, "evt-faq", "GROUP_AT_MESSAGE_CREATE", "msg-faq", "TOPAZ 如何操作？"))
-	eventually(t, 10*time.Second, "QQ FAQ image", func() (bool, error) { return len(mock.QQSends()) >= 3, nil })
+	eventually(t, 10*time.Second, "QQ FAQ image", func() (bool, error) { return len(mock.QQSends()) >= 4, nil })
 	upload := mock.QQUploads()
 	send := mock.QQSends()[2].Body
-	if len(upload) != 3 || upload[2].Body["file_data"] != base64.StdEncoding.EncodeToString(faqPic) || send["msg_type"] != float64(7) || !strings.Contains(fmt.Sprint(send["content"]), "请打开 TOPAZ 面板。") {
+	if len(upload) != 4 || upload[3].Body["file_type"] != float64(2) || upload[3].Body["file_data"] != base64.StdEncoding.EncodeToString(video) || mock.QQSends()[3].Body["msg_seq"] != float64(2) || mock.QQSends()[3].Body["content"] != nil || upload[2].Body["file_data"] != base64.StdEncoding.EncodeToString(faqPic) || send["msg_type"] != float64(7) || !strings.Contains(fmt.Sprint(send["content"]), "请打开 TOPAZ 面板。") {
 		t.Fatalf("FAQ delivery: %v", send)
 	}
 

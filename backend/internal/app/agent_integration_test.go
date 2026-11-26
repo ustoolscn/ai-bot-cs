@@ -448,6 +448,7 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	// Staff answers become FAQ candidates.
 	requestJSON(t, client, http.MethodPut, server.URL+"/api/conversations/"+convID+"/members/bob", map[string]any{"isStaff": true}, http.StatusOK)
 	postQQWebhook(t, client, hook, botSecret, groupEventBody(t, "e4", "GROUP_MESSAGE_CREATE", "m4", "carol", "Carol", "充值了怎么还没到账"))
+	postQQWebhook(t, client, hook, botSecret, groupEventBody(t, "staff-start", "GROUP_MESSAGE_CREATE", "staff-start", "bob", "Bob", "请按这两个步骤操作"))
 	staffEvent := groupEventBody(t, "e5", "GROUP_MESSAGE_CREATE", "m5", "bob", "Bob", "")
 	var envelope map[string]any
 	if err := json.Unmarshal(staffEvent, &envelope); err != nil {
@@ -456,19 +457,23 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	envelope["d"].(map[string]any)["attachments"] = []map[string]any{{"content_type": "image/png", "filename": "staff.png", "url": mediaServer.URL + "/staff.png"}}
 	staffEvent, _ = json.Marshal(envelope)
 	postQQWebhook(t, client, hook, botSecret, staffEvent)
+	envelope["id"] = "staff-next"
+	envelope["d"].(map[string]any)["id"] = "staff-next"
+	staffEvent, _ = json.Marshal(envelope)
+	postQQWebhook(t, client, hook, botSecret, staffEvent)
 	var candidateID string
-	eventually(t, 8*time.Second, "staff candidate created", func() (bool, error) {
-		err := pool.QueryRow(ctx, `SELECT id::text FROM knowledge_candidates WHERE source='staff' AND status='pending' AND image_data=$1`, staffPic).Scan(&candidateID)
+	eventually(t, 40*time.Second, "staff candidate created", func() (bool, error) {
+		err := pool.QueryRow(ctx, `SELECT id::text FROM knowledge_candidates WHERE source='staff' AND status='pending' AND image_data=$1 AND jsonb_array_length(material_meta)=2 AND jsonb_array_length(evidence)=3`, staffPic).Scan(&candidateID)
 		return candidateID != "", nilIfNoRows(err)
 	})
 	requestJSON(t, client, http.MethodPost, server.URL+"/api/conversations/"+convID+"/staff-learning", map[string]any{}, http.StatusOK)
 	eventually(t, 8*time.Second, "staff history style learned", func() (bool, error) {
 		var n int
 		err := pool.QueryRow(ctx, `SELECT sample_count FROM conversation_staff_styles WHERE conversation_id=$1`, convID).Scan(&n)
-		return n == 2, nilIfNoRows(err)
+		return n == 4, nilIfNoRows(err)
 	})
 	learned := dataMap(t, requestJSON(t, client, http.MethodGet, server.URL+"/api/conversations/"+convID+"/staff-learning", nil, http.StatusOK))
-	if learned["sampleCount"] != float64(2) || !strings.Contains(fmt.Sprint(learned["style"]), "先说结论") || !strings.Contains(application.staffStylePrompt(ctx, convID), "先说结论") {
+	if learned["sampleCount"] != float64(4) || !strings.Contains(fmt.Sprint(learned["style"]), "先说结论") || !strings.Contains(application.staffStylePrompt(ctx, convID), "先说结论") {
 		t.Fatalf("staff learning API: %#v", learned)
 	}
 	approved := requestJSON(t, client, http.MethodPost, server.URL+"/api/knowledge/candidates/"+candidateID+"/approve", map[string]any{

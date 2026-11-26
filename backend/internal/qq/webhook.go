@@ -209,6 +209,9 @@ func Parse(body []byte, botID string) (Envelope, *domain.InboundMessage, error) 
 		if strings.HasPrefix(mime, "image/") || mime == "image" || generic && (knownExt || a.Width > 0 && a.Height > 0) {
 			partType = "image"
 		}
+		if mime == "video/mp4" || generic && ext == ".mp4" {
+			partType = "video"
+		}
 		parts = append(parts, domain.ContentPart{Type: partType, URL: a.URL, WaveURL: a.Wave, Transcript: a.Transcript, Text: a.Filename, Filename: a.Filename, ContentType: a.ContentType, SizeBytes: a.Size, Width: a.Width, Height: a.Height})
 	}
 	eventTime := time.Now().UTC()

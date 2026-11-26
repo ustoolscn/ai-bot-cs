@@ -380,12 +380,32 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 	finishShape := a.startStage(ctx, j.MessageID, "回复整理与分段")
 	cleaned, imageID := selectedKnowledgeImage(out.content, rt.hits)
 	caption, attached := extractOutboundImage(cleaned)
+	var faqMaterials bool
 	if imageID != "" && !rt.handoff && rt.screenshot == nil && rt.statusImage == nil {
-		part, e := a.prepareKnowledgeImage(ctx, imageID)
-		if e == nil {
-			attached = []domain.ContentPart{part}
+		var entry string
+		for _, hit := range rt.hits {
+			if hit["id"] == imageID {
+				entry, _ = hit["entry_id"].(string)
+				break
+			}
+		}
+		if entry != "" {
+			items, e := loadMaterials(ctx, a.db, "knowledge_entries", entry, false)
+			if e != nil {
+				return a.retryInbox(ctx, j, e)
+			}
+			attached, e = a.storeMaterials(ctx, items)
+			if e != nil {
+				return a.retryInbox(ctx, j, e)
+			}
+			faqMaterials = len(items) > 0
 		} else {
-			a.log.Warn("knowledge image unavailable", "chunk", imageID, "error", e)
+			part, e := a.prepareKnowledgeImage(ctx, imageID)
+			if e == nil {
+				attached = []domain.ContentPart{part}
+			} else {
+				a.log.Warn("knowledge image unavailable", "chunk", imageID, "error", e)
+			}
 		}
 	}
 	if len(segments) > 1 {
@@ -443,7 +463,7 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 		return a.retryInbox(ctx, j, err)
 	}
 	available := qqReplyLimit(j.ConversationType, extended) - firstSeq + 1
-	if available <= 0 {
+	if available <= 0 && !faqMaterials {
 		_, err = tx.Exec(ctx, `UPDATE inbox_tasks SET status='skipped',last_error='QQ 被动回复次数已用完' WHERE id=$1`, j.TaskID)
 		if err == nil {
 			_, err = tx.Exec(ctx, "UPDATE agent_runs SET status='completed',completed_at=now() WHERE id=$1", runID)
@@ -454,7 +474,12 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 		}
 		return tx.Commit(ctx)
 	}
-	if len(replyParts) > available {
+	if faqMaterials {
+		replyParts = []string{strings.Join(replyParts, "\n")}
+		for i := 1; i < len(attached); i++ {
+			replyParts = append(replyParts, "")
+		}
+	} else if len(replyParts) > available {
 		replyParts = append(replyParts[:available-1], strings.Join(replyParts[available-1:], "\n"))
 	}
 	if j.ConversationType == "private" && len(segments) > 1 {
@@ -465,7 +490,9 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 			break
 		}
 		var mediaParts []domain.ContentPart
-		if i == 0 {
+		if faqMaterials {
+			mediaParts = attached[i : i+1]
+		} else if i == 0 {
 			mediaParts = attached
 		}
 		if i == 0 && rt.screenshot != nil {
@@ -476,6 +503,9 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 		partsJSON, _ := json.Marshal(mediaParts)
 		var outID string
 		err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,content,parts,reply_to_message_id,status,event_at,reply_deadline,contains_site_status,handoff_id) VALUES('qq',$1,$2,'outbound','AI_RESPONSE',$3,$4::jsonb,$5,'pending',now()+($6 * interval '1 millisecond'),$7,$9,(SELECT id FROM handoffs WHERE message_id=$8 ORDER BY created_at DESC LIMIT 1)) RETURNING id::text`, j.BotID, j.ConversationID, part, string(partsJSON), j.PlatformMessageID, i, j.Deadline, j.MessageID, containsStatus && (rt.statusMetricsUsed || i == 0)).Scan(&outID)
+		if err == nil && faqMaterials {
+			_, err = tx.Exec(ctx, "UPDATE messages SET material_batch=$1,material_index=$2,created_at=clock_timestamp() WHERE id=$3", runID, i, outID)
+		}
 		if err == nil && i == 0 && rt.quoteTarget != "" {
 			_, err = tx.Exec(ctx, "UPDATE messages SET qq_quote_target=$2 WHERE id=$1", outID, rt.quoteTarget)
 		}
@@ -956,7 +986,7 @@ func (a *App) retrieve(ctx context.Context, kbIDs []string, query string, embedd
 			lastErr = e
 			continue
 		}
-		rs, e := a.db.Query(ctx, `SELECT c.id::text,c.document_id::text,c.entry_id::text AS entry_id,c.content,EXISTS(SELECT FROM knowledge_chunk_images ci WHERE ci.chunk_id=c.id) AS "hasImage",1-(c.embedding <=> $1::vector) AS score
+		rs, e := a.db.Query(ctx, `SELECT c.id::text,c.document_id::text,c.entry_id::text AS entry_id,c.content,(coalesce(jsonb_array_length(e.material_meta),0)>0 OR EXISTS(SELECT FROM knowledge_chunk_images ci WHERE ci.chunk_id=c.id)) AS "hasImage",1-(c.embedding <=> $1::vector) AS score
 			FROM knowledge_chunks c LEFT JOIN knowledge_entries e ON e.id=c.entry_id
 			WHERE c.knowledge_base_id=$2 AND EXISTS(SELECT FROM knowledge_bases WHERE id=$2 AND embedding_profile_id=$3) AND (c.entry_id IS NULL OR e.status='published')
 			ORDER BY c.embedding <=> $1::vector LIMIT 8`, vectorLiteral(v), kbID, *pid)
@@ -975,7 +1005,7 @@ func (a *App) retrieve(ctx context.Context, kbIDs []string, query string, embedd
 	for i, h := range all {
 		fmt.Fprintf(&b, "[%d] %v\n", i+1, h["content"])
 		if h["hasImage"] == true && h["entry_id"] != nil {
-			fmt.Fprintf(&b, "这条问答有固定演示图。采用这条答案时，必须在答复末尾加 [[kb-image:%s]]。每次最多一张。\n", h["id"])
+			fmt.Fprintf(&b, "这条问答附有一组有序演示素材。采用这条答案时，在答复末尾加一次 [[kb-image:%s]]，系统会按顺序发送整组。\n", h["id"])
 		} else if h["hasImage"] == true {
 			fmt.Fprintf(&b, "本段附图。如回答实际使用本段且配图能帮助用户，请在答复末尾加 [[kb-image:%s]]。每次最多一张。\n", h["id"])
 		}

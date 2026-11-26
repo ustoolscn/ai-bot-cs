@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -83,7 +84,12 @@ func (a *App) humanReply(c *gin.Context) {
 		fail(c, 400, "invalid_request", err.Error())
 		return
 	}
-	if img.data == nil && strings.TrimSpace(in.Text) == "" {
+	items, err := img.plan.resolve(nil)
+	if err != nil {
+		fail(c, 400, "invalid_request", err.Error())
+		return
+	}
+	if len(items) == 0 && img.data == nil && strings.TrimSpace(in.Text) == "" {
 		fail(c, 400, "invalid_request", "回复内容必填")
 		return
 	}
@@ -114,6 +120,19 @@ func (a *App) humanReply(c *gin.Context) {
 			}
 		}
 	}
+	ids := []string{outID}
+	if err == nil && len(items) > 0 {
+		var parts []domain.ContentPart
+		parts, err = a.storeMaterials(c, items)
+		if err == nil {
+			ids, err = queueHumanMaterials(c, tx, outID, parts)
+		}
+		if err != nil {
+			for _, p := range parts {
+				_ = a.images.Delete(c, p.StorageKey)
+			}
+		}
+	}
 	if err != nil || tx.Commit(c) != nil {
 		fail(c, 500, "database_error", "发送失败")
 		return
@@ -122,7 +141,37 @@ func (a *App) humanReply(c *gin.Context) {
 		a.enqueueJob(c, "staff_answer", map[string]any{"messageId": outID}, "staff_answer:"+outID)
 	}
 	a.audit(c, "message.human_reply", "message", c.Param("id"), map[string]any{"replyId": outID})
-	ok(c, gin.H{"id": outID})
+	ok(c, gin.H{"id": outID, "messageIds": ids})
+}
+
+// queueHuman has already locked the conversation and authorized the ticket.
+func queueHumanMaterials(ctx context.Context, tx pgx.Tx, first string, parts []domain.ContentPart) ([]string, error) {
+	var used int
+	err := tx.QueryRow(ctx, `SELECT coalesce(max(t.msg_seq),0) FROM messages m JOIN outbox_tasks t ON t.message_id=m.id JOIN messages anchor ON anchor.id=$1 WHERE m.conversation_id=anchor.conversation_id AND m.reply_to_message_id=anchor.reply_to_message_id AND m.id<>anchor.id`, first).Scan(&used)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(parts))
+	for i, part := range parts {
+		id := first
+		if i == 0 {
+			_, err = tx.Exec(ctx, "UPDATE messages SET material_batch=id,material_index=0,parts=$1 WHERE id=$2", []domain.ContentPart{part}, id)
+			if err == nil {
+				_, err = tx.Exec(ctx, "UPDATE outbox_tasks SET msg_seq=$1 WHERE message_id=$2", used+1, id)
+			}
+		} else {
+			err = tx.QueryRow(ctx, `INSERT INTO messages(channel,bot_id,conversation_id,direction,event_type,sender_name,content,reply_to_message_id,status,reply_deadline,handoff_id,parts,material_batch,material_index,created_at,event_at)
+ SELECT channel,bot_id,conversation_id,direction,event_type,sender_name,'',reply_to_message_id,'pending',reply_deadline,handoff_id,$2,id,$3,clock_timestamp(),clock_timestamp() FROM messages WHERE id=$1 RETURNING id::text`, first, []domain.ContentPart{part}, i).Scan(&id)
+			if err == nil {
+				_, err = tx.Exec(ctx, "INSERT INTO outbox_tasks(message_id,msg_seq) VALUES($1,$2)", id, used+i+1)
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 // --- members / staff ---

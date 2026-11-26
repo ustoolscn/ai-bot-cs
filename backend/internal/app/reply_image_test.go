@@ -15,6 +15,9 @@ import (
 )
 
 func pictureRequest(t *testing.T, url string, fields map[string]string, images ...[]byte) *http.Request {
+	return mediaRequest(t, url, fields, "image", images...)
+}
+func mediaRequest(t *testing.T, url string, fields map[string]string, field string, images ...[]byte) *http.Request {
 	t.Helper()
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
@@ -24,7 +27,11 @@ func pictureRequest(t *testing.T, url string, fields map[string]string, images .
 		}
 	}
 	for _, data := range images {
-		f, err := form.CreateFormFile("image", "demo.png")
+		name := "demo.png"
+		if http.DetectContentType(data) == "video/mp4" {
+			name = "recording.mp4"
+		}
+		f, err := form.CreateFormFile(field, name)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -116,7 +123,7 @@ func TestKnowledgeImageEditing(t *testing.T) {
 	delete(fields, "removeImage")
 	check(call("POST", "/gap/"+gap, 200, pic)["entryId"].(string), pic)
 	for _, action := range []string{"keep", "replace", "remove"} {
-		candidate, err := insertCandidate(t.Context(), pool, kb, "q", nil, "a", "manual", nil, 1, replyImage{"image/png", pic})
+		candidate, err := insertCandidate(t.Context(), pool, kb, "q", nil, "a", "manual", nil, 1, replyImage{mime: "image/png", data: pic})
 		if err != nil {
 			t.Fatal(err)
 		}

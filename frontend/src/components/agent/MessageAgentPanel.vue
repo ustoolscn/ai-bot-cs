@@ -46,7 +46,7 @@
         <Transition name="ap-reveal">
           <div v-if="rating && rating !== 'good'" class="ap-correct">
             <el-input v-model="corrected" type="textarea" :rows="3" placeholder="正确的回答应该是…（选填，填了会生成候选知识）" />
-            <ImagePicker ref="correctPicker" v-model:file="correctImage" :disabled="!corrected.trim()" :hint="corrected.trim() ? '配一张演示图，以后 AI 答到这个问题会连图一起发。PNG 或 JPEG，5 MB 以内，可直接粘贴截图' : '先写好正确答案，再配图'" />
+            <MaterialPicker ref="correctPicker" v-model="correctMaterials" :disabled="!corrected.trim()" :hint="corrected.trim() ? '配上演示截图或录屏，以后 AI 答到这个问题会先发文字、再按顺序发素材。可直接粘贴截图' : '先写好正确答案，再添加演示素材'" />
           </div>
         </Transition>
         <div class="ap-actions">
@@ -63,8 +63,8 @@
       <h3>人工回复</h3>
       <div class="ap-form" @paste="replyPicker?.fromClipboard($event)">
         <el-input v-model="replyText" type="textarea" :rows="2" placeholder="以机器人身份补充回复（群聊 5 分钟、私聊 60 分钟内有效）" />
-        <ImagePicker ref="replyPicker" v-model:file="replyImage" hint="随回复发一张图，PNG 或 JPEG，5 MB 以内，可直接粘贴截图" />
-        <div class="ap-actions"><el-checkbox v-model="learn" :disabled="!replyText.trim()">同时提交为候选知识</el-checkbox><el-button type="primary" plain :disabled="!replyText.trim() && !replyImage" :loading="replying" @click="sendReply">{{ replyImage ? '发送图文回复' : '发送回复' }}</el-button></div>
+        <MaterialPicker ref="replyPicker" v-model="replyMaterials" hint="随回复按顺序发出的截图或录屏，可直接粘贴截图" />
+        <div class="ap-actions"><el-checkbox v-model="learn" :disabled="!replyText.trim()">同时提交为候选知识</el-checkbox><el-button type="primary" plain :disabled="!replyText.trim() && !replyMaterials.length" :loading="replying" @click="sendReply">{{ replyMaterials.length ? `发送回复和 ${replyMaterials.length} 个素材` : '发送回复' }}</el-button></div>
       </div>
     </section>
   </div>
@@ -76,11 +76,11 @@ import { computed, ref, watch } from 'vue'
 import { ArrowRight, Cpu, EditPen, SetUp } from '@element-plus/icons-vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import MsgText from '@/components/MsgText.vue'
-import ImagePicker from '@/components/ImagePicker.vue'
+import MaterialPicker from '@/components/MaterialPicker.vue'
 import { stageSeconds } from '@/utils/stage-meta'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api'
-import { agentApi, feedbackSourceText, ratingText, type MessageAgentDetail } from '@/api/agent'
+import { agentApi, feedbackSourceText, ratingText, type MaterialDraft, type MessageAgentDetail } from '@/api/agent'
 import type { KnowledgeBase } from '@/types'
 
 const props = defineProps<{ messageId: string }>()
@@ -90,10 +90,10 @@ const detail = ref<MessageAgentDetail | null>(null)
 const knowledgeBases = ref<KnowledgeBase[]>([])
 const rating = ref('')
 const corrected = ref('')
-const correctImage = ref<File | null>(null)
-const replyImage = ref<File | null>(null)
-const correctPicker = ref<InstanceType<typeof ImagePicker>>()
-const replyPicker = ref<InstanceType<typeof ImagePicker>>()
+const correctMaterials = ref<MaterialDraft[]>([])
+const replyMaterials = ref<MaterialDraft[]>([])
+const correctPicker = ref<InstanceType<typeof MaterialPicker>>()
+const replyPicker = ref<InstanceType<typeof MaterialPicker>>()
 const kbID = ref('')
 const publish = ref(false)
 const saving = ref(false)
@@ -120,20 +120,20 @@ async function load() {
     if (!kbID.value) kbID.value = settings?.learningKnowledgeBaseId || kbs[0]?.id || ''
   } catch { detail.value = null }
 }
-watch(() => props.messageId, () => { openStep.value = -1; rating.value = ''; corrected.value = ''; correctImage.value = null; replyText.value = ''; replyImage.value = null; load() }, { immediate: true })
+watch(() => props.messageId, () => { openStep.value = -1; rating.value = ''; corrected.value = ''; correctMaterials.value = []; replyText.value = ''; replyMaterials.value = []; load() }, { immediate: true })
 
 async function submitFeedback() {
   saving.value = true
   try {
-    const r = await agentApi.messages.feedback(props.messageId, { rating: rating.value, correctedAnswer: corrected.value.trim() || undefined, publish: publish.value, knowledgeBaseId: kbID.value || undefined, image: corrected.value.trim() ? correctImage.value : null })
+    const r = await agentApi.messages.feedback(props.messageId, { rating: rating.value, correctedAnswer: corrected.value.trim() || undefined, publish: publish.value, knowledgeBaseId: kbID.value || undefined }, corrected.value.trim() ? correctMaterials.value : undefined)
     ElMessage.success(r.entryId ? '已发布为 FAQ' : r.candidateId ? '已提交候选知识' : '已记录')
-    rating.value = ''; corrected.value = ''; correctImage.value = null
+    rating.value = ''; corrected.value = ''; correctMaterials.value = []
     await load()
   } catch (e) { ElMessage.error(e instanceof Error ? e.message : '提交失败') } finally { saving.value = false }
 }
 async function sendReply() {
   replying.value = true
-  try { await agentApi.messages.reply(props.messageId, replyText.value.trim(), learn.value && !!replyText.value.trim(), replyImage.value); replyText.value = ''; replyImage.value = null; ElMessage.success('已加入发送队列'); setTimeout(load, 1500) } catch (e) { ElMessage.error(e instanceof Error ? e.message : '发送失败') } finally { replying.value = false }
+  try { await agentApi.messages.reply(props.messageId, replyText.value.trim(), learn.value && !!replyText.value.trim(), replyMaterials.value); replyText.value = ''; replyMaterials.value = []; ElMessage.success('已加入发送队列'); setTimeout(load, 1500) } catch (e) { ElMessage.error(e instanceof Error ? e.message : '发送失败') } finally { replying.value = false }
 }
 useAdminEvents(['messages','agent_runs','model_calls','tool_calls','outbox_tasks','message_feedback'], load)
 </script>

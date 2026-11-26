@@ -414,6 +414,7 @@ func (a *App) retryDocumentJob(ctx context.Context, j documentJob, cause error) 
 }
 
 type outboxJob struct {
+	MaterialBatch                                                                                                                bool
 	Extended                                                                                                                     bool
 	TaskID, MessageID, BotID, ConversationRecordID, ConversationType, ConversationID, ReplyTo, Text, EventType, AppID, SecretEnc string
 	Sequence, Attempts                                                                                                           int
@@ -430,11 +431,11 @@ func (a *App) claimOutbox(ctx context.Context) (outboxJob, error) {
 	defer tx.Rollback(ctx)
 	var j outboxJob
 	var partsRaw []byte
-	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,c.id::text,c.type,c.platform_id,COALESCE(m.reply_to_message_id,''),display_mentions(m,m.content),m.event_type,m.parts,b.app_id,b.app_secret_enc,t.msg_seq,t.attempts,m.reply_deadline,m.qq_send_payload,c.qq_extended_replies FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='pending' AND t.next_attempt_at<=now()
+	err = tx.QueryRow(ctx, `SELECT t.id::text,m.id::text,m.bot_id::text,c.id::text,c.type,c.platform_id,COALESCE(m.reply_to_message_id,''),display_mentions(m,m.content),m.event_type,m.parts,b.app_id,b.app_secret_enc,t.msg_seq,t.attempts,m.reply_deadline,m.qq_send_payload,c.qq_extended_replies,m.material_batch IS NOT NULL FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN conversations c ON c.id=m.conversation_id JOIN bots b ON b.id=m.bot_id WHERE t.status='pending' AND t.next_attempt_at<=now()
     AND NOT EXISTS (SELECT FROM messages prior JOIN outbox_tasks pt ON pt.message_id=prior.id
       WHERE prior.conversation_id=c.id AND (pt.status='processing' OR
         (pt.status='pending' AND (prior.created_at,prior.id)<(m.created_at,m.id))))
-	ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF c,t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationRecordID, &j.ConversationType, &j.ConversationID, &j.ReplyTo, &j.Text, &j.EventType, &partsRaw, &j.AppID, &j.SecretEnc, &j.Sequence, &j.Attempts, &j.Deadline, &j.Payload, &j.Extended)
+	ORDER BY m.reply_deadline NULLS LAST,t.created_at FOR UPDATE OF c,t SKIP LOCKED LIMIT 1`).Scan(&j.TaskID, &j.MessageID, &j.BotID, &j.ConversationRecordID, &j.ConversationType, &j.ConversationID, &j.ReplyTo, &j.Text, &j.EventType, &partsRaw, &j.AppID, &j.SecretEnc, &j.Sequence, &j.Attempts, &j.Deadline, &j.Payload, &j.Extended, &j.MaterialBatch)
 	if err != nil {
 		return j, err
 	}
@@ -490,7 +491,7 @@ func (a *App) handleOutbox(ctx context.Context, j outboxJob) error {
 		_, err = a.db.Exec(ctx, "UPDATE outbox_tasks SET status='expired',updated_at=now() WHERE id=$1", j.TaskID)
 		return err
 	}
-	if j.EventType != "HUMAN_REPLY" && j.EventType != "HANDOFF_UPDATE" && j.Deadline != nil && time.Now().After(*j.Deadline) {
+	if !j.MaterialBatch && j.EventType != "HUMAN_REPLY" && j.EventType != "HANDOFF_UPDATE" && j.Deadline != nil && time.Now().After(*j.Deadline) {
 		_, err = a.db.Exec(ctx, `WITH expired AS (UPDATE outbox_tasks SET status='expired',last_error='reply deadline exceeded',updated_at=now() WHERE id=$1 AND status='processing' RETURNING message_id)
 		UPDATE messages SET status='expired' WHERE id IN (SELECT message_id FROM expired)`, j.TaskID)
 		if err == nil && j.EventType == "AI_RESPONSE" {
@@ -503,7 +504,7 @@ func (a *App) handleOutbox(ctx context.Context, j outboxJob) error {
 		return a.retryOutbox(ctx, j, err)
 	}
 	for index := range j.Parts {
-		if j.Parts[index].Type == "image" && j.Parts[index].StorageKey != "" {
+		if (j.Parts[index].Type == "image" || j.Parts[index].Type == "video") && j.Parts[index].StorageKey != "" {
 			j.Parts[index].Data, err = a.images.Read(ctx, j.Parts[index].StorageKey)
 			if err != nil {
 				return a.retryOutbox(ctx, j, fmt.Errorf("读取待发送图片失败: %w", err))
@@ -522,7 +523,7 @@ func (a *App) handleOutbox(ctx context.Context, j outboxJob) error {
 	if j.EventType == "SCHEDULED_POST" && hasContentPart(j.Parts, "image") {
 		format = "image-only" // Also suppress captions on previously queued images.
 	}
-	if j.EventType == "AI_RESPONSE" && !hasContentPart(j.Parts, "image") {
+	if j.EventType == "AI_RESPONSE" && !hasContentPart(j.Parts, "image") && !hasContentPart(j.Parts, "video") {
 		format = "markdown"
 	}
 	sendCtx := ctx
@@ -535,6 +536,9 @@ func (a *App) handleOutbox(ctx context.Context, j outboxJob) error {
 	active := j.EventType == "SCHEDULED_POST" || humanReplyNeedsActive(j, time.Now())
 	if active {
 		replyTo = ""
+	}
+	if j.MaterialBatch && j.Text == "" {
+		format = "image-only"
 	}
 	var mention, mentionName string
 	var raw []byte
@@ -552,6 +556,7 @@ func (a *App) handleOutbox(ctx context.Context, j outboxJob) error {
 	if (j.EventType == "HUMAN_REPLY" || j.EventType == "HANDOFF_UPDATE") && reference == "" && mentionName != "" {
 		j.Text = "@" + mentionName + " " + j.Text
 	}
+
 	if j.EventType == "HUMAN_REPLY" {
 		j.Text = "【人工客服】" + j.Text
 	}
@@ -663,7 +668,7 @@ func (a *App) handleOutbox(ctx context.Context, j outboxJob) error {
 // Keep the persisted reply association for history and sequence accounting.
 func humanReplyNeedsActive(j outboxJob, now time.Time) bool {
 	limit := qqReplyLimit(j.ConversationType, j.Extended)
-	return (j.EventType == "HUMAN_REPLY" || j.EventType == "HANDOFF_UPDATE") && (j.ReplyTo == "" || j.Sequence > limit || (j.Deadline != nil && !now.Before(*j.Deadline)))
+	return (j.MaterialBatch || j.EventType == "HUMAN_REPLY" || j.EventType == "HANDOFF_UPDATE") && (j.ReplyTo == "" || j.Sequence > limit || (j.Deadline != nil && !now.Before(*j.Deadline)))
 }
 
 const scheduleProcessingAckRetractionSQL = `INSERT INTO message_retractions(message_id)
@@ -690,6 +695,16 @@ func (a *App) retryOutbox(ctx context.Context, j outboxJob, cause error) error {
 	status := "pending"
 	if j.Attempts+1 >= 3 {
 		status = "failed"
+	}
+	if status == "failed" && j.MaterialBatch {
+		// Subsequent steps must not overtake a permanently failed step. The
+		// existing retry action requeues failed rows, preserving their order.
+		_, err := a.db.Exec(ctx, `WITH stopped AS (
+ UPDATE outbox_tasks t SET status='failed',last_error=CASE WHEN m.id=first.id THEN $2 ELSE '前序素材发送失败，等待重试' END,updated_at=now()
+ FROM messages first JOIN messages m ON m.material_batch=first.material_batch AND m.material_index>=first.material_index
+ WHERE first.id=$1 AND t.message_id=m.id AND t.status IN ('processing','pending') RETURNING t.message_id)
+ UPDATE messages SET status='failed' WHERE id IN (SELECT message_id FROM stopped)`, j.MessageID, cause.Error())
+		return err
 	}
 	tag, err := a.db.Exec(ctx, "UPDATE outbox_tasks SET status=$1,last_error=$2,next_attempt_at=now()+interval '5 seconds',updated_at=now() WHERE id=$3 AND status='processing'", status, cause.Error(), j.TaskID)
 	if err == nil && tag.RowsAffected() > 0 && status == "failed" {

@@ -23,7 +23,7 @@ func NewLocal(root string) (*Local, error) {
 }
 func (l *Local) Save(_ context.Context, name string, data []byte) (string, error) {
 	ext := strings.ToLower(filepath.Ext(name))
-	if !knowledge.Supported(name) && ext != ".gif" {
+	if !knowledge.Supported(name) && ext != ".gif" && ext != ".mp4" {
 		return "", fmt.Errorf("unsupported file type %s", ext)
 	}
 	key := uuid.NewString() + ext

@@ -3,9 +3,14 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/jackc/pgx/v5"
+	"io"
+	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"ai-bot/backend/internal/agent"
 	"ai-bot/backend/internal/domain"
@@ -16,7 +21,7 @@ import (
 func (a *App) getStaffLearning(c *gin.Context) {
 	id := c.Param("id")
 	rows, err := a.db.Query(c, `SELECT cm.platform_user_id AS "userId",cm.display_name AS "displayName",
-      (SELECT count(*) FROM messages m WHERE m.conversation_id=cm.conversation_id AND m.sender_id=cm.platform_user_id AND m.direction='inbound' AND (m.content<>'' OR m.parts @> '[{"type":"image"}]') AND NOT m.context_excluded) AS "availableMessages"
+      (SELECT count(*) FROM messages m WHERE m.conversation_id=cm.conversation_id AND m.sender_id=cm.platform_user_id AND m.direction='inbound' AND (m.content<>'' OR m.parts @> '[{"type":"image"}]' OR m.parts @> '[{"type":"video"}]') AND NOT m.context_excluded) AS "availableMessages"
       FROM conversation_members cm WHERE cm.conversation_id=$1 AND cm.is_staff ORDER BY cm.platform_user_id`, id)
 	if err != nil {
 		fail(c, 500, "database_error", "读取失败")
@@ -89,7 +94,7 @@ func (a *App) jobStaffHistory(ctx context.Context, id string) error {
 	if err := a.db.QueryRow(ctx, `SELECT ARRAY(SELECT platform_user_id FROM conversation_members WHERE conversation_id=$1 AND is_staff ORDER BY platform_user_id)`, id).Scan(&staffIDs); err != nil {
 		return err
 	}
-	rows, err := a.db.Query(ctx, `SELECT m.id::text,m.sender_name,m.content FROM messages m JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id WHERE m.conversation_id=$1 AND cm.is_staff AND m.direction='inbound' AND (m.content<>'' OR m.parts @> '[{"type":"image"}]') AND NOT m.context_excluded ORDER BY m.event_at DESC LIMIT 200`, id)
+	rows, err := a.db.Query(ctx, `SELECT m.id::text,m.sender_name,m.content FROM messages m JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id WHERE m.conversation_id=$1 AND cm.is_staff AND m.direction='inbound' AND (m.content<>'' OR m.parts @> '[{"type":"image"}]' OR m.parts @> '[{"type":"video"}]') AND NOT m.context_excluded ORDER BY m.event_at DESC LIMIT 200`, id)
 	if err != nil {
 		return err
 	}
@@ -165,22 +170,119 @@ func (a *App) createStaffCandidate(ctx context.Context, messageID, kbID string, 
 	return id, true, tx.Commit(ctx)
 }
 
-func (a *App) staffReplyImage(ctx context.Context, parts []domain.ContentPart) (replyImage, error) {
+func (a *App) staffMaterials(ctx context.Context, parts []domain.ContentPart) ([]material, error) {
+	var items []material
 	for _, part := range parts {
-		if part.Type != "image" {
+		if part.Type != "image" && part.Type != "video" {
 			continue
+		}
+		if len(items) >= maxMaterials {
+			return nil, fmt.Errorf("连续客服回复超过 9 个素材")
 		}
 		var data []byte
 		var err error
 		if part.StorageKey != "" {
 			data, err = a.images.Read(ctx, part.StorageKey)
 		} else {
-			data, _, _, err = downloadImage(ctx, a.imageHTTP, part.URL)
+			u, e := url.Parse(part.URL)
+			if e != nil || validateImageURL(u) != nil {
+				return nil, errors.New("无效客服素材地址")
+			}
+			req, e := http.NewRequestWithContext(ctx, "GET", part.URL, nil)
+			if e != nil {
+				return nil, e
+			}
+			resp, e := a.imageHTTP.Do(req)
+			if e != nil {
+				return nil, e
+			}
+			if resp.StatusCode/100 != 2 {
+				resp.Body.Close()
+				return nil, fmt.Errorf("下载素材 HTTP %d", resp.StatusCode)
+			}
+			data, err = io.ReadAll(io.LimitReader(resp.Body, maxVideo+1))
+			resp.Body.Close()
 		}
 		if err != nil {
-			return replyImage{}, err
+			return nil, err
 		}
-		return decodeReplyImage(data)
+		name := part.Filename
+		if name == "" {
+			name = "演示" + imageExtension(http.DetectContentType(data))
+			if part.Type == "video" {
+				name = "录屏.mp4"
+			}
+		}
+		m, err := validateMaterial(name, data)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, m)
 	}
-	return replyImage{}, fmt.Errorf("客服回复缺少配图")
+	return uploadedPlan(items).resolve(nil)
+}
+
+type staffWait struct{ until time.Time }
+
+func (w staffWait) Error() string { return "等待连续客服回复" }
+
+type staffTurn struct {
+	id, sender, content string
+	at                  time.Time
+	parts               []domain.ContentPart
+}
+
+func (a *App) staffTurns(ctx context.Context, id, conv, source string, at time.Time) ([]staffTurn, error) {
+	var rows pgx.Rows
+	var err error
+	if source == "HUMAN_REPLY" {
+		rows, err = a.db.Query(ctx, `SELECT id::text,'',content,event_at,parts FROM messages WHERE NOT context_excluded AND (id=$1 OR material_batch=$1) ORDER BY material_index NULLS FIRST`, id)
+	} else {
+		// Only inbound turns delimit a group staff answer. Moderated turns still
+		// interrupt the sequence, without exposing their contents to the model.
+		rows, err = a.db.Query(ctx, `SELECT id::text,CASE WHEN context_excluded THEN '' ELSE sender_id END,content,event_at,parts FROM messages WHERE conversation_id=$1 AND direction='inbound' AND event_at BETWEEN $2::timestamptz-interval '10 min' AND $2::timestamptz+interval '30 seconds' ORDER BY event_at,created_at,id`, conv, at)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var turns []staffTurn
+	anchor := -1
+	for rows.Next() {
+		var turn staffTurn
+		var raw []byte
+		if err = rows.Scan(&turn.id, &turn.sender, &turn.content, &turn.at, &raw); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal(raw, &turn.parts); err != nil {
+			return nil, err
+		}
+		if turn.id == id {
+			anchor = len(turns)
+		}
+		turns = append(turns, turn)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if source == "HUMAN_REPLY" {
+		return turns, nil
+	}
+	if anchor < 0 || turns[anchor].sender == "" {
+		return nil, nil
+	}
+	joins := func(prev, next staffTurn) bool {
+		return prev.sender == next.sender && next.at.Sub(prev.at) <= 30*time.Second && (hasContentPart(next.parts, "image") || hasContentPart(next.parts, "video"))
+	}
+	if anchor+1 < len(turns) && joins(turns[anchor], turns[anchor+1]) {
+		return nil, nil
+	}
+	if anchor+1 == len(turns) && time.Now().Before(at.Add(30*time.Second)) {
+		return nil, staffWait{at.Add(30 * time.Second)}
+	}
+	first := anchor
+	for first > 0 && joins(turns[first-1], turns[first]) {
+		first--
+	}
+	return turns[first : anchor+1], nil
 }

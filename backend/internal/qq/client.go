@@ -267,7 +267,7 @@ func processingArk() map[string]any {
 
 func firstImage(parts []domain.ContentPart) *domain.ContentPart {
 	for index := range parts {
-		if parts[index].Type == "image" {
+		if parts[index].Type == "image" || parts[index].Type == "video" {
 			return &parts[index]
 		}
 	}
@@ -293,6 +293,10 @@ func (c *Client) uploadImage(ctx context.Context, token, path string, image doma
 			}
 		}
 	}
-	out, err := c.upload(ctx, token, strings.TrimSuffix(path, "/files"), name, image.URL, 1, reader, int64(len(image.Data)), false)
+	kind := 1
+	if image.Type == "video" {
+		kind = 2
+	}
+	out, err := c.upload(ctx, token, strings.TrimSuffix(path, "/files"), name, image.URL, kind, reader, int64(len(image.Data)), false)
 	return out.FileInfo, err
 }

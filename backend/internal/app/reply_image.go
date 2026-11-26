@@ -17,6 +17,7 @@ const maxReplyImage = 5 << 20
 type replyImage struct {
 	mime string
 	data []byte
+	plan *materialPlan
 }
 
 // Text-only clients can keep using JSON. Multipart requests carry the same fields.
@@ -25,14 +26,21 @@ func bindReplyImage(c *gin.Context, dst any) (replyImage, error) {
 	if c.ContentType() != "multipart/form-data" {
 		return img, c.ShouldBindJSON(dst)
 	}
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxReplyImage+(128<<10))
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxMaterialTotal+(1<<20))
 	if err := c.Request.ParseMultipartForm(maxReplyImage); err != nil {
-		return img, errors.New("表单无效或图片超过 5 MiB")
+		return img, errors.New("表单无效或素材总计超过 64 MiB")
 	}
 	form := c.Request.MultipartForm
 	defer form.RemoveAll()
 	if err := c.ShouldBind(dst); err != nil {
 		return img, errors.New("表单字段无效")
+	}
+	if form.File["files"] != nil || form.Value["materials"] != nil {
+		if form.File["image"] != nil {
+			return img, errors.New("请使用 files 上传素材")
+		}
+		p, err := readMaterialPlan(form)
+		return replyImage{plan: p}, err
 	}
 	if len(form.File) == 0 {
 		return img, nil
@@ -65,7 +73,7 @@ func decodeReplyImage(data []byte) (replyImage, error) {
 	if _, _, err = image.Decode(bytes.NewReader(data)); err != nil {
 		return img, errors.New("图片数据损坏")
 	}
-	return replyImage{"image/" + format, data}, nil
+	return replyImage{mime: "image/" + format, data: data}, nil
 }
 
 func (a *App) replyImagePreview(table string) gin.HandlerFunc {
