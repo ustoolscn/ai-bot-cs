@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -422,8 +423,9 @@ func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool
 	s := a.agentSettings(ctx)
 
 	var convID, content, source string
+	var rawParts []byte
 	var eventAt time.Time
-	if err := a.db.QueryRow(ctx, "SELECT conversation_id::text,content,event_type,event_at FROM messages WHERE id=$1", messageID).Scan(&convID, &content, &source, &eventAt); err != nil {
+	if err := a.db.QueryRow(ctx, "SELECT conversation_id::text,content,event_type,event_at,parts FROM messages WHERE id=$1", messageID).Scan(&convID, &content, &source, &eventAt, &rawParts); err != nil {
 		return nil
 	}
 	s, _, profile, err := a.conversationAgent(ctx, convID, s)
@@ -449,7 +451,12 @@ func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool
 			return nil
 		}
 	}
-	if len([]rune(strings.TrimSpace(content))) < 6 {
+	var parts []domain.ContentPart
+	if err = json.Unmarshal(rawParts, &parts); err != nil {
+		return err
+	}
+	hasImage := hasContentPart(parts, "image")
+	if !hasImage && len([]rune(strings.TrimSpace(content))) < 6 {
 		return nil
 	}
 	rows, err := a.db.Query(ctx, `SELECT direction,sender_name,content,event_type FROM messages WHERE conversation_id=$1 AND event_at<$2 AND event_at>$2-interval '2 hours' AND content<>'' AND NOT context_excluded AND event_type<>'PROCESSING_ACK' ORDER BY event_at DESC LIMIT 15`, convID, eventAt)
@@ -477,16 +484,26 @@ func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool
 		label = "人工客服（管理后台）"
 	}
 	input := strings.Join(lines, "\n") + "\n" + label + "：" + agent.TruncateRunes(content, 1000)
+	var img replyImage
+	var images []domain.ChatContentPart
+	if hasImage {
+		img, err = a.staffReplyImage(ctx, parts)
+		if err != nil {
+			return err
+		}
+		images = []domain.ChatContentPart{{Type: "image", ContentType: img.mime, Detail: "auto", DataURL: "data:" + img.mime + ";base64," + base64.StdEncoding.EncodeToString(img.data)}}
+		input += "\n附图是这条客服回答的一部分，请结合图片判断是否可复用。"
+	}
 	var res staffMining
 
-	if err := a.auxJSON(ctx, s, profile, "", messageID, "staff_mining", agent.StaffMiningPrompt, input, &res); err != nil {
+	if err := a.auxJSON(ctx, s, profile, "", messageID, "staff_mining", agent.StaffMiningPrompt, input, &res, images...); err != nil {
 		return err
 	}
 	if !res.Reusable || strings.TrimSpace(res.Question) == "" || strings.TrimSpace(res.Answer) == "" {
 		return nil
 	}
 	evidence := []map[string]any{{"messageId": messageID, "conversationId": convID, "content": agent.TruncateRunes(content, 500), "context": agent.TruncateRunes(strings.Join(lines, "\n"), 1500)}}
-	candID, fresh, err := a.createStaffCandidate(ctx, messageID, s.LearningKnowledgeBaseID, res, evidence)
+	candID, fresh, err := a.createStaffCandidate(ctx, messageID, s.LearningKnowledgeBaseID, res, evidence, img)
 	if err != nil {
 		return err
 	}
@@ -494,7 +511,7 @@ func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool
 		return nil
 	}
 	if s.AutoPublishStaff && res.Confidence >= s.AutoPublishMinConfidence && s.LearningKnowledgeBaseID != "" {
-		_, err = a.approveCandidate(ctx, candID, s.LearningKnowledgeBaseID, res.Question, res.Aliases, res.Answer, "", "自动发布：官方客服高置信度回答")
+		_, err = a.approveCandidate(ctx, candID, s.LearningKnowledgeBaseID, res.Question, res.Aliases, res.Answer, "", "自动发布：官方客服高置信度回答", nil)
 	}
 	return err
 }
@@ -502,18 +519,19 @@ func (a *App) mineStaffAnswer(ctx context.Context, messageID string, forced bool
 // jobIndexEntry (re)builds the vector chunk of an FAQ entry.
 func (a *App) jobIndexEntry(ctx context.Context, entryID string) error {
 	var kbID, question, answer, status string
+	var version int
 	var aliasesRaw []byte
 	var pid *string
-	if err := a.db.QueryRow(ctx, `SELECT e.knowledge_base_id::text,e.question,e.answer,e.aliases,e.status,k.embedding_profile_id::text FROM knowledge_entries e JOIN knowledge_bases k ON k.id=e.knowledge_base_id WHERE e.id=$1`, entryID).
-		Scan(&kbID, &question, &answer, &aliasesRaw, &status, &pid); err != nil {
+	if err := a.db.QueryRow(ctx, `SELECT e.knowledge_base_id::text,e.question,e.answer,e.aliases,e.status,k.embedding_profile_id::text,e.version FROM knowledge_entries e JOIN knowledge_bases k ON k.id=e.knowledge_base_id WHERE e.id=$1`, entryID).
+		Scan(&kbID, &question, &answer, &aliasesRaw, &status, &pid, &version); err != nil {
 		return nil
 	}
 	if status != "published" {
-		_, err := a.db.Exec(ctx, "DELETE FROM knowledge_chunks WHERE entry_id=$1", entryID)
+		_, err := a.db.Exec(ctx, "DELETE FROM knowledge_chunks c USING knowledge_entries e WHERE c.entry_id=e.id AND e.id=$1 AND e.version=$2 AND e.status<>'published'", entryID, version)
 		return err
 	}
 	setErr := func(e error) error {
-		_, _ = a.db.Exec(ctx, "UPDATE knowledge_entries SET index_status='failed',index_error=$1 WHERE id=$2", e.Error(), entryID)
+		_, _ = a.db.Exec(ctx, "UPDATE knowledge_entries SET index_status='failed',index_error=$1 WHERE id=$2 AND version=$3", e.Error(), entryID, version)
 		return e
 	}
 	if pid == nil {
@@ -546,13 +564,24 @@ func (a *App) jobIndexEntry(ctx context.Context, entryID string) error {
 	if current == nil || *current != *pid {
 		return nil
 	}
+	var currentVersion int
+	if err = tx.QueryRow(ctx, "SELECT version FROM knowledge_entries WHERE id=$1 FOR UPDATE", entryID).Scan(&currentVersion); err != nil {
+		return err
+	}
+	if version != currentVersion {
+		return nil
+	}
 	if _, err = tx.Exec(ctx, "DELETE FROM knowledge_chunks WHERE entry_id=$1", entryID); err == nil {
 		_, err = tx.Exec(ctx, "INSERT INTO knowledge_chunks(knowledge_base_id,entry_id,chunk_index,content,embedding,metadata) VALUES($1,$2,0,$3,$4::vector,$5::jsonb)", kbID, entryID, text, vectorLiteral(v[0]), jsonString(map[string]any{"type": "faq"}))
+	}
+	if err == nil {
+		_, err = tx.Exec(ctx, `INSERT INTO knowledge_chunk_images(chunk_id,mime_type,data) SELECT c.id,e.image_mime,e.image_data FROM knowledge_entries e JOIN knowledge_chunks c ON c.entry_id=e.id WHERE e.id=$1 AND e.image_data IS NOT NULL`, entryID)
 	}
 	if err == nil {
 		_, err = tx.Exec(ctx, "UPDATE knowledge_entries SET index_status='ready',index_error='' WHERE id=$1", entryID)
 	}
 	if err != nil {
+		_ = tx.Rollback(ctx)
 		return setErr(err)
 	}
 	return tx.Commit(ctx)

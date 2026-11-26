@@ -186,7 +186,7 @@ func (a *App) reviewGroupMessage(ctx context.Context, mid string) (reviewErr err
 		if err == nil && queue && !blocked && enabled {
 			_, err = tx.Exec(ctx, "INSERT INTO inbox_tasks(message_id) VALUES($1) ON CONFLICT DO NOTHING", mid)
 		}
-		if err == nil && staff && !blocked && enabled && strings.TrimSpace(content) != "" {
+		if err == nil && staff && !blocked && enabled && (strings.TrimSpace(content) != "" || hasImage) {
 			_, err = tx.Exec(ctx, `INSERT INTO agent_jobs(kind,payload,dedupe_key) VALUES('staff_answer',jsonb_build_object('messageId',$1::text),'staff_answer:'||$1::text) ON CONFLICT DO NOTHING`, mid)
 		}
 	} else {

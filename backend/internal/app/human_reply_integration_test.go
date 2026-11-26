@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,6 +36,13 @@ func TestHumanReplyDelivery(t *testing.T) {
 		}
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
+		if strings.HasSuffix(r.URL.Path, "/files") {
+			if body["file_data"] != base64.StdEncoding.EncodeToString(demoPNG(t)) {
+				t.Error("uploaded image differs")
+			}
+			json.NewEncoder(w).Encode(map[string]string{"file_info": "fixture"})
+			return
+		}
 		bodies = append(bodies, body)
 		if reject {
 			http.Error(w, `{"code":40034102,"message":"主动消息失败, 无权限"}`, 403)
@@ -97,6 +105,9 @@ func TestHumanReplyDelivery(t *testing.T) {
 			c, _ := gin.CreateTestContext(w)
 			c.Request = httptest.NewRequest("POST", "/reply", bytes.NewBufferString(`{"text":"人工回复"}`))
 			c.Request.Header.Set("Content-Type", "application/json")
+			if tc.name == "passive group" || tc.name == "expired private" {
+				c.Request = pictureRequest(t, "/reply", map[string]string{"text": "人工回复"}, demoPNG(t))
+			}
 			c.Params = gin.Params{{Key: "id", Value: inboundID}}
 			c.Set("userId", adminID)
 			c.Set("username", "admin")
@@ -123,6 +134,11 @@ func TestHumanReplyDelivery(t *testing.T) {
 				t.Fatalf("calls=%d want=%d", len(bodies), attempts)
 			}
 			for _, body := range bodies {
+				if tc.name == "passive group" || tc.name == "expired private" {
+					if body["msg_type"] != float64(7) || !strings.Contains(fmt.Sprint(body["content"]), "人工回复") {
+						t.Fatal(body)
+					}
+				}
 				_, hasID := body["msg_id"]
 				_, hasSeq := body["msg_seq"]
 				if active && (hasID || hasSeq) {

@@ -2,6 +2,7 @@ package app
 
 import (
 	"archive/zip"
+
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +30,7 @@ type portableDoc struct {
 }
 type archiveRow map[string]json.RawMessage
 type knowledgeArchive struct {
+	ImageCount                        int `json:",omitempty"`
 	Version                           int
 	Name, Description, EmbeddingModel string
 	Documents                         []portableDoc
@@ -156,15 +158,20 @@ func (a *App) writeArchive(c *gin.Context, tx pgx.Tx, z *zip.Writer, id string, 
 		}
 		filter := "knowledge_base_id=$1"
 		if t.table == "eval_cases" {
-			filter = "entry_id IN (SELECT id FROM knowledge_entries WHERE knowledge_base_id=$1)"
+			filter = "t.entry_id IN (SELECT id FROM knowledge_entries WHERE knowledge_base_id=$1)"
 		}
-		rows, e := tx.Query(c, "SELECT to_jsonb(r) FROM (SELECT "+cols+" FROM "+t.table+" WHERE "+filter+" ORDER BY id) r", id)
+
+		imageCol := "NULL::bytea"
+		if t.table == "knowledge_entries" || t.table == "knowledge_candidates" {
+			imageCol = "t.image_data"
+		}
+		rows, e := tx.Query(c, "SELECT to_jsonb(r),"+imageCol+" FROM "+t.table+" t CROSS JOIN LATERAL (SELECT "+cols+") r WHERE "+filter+" ORDER BY t.id", id)
 		if e != nil {
 			return e
 		}
 		for rows.Next() {
-			var b []byte
-			if e = rows.Scan(&b); e != nil {
+			var b, data []byte
+			if e = rows.Scan(&b, &data); e != nil {
 				rows.Close()
 				return e
 			}
@@ -177,6 +184,24 @@ func (a *App) writeArchive(c *gin.Context, tx pgx.Tx, z *zip.Writer, id string, 
 			if e = json.Unmarshal(b, &r); e != nil {
 				rows.Close()
 				return e
+			}
+			if data != nil {
+				total += int64(len(data))
+				if total > maxArchive {
+					rows.Close()
+					return tooLarge
+				}
+				name := fmt.Sprintf("images/%s/%d", t.table, len(m.Records[t.table]))
+				w, err := z.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Store})
+				if err == nil {
+					_, err = w.Write(data)
+				}
+				if err != nil {
+					rows.Close()
+					return err
+				}
+				r["hasImage"] = json.RawMessage("true")
+				m.ImageCount++
 			}
 			m.Records[t.table] = append(m.Records[t.table], r)
 		}
@@ -272,7 +297,7 @@ func (a *App) importKnowledge(c *gin.Context) {
 		archiveFailure(c, e, "invalid_archive")
 		return
 	}
-	if json.Unmarshal(b, &m) != nil || m.Version != 1 || len(m.Documents)+1 != len(members) || strings.TrimSpace(m.Name) == "" {
+	if json.Unmarshal(b, &m) != nil || m.Version != 1 || m.ImageCount < 0 || m.ImageCount > len(members) || len(m.Documents)+m.ImageCount+1 != len(members) || strings.TrimSpace(m.Name) == "" {
 		fail(c, 400, "invalid_archive", "文件包内容或版本无效")
 		return
 	}
@@ -343,7 +368,7 @@ func (a *App) importKnowledge(c *gin.Context) {
 			return
 		}
 	}
-	if e = restoreRecords(c, tx, id, &m); e != nil {
+	if e = restoreRecords(c, tx, id, &m, members); e != nil {
 		archiveFailure(c, e, "invalid_archive")
 		return
 	}
@@ -364,7 +389,8 @@ func (a *App) importKnowledge(c *gin.Context) {
 	keys = nil
 	created(c, gin.H{"id": id, "name": name, "documentCount": len(m.Documents), "entryCount": len(m.Records["knowledge_entries"])})
 }
-func restoreRecords(c *gin.Context, tx pgx.Tx, kb string, m *knowledgeArchive) error {
+func restoreRecords(c *gin.Context, tx pgx.Tx, kb string, m *knowledgeArchive, members map[string]*zip.File) error {
+	restoredImages := 0
 	ids := map[string]map[string]string{}
 	for _, t := range archiveTables {
 		ids[t.table] = map[string]string{}
@@ -376,7 +402,7 @@ func restoreRecords(c *gin.Context, tx pgx.Tx, kb string, m *knowledgeArchive) e
 			cols += "," + t.parentColumn
 		}
 		stmt := "INSERT INTO " + t.table + "(" + cols + ") SELECT " + cols + " FROM jsonb_populate_record(NULL::" + t.table + ",$1::jsonb) RETURNING id::text"
-		for _, r := range m.Records[t.table] {
+		for index, r := range m.Records[t.table] {
 			var old string
 			if json.Unmarshal(r["id"], &old) != nil || uuid.Validate(old) != nil || ids[t.table][old] != "" {
 				return errors.New("invalid record id")
@@ -400,8 +426,25 @@ func restoreRecords(c *gin.Context, tx pgx.Tx, kb string, m *knowledgeArchive) e
 			if e = tx.QueryRow(c, stmt, string(b)).Scan(&local); e != nil {
 				return e
 			}
+			if string(r["hasImage"]) == "true" && (t.table == "knowledge_entries" || t.table == "knowledge_candidates") {
+				data, err := readMember(members[fmt.Sprintf("images/%s/%d", t.table, index)], maxReplyImage)
+				if err != nil {
+					return err
+				}
+				img, err := decodeReplyImage(data)
+				if err != nil {
+					return err
+				}
+				if _, err = tx.Exec(c, "UPDATE "+t.table+" SET image_mime=$1,image_data=$2 WHERE id=$3", img.mime, img.data, local); err != nil {
+					return err
+				}
+				restoredImages++
+			}
 			ids[t.table][old] = local
 		}
+	}
+	if restoredImages != m.ImageCount {
+		return errors.New("archive image count mismatch")
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5"
 )
 
 func cleanAliases(in []string) []string {
@@ -24,6 +25,14 @@ func cleanAliases(in []string) []string {
 }
 
 func (a *App) createCandidate(ctx context.Context, kbID, question string, aliases []string, answer, source string, evidence any, confidence float64) (string, error) {
+	return insertCandidate(ctx, a.db, kbID, question, aliases, answer, source, evidence, confidence, replyImage{})
+}
+
+type rowQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func insertCandidate(ctx context.Context, db rowQuerier, kbID, question string, aliases []string, answer, source string, evidence any, confidence float64, img replyImage) (string, error) {
 	aj, _ := json.Marshal(cleanAliases(aliases))
 	ej, _ := json.Marshal(evidence)
 	var kb any
@@ -31,22 +40,39 @@ func (a *App) createCandidate(ctx context.Context, kbID, question string, aliase
 		kb = kbID
 	}
 	var id string
-	err := a.db.QueryRow(ctx, `INSERT INTO knowledge_candidates(knowledge_base_id,question,aliases,answer,source,evidence,confidence) VALUES($1,$2,$3::jsonb,$4,$5,$6::jsonb,$7) RETURNING id::text`,
-		kb, strings.TrimSpace(question), string(aj), strings.TrimSpace(answer), source, string(ej), confidence).Scan(&id)
+	err := db.QueryRow(ctx, `INSERT INTO knowledge_candidates(knowledge_base_id,question,aliases,answer,source,evidence,confidence,image_mime,image_data) VALUES($1,$2,$3::jsonb,$4,$5,$6::jsonb,$7,$8,$9) RETURNING id::text`,
+		kb, strings.TrimSpace(question), string(aj), strings.TrimSpace(answer), source, string(ej), confidence, nullString(img.mime), img.data).Scan(&id)
 	return id, err
 }
 
-// approveCandidate publishes a candidate as a new FAQ entry (or merges it into mergeEntryID).
-func (a *App) approveCandidate(ctx context.Context, candidateID, kbID, question string, aliases []string, answer, reviewer, note string) (string, error) {
+// approveCandidate publishes a candidate and queues indexing in one transaction.
+func (a *App) approveCandidate(ctx context.Context, candidateID, kbID, question string, aliases []string, answer, reviewer, note string, replacement *replyImage) (string, error) {
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	id, err := publishCandidate(ctx, tx, candidateID, kbID, question, aliases, answer, reviewer, note, replacement)
+	if err != nil {
+		return "", err
+	}
+	return id, tx.Commit(ctx)
+}
+
+func publishCandidate(ctx context.Context, tx pgx.Tx, candidateID, kbID, question string, aliases []string, answer, reviewer, note string, replacement *replyImage) (string, error) {
 	if kbID == "" {
 		return "", fmt.Errorf("请选择要发布到的知识库")
 	}
 	var source string
 	var evidence []byte
-	if err := a.db.QueryRow(ctx, "SELECT source,evidence FROM knowledge_candidates WHERE id=$1 AND status='pending'", candidateID).Scan(&source, &evidence); err != nil {
+	var img replyImage
+	if err := tx.QueryRow(ctx, "SELECT source,evidence,coalesce(image_mime,''),image_data FROM knowledge_candidates WHERE id=$1 AND status='pending' FOR UPDATE", candidateID).Scan(&source, &evidence, &img.mime, &img.data); err != nil {
 		return "", fmt.Errorf("候选不存在或已处理")
 	}
-	entryID, err := a.createEntry(ctx, kbID, question, aliases, answer, source, evidence, reviewer)
+	if replacement != nil {
+		img = *replacement
+	}
+	entryID, err := insertEntry(ctx, tx, kbID, question, aliases, answer, source, evidence, reviewer, img)
 	if err != nil {
 		return "", err
 	}
@@ -54,12 +80,28 @@ func (a *App) approveCandidate(ctx context.Context, candidateID, kbID, question 
 	if reviewer != "" {
 		rev = reviewer
 	}
-	_, err = a.db.Exec(ctx, "UPDATE knowledge_candidates SET status='approved',entry_id=$1,knowledge_base_id=$2,review_note=$3,reviewed_by=$4,reviewed_at=now(),updated_at=now() WHERE id=$5", entryID, kbID, note, rev, candidateID)
-	_, _ = a.db.Exec(ctx, "UPDATE knowledge_gaps SET status='resolved' WHERE candidate_id=$1", candidateID)
+	_, err = tx.Exec(ctx, "UPDATE knowledge_candidates SET status='approved',entry_id=$1,knowledge_base_id=$2,review_note=$3,reviewed_by=$4,reviewed_at=now(),updated_at=now() WHERE id=$5", entryID, kbID, note, rev, candidateID)
+	if err != nil {
+		return "", err
+	}
+	_, err = tx.Exec(ctx, "UPDATE knowledge_gaps SET status='resolved' WHERE candidate_id=$1", candidateID)
 	return entryID, err
 }
 
-func (a *App) createEntry(ctx context.Context, kbID, question string, aliases []string, answer, source string, refs []byte, creator string) (string, error) {
+func (a *App) createEntry(ctx context.Context, kbID, question string, aliases []string, answer, source string, refs []byte, creator string, img replyImage) (string, error) {
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	id, err := insertEntry(ctx, tx, kbID, question, aliases, answer, source, refs, creator, img)
+	if err != nil {
+		return "", err
+	}
+	return id, tx.Commit(ctx)
+}
+
+func insertEntry(ctx context.Context, tx pgx.Tx, kbID, question string, aliases []string, answer, source string, refs []byte, creator string, img replyImage) (string, error) {
 	question, answer = strings.TrimSpace(question), strings.TrimSpace(answer)
 	if question == "" || answer == "" {
 		return "", fmt.Errorf("问题和答案必填")
@@ -73,35 +115,34 @@ func (a *App) createEntry(ctx context.Context, kbID, question string, aliases []
 		by = creator
 	}
 	var id string
-	if err := a.db.QueryRow(ctx, `INSERT INTO knowledge_entries(knowledge_base_id,question,aliases,answer,source,source_refs,created_by) VALUES($1,$2,$3::jsonb,$4,$5,$6::jsonb,$7) RETURNING id::text`,
-		kbID, question, string(aj), answer, source, string(refs), by).Scan(&id); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO knowledge_entries(knowledge_base_id,question,aliases,answer,source,source_refs,created_by,image_mime,image_data) VALUES($1,$2,$3::jsonb,$4,$5,$6::jsonb,$7,$8,$9) RETURNING id::text`,
+		kbID, question, string(aj), answer, source, string(refs), by, nullString(img.mime), img.data).Scan(&id); err != nil {
 		return "", err
 	}
-	a.enqueueJob(ctx, "index_entry", map[string]any{"entryId": id}, "index_entry:"+id)
-	return id, nil
+	_, err := tx.Exec(ctx, `INSERT INTO agent_jobs(kind,payload,dedupe_key) VALUES('index_entry',jsonb_build_object('entryId',$1::text),'index_entry:'||$1::text)`, id)
+	return id, err
 }
 
 // --- candidates ---
 
 func (a *App) listCandidates(c *gin.Context) {
 	status := c.DefaultQuery("status", "pending")
-	queryList(c, a, `SELECT k.id::text,k.knowledge_base_id::text AS "knowledgeBaseId",kb.name AS "knowledgeBaseName",k.question,k.aliases,k.answer,k.source,k.evidence,k.confidence,k.status,k.entry_id::text AS "entryId",k.review_note AS "reviewNote",k.created_at AS "createdAt",k.reviewed_at AS "reviewedAt"
+	queryList(c, a, `SELECT k.id::text,k.image_data IS NOT NULL AS "hasImage",CASE WHEN k.image_data IS NOT NULL THEN '/api/knowledge/candidates/'||k.id::text||'/image' END AS "imageUrl",k.knowledge_base_id::text AS "knowledgeBaseId",kb.name AS "knowledgeBaseName",k.question,k.aliases,k.answer,k.source,k.evidence,k.confidence,k.status,k.entry_id::text AS "entryId",k.review_note AS "reviewNote",k.created_at AS "createdAt",k.reviewed_at AS "reviewedAt"
 		FROM knowledge_candidates k LEFT JOIN knowledge_bases kb ON kb.id=k.knowledge_base_id WHERE ($1='all' OR k.status=$1) AND ($2='' OR k.evidence @> jsonb_build_array(jsonb_build_object('conversationId',$2::text))) ORDER BY k.created_at DESC LIMIT 300`, status, c.Query("conversationId"))
 }
 
 func (a *App) approveCandidateAPI(c *gin.Context) {
-	var in struct {
-		KnowledgeBaseID string   `json:"knowledgeBaseId"`
-		Question        string   `json:"question"`
-		Aliases         []string `json:"aliases"`
-		Answer          string   `json:"answer"`
-		Note            string   `json:"note"`
-	}
-	if c.ShouldBindJSON(&in) != nil {
-		fail(c, 400, "invalid_request", "参数格式无效")
+	var in entryInput
+	img, err := in.bind(c)
+	if err != nil {
+		fail(c, 400, "invalid_request", err.Error())
 		return
 	}
-	id, err := a.approveCandidate(c, c.Param("id"), in.KnowledgeBaseID, in.Question, in.Aliases, in.Answer, c.GetString("userId"), in.Note)
+	var replacement *replyImage
+	if img.data != nil || in.RemoveImage {
+		replacement = &img
+	}
+	id, err := a.approveCandidate(c, c.Param("id"), in.KnowledgeBaseID, in.Question, in.Aliases, in.Answer, c.GetString("userId"), in.Note, replacement)
 	if err != nil {
 		fail(c, 400, "approve_failed", err.Error())
 		return
@@ -141,25 +182,40 @@ func (a *App) listEntries(c *gin.Context) {
 		n := itoa(len(args))
 		where = append(where, "(e.question ILIKE $"+n+" OR e.answer ILIKE $"+n+")")
 	}
-	queryList(c, a, `SELECT e.id::text,e.knowledge_base_id::text AS "knowledgeBaseId",kb.name AS "knowledgeBaseName",e.question,e.aliases,e.answer,e.source,e.status,e.index_status AS "indexStatus",e.index_error AS "indexError",e.version,e.hit_count AS "hitCount",e.helpful_count AS "helpfulCount",e.unhelpful_count AS "unhelpfulCount",e.last_hit_at AS "lastHitAt",e.created_at AS "createdAt",e.updated_at AS "updatedAt"
+	queryList(c, a, `SELECT e.id::text,e.image_data IS NOT NULL AS "hasImage",CASE WHEN e.image_data IS NOT NULL THEN '/api/knowledge/entries/'||e.id::text||'/image' END AS "imageUrl",e.knowledge_base_id::text AS "knowledgeBaseId",kb.name AS "knowledgeBaseName",e.question,e.aliases,e.answer,e.source,e.status,e.index_status AS "indexStatus",e.index_error AS "indexError",e.version,e.hit_count AS "hitCount",e.helpful_count AS "helpfulCount",e.unhelpful_count AS "unhelpfulCount",e.last_hit_at AS "lastHitAt",e.created_at AS "createdAt",e.updated_at AS "updatedAt"
 		FROM knowledge_entries e JOIN knowledge_bases kb ON kb.id=e.knowledge_base_id WHERE `+strings.Join(where, " AND ")+` ORDER BY e.updated_at DESC LIMIT 500`, args...)
 }
 
 type entryInput struct {
-	KnowledgeBaseID string   `json:"knowledgeBaseId"`
-	Question        string   `json:"question"`
-	Aliases         []string `json:"aliases"`
-	Answer          string   `json:"answer"`
-	Status          string   `json:"status"`
+	KnowledgeBaseID string   `json:"knowledgeBaseId" form:"knowledgeBaseId"`
+	Question        string   `json:"question" form:"question"`
+	Aliases         []string `json:"aliases" form:"aliases"`
+	Answer          string   `json:"answer" form:"answer"`
+	Status          string   `json:"status" form:"status"`
+	Note            string   `json:"note" form:"note"`
+	RemoveImage     bool     `json:"removeImage" form:"removeImage"`
+}
+
+func (in *entryInput) bind(c *gin.Context) (replyImage, error) {
+	img, err := bindReplyImage(c, in)
+	if err == nil && in.RemoveImage && img.data != nil {
+		err = fmt.Errorf("替换图片和移除图片不能同时选择")
+	}
+	return img, err
 }
 
 func (a *App) createEntryAPI(c *gin.Context) {
 	var in entryInput
-	if c.ShouldBindJSON(&in) != nil || in.KnowledgeBaseID == "" {
+	img, err := in.bind(c)
+	if err != nil {
+		fail(c, 400, "invalid_request", err.Error())
+		return
+	}
+	if in.KnowledgeBaseID == "" {
 		fail(c, 400, "invalid_request", "知识库、问题和答案必填")
 		return
 	}
-	id, err := a.createEntry(c, in.KnowledgeBaseID, in.Question, in.Aliases, in.Answer, "manual", nil, c.GetString("userId"))
+	id, err := a.createEntry(c, in.KnowledgeBaseID, in.Question, in.Aliases, in.Answer, "manual", nil, c.GetString("userId"), img)
 	if err != nil {
 		fail(c, 400, "create_failed", err.Error())
 		return
@@ -169,7 +225,12 @@ func (a *App) createEntryAPI(c *gin.Context) {
 
 func (a *App) updateEntryAPI(c *gin.Context) {
 	var in entryInput
-	if c.ShouldBindJSON(&in) != nil || strings.TrimSpace(in.Question) == "" || strings.TrimSpace(in.Answer) == "" {
+	img, err := in.bind(c)
+	if err != nil {
+		fail(c, 400, "invalid_request", err.Error())
+		return
+	}
+	if strings.TrimSpace(in.Question) == "" || strings.TrimSpace(in.Answer) == "" {
 		fail(c, 400, "invalid_request", "问题和答案必填")
 		return
 	}
@@ -179,14 +240,27 @@ func (a *App) updateEntryAPI(c *gin.Context) {
 		in.Status = "published"
 	}
 	aj, _ := json.Marshal(cleanAliases(in.Aliases))
-	tag, err := a.db.Exec(c, `UPDATE knowledge_entries SET question=$1,aliases=$2::jsonb,answer=$3,status=$4,version=version+1,index_status='pending',updated_at=now(),
+	tx, err := a.db.Begin(c)
+	if err != nil {
+		fail(c, 500, "database_error", "更新失败")
+		return
+	}
+	defer tx.Rollback(c)
+	tag, err := tx.Exec(c, `UPDATE knowledge_entries SET image_mime=CASE WHEN $6 THEN $7 ELSE image_mime END,image_data=CASE WHEN $6 THEN $8 ELSE image_data END,question=$1,aliases=$2::jsonb,answer=$3,status=$4,version=version+1,index_status='pending',updated_at=now(),
 		helpful_count=CASE WHEN status='review' AND $4='published' THEN 0 ELSE helpful_count END,unhelpful_count=CASE WHEN status='review' AND $4='published' THEN 0 ELSE unhelpful_count END WHERE id=$5`,
-		strings.TrimSpace(in.Question), string(aj), strings.TrimSpace(in.Answer), in.Status, c.Param("id"))
+		strings.TrimSpace(in.Question), string(aj), strings.TrimSpace(in.Answer), in.Status, c.Param("id"), img.data != nil || in.RemoveImage, nullString(img.mime), img.data)
 	if err != nil || tag.RowsAffected() == 0 {
 		fail(c, 404, "not_found", "条目不存在")
 		return
 	}
-	a.enqueueJob(c, "index_entry", map[string]any{"entryId": c.Param("id")}, "index_entry:"+c.Param("id"))
+	_, err = tx.Exec(c, "DELETE FROM knowledge_chunks WHERE entry_id=$1", c.Param("id"))
+	if err == nil {
+		_, err = tx.Exec(c, `INSERT INTO agent_jobs(kind,payload) VALUES('index_entry',jsonb_build_object('entryId',$1::text))`, c.Param("id"))
+	}
+	if err != nil || tx.Commit(c) != nil {
+		fail(c, 500, "database_error", "保存问答索引任务失败")
+		return
+	}
 	ok(c, gin.H{"updated": true})
 }
 
@@ -205,12 +279,23 @@ func (a *App) listGaps(c *gin.Context) {
 
 func (a *App) answerGap(c *gin.Context) {
 	var in entryInput
-	if c.ShouldBindJSON(&in) != nil || in.KnowledgeBaseID == "" {
+	img, err := in.bind(c)
+	if err != nil {
+		fail(c, 400, "invalid_request", err.Error())
+		return
+	}
+	if in.KnowledgeBaseID == "" {
 		fail(c, 400, "invalid_request", "知识库、问题和答案必填")
 		return
 	}
 	var question string
-	if err := a.db.QueryRow(c, "SELECT question FROM knowledge_gaps WHERE id=$1", c.Param("id")).Scan(&question); err != nil {
+	tx, err := a.db.Begin(c)
+	if err != nil {
+		fail(c, 500, "database_error", "保存失败")
+		return
+	}
+	defer tx.Rollback(c)
+	if err := tx.QueryRow(c, "SELECT question FROM knowledge_gaps WHERE id=$1 AND status<>'resolved' FOR UPDATE", c.Param("id")).Scan(&question); err != nil {
 		fail(c, 404, "not_found", "缺口不存在")
 		return
 	}
@@ -218,12 +303,16 @@ func (a *App) answerGap(c *gin.Context) {
 		in.Question = question
 	}
 	refs, _ := json.Marshal([]map[string]any{{"gapId": c.Param("id")}})
-	id, err := a.createEntry(c, in.KnowledgeBaseID, in.Question, in.Aliases, in.Answer, "gap", refs, c.GetString("userId"))
+	id, err := insertEntry(c, tx, in.KnowledgeBaseID, in.Question, in.Aliases, in.Answer, "gap", refs, c.GetString("userId"), img)
 	if err != nil {
 		fail(c, 400, "create_failed", err.Error())
 		return
 	}
-	_, _ = a.db.Exec(c, "UPDATE knowledge_gaps SET status='resolved' WHERE id=$1", c.Param("id"))
+	_, err = tx.Exec(c, "UPDATE knowledge_gaps SET status='resolved' WHERE id=$1", c.Param("id"))
+	if err != nil || tx.Commit(c) != nil {
+		fail(c, 500, "database_error", "保存失败")
+		return
+	}
 	ok(c, gin.H{"entryId": id})
 }
 
@@ -236,16 +325,21 @@ func (a *App) ignoreGap(c *gin.Context) {
 
 func (a *App) createFeedback(c *gin.Context) {
 	var in struct {
-		AnswerID        string `json:"answerId"`
-		Rating          string `json:"rating"`
-		Comment         string `json:"comment"`
-		CorrectedAnswer string `json:"correctedAnswer"`
-		Publish         bool   `json:"publish"`
-		KnowledgeBaseID string `json:"knowledgeBaseId"`
-		Question        string `json:"question"`
+		AnswerID        string `json:"answerId" form:"answerId"`
+		Rating          string `json:"rating" form:"rating"`
+		Comment         string `json:"comment" form:"comment"`
+		CorrectedAnswer string `json:"correctedAnswer" form:"correctedAnswer"`
+		Publish         bool   `json:"publish" form:"publish"`
+		KnowledgeBaseID string `json:"knowledgeBaseId" form:"knowledgeBaseId"`
+		Question        string `json:"question" form:"question"`
 	}
-	if c.ShouldBindJSON(&in) != nil {
-		fail(c, 400, "invalid_request", "参数格式无效")
+	img, err := bindReplyImage(c, &in)
+	if err != nil {
+		fail(c, 400, "invalid_request", err.Error())
+		return
+	}
+	if img.data != nil && strings.TrimSpace(in.CorrectedAnswer) == "" {
+		fail(c, 400, "invalid_request", "附图纠错需要填写纠正答案")
 		return
 	}
 	switch in.Rating {
@@ -268,20 +362,27 @@ func (a *App) createFeedback(c *gin.Context) {
 		fail(c, 400, "no_answer", "该消息还没有回复，无法评价")
 		return
 	}
-	if _, err := a.db.Exec(c, "INSERT INTO message_feedback(message_id,source,rating,comment,corrected_answer,created_by) VALUES($1,'admin',$2,$3,$4,$5)", answerID, in.Rating, in.Comment, strings.TrimSpace(in.CorrectedAnswer), c.GetString("userId")); err != nil {
+	tx, err := a.db.Begin(c)
+	if err != nil {
 		fail(c, 500, "database_error", "保存失败")
 		return
 	}
-	if in.Rating == "good" || in.Rating == "wrong" || in.Rating == "bad" {
-		a.applyEntryFeedback(c, answerID, in.Rating == "good")
+	defer tx.Rollback(c)
+	if _, err := tx.Exec(c, "INSERT INTO message_feedback(message_id,source,rating,comment,corrected_answer,created_by) VALUES($1,'admin',$2,$3,$4,$5)", answerID, in.Rating, in.Comment, strings.TrimSpace(in.CorrectedAnswer), c.GetString("userId")); err != nil {
+		fail(c, 500, "database_error", "保存失败")
+		return
 	}
 	result := gin.H{"saved": true}
 	if corrected := strings.TrimSpace(in.CorrectedAnswer); corrected != "" {
 		q := firstNonEmpty(strings.TrimSpace(in.Question), question)
 		evidence := []map[string]any{{"messageId": c.Param("id"), "answerId": answerID, "question": question}}
-		candID, err := a.createCandidate(c, in.KnowledgeBaseID, q, nil, corrected, "feedback", evidence, 0.95)
-		if err == nil && in.Publish {
-			entryID, err := a.approveCandidate(c, candID, in.KnowledgeBaseID, q, nil, corrected, c.GetString("userId"), "管理员纠错直接发布")
+		candID, err := insertCandidate(c, tx, in.KnowledgeBaseID, q, nil, corrected, "feedback", evidence, 0.95, img)
+		if err != nil {
+			fail(c, 400, "candidate_failed", "无法创建候选知识，请检查知识库")
+			return
+		}
+		if in.Publish {
+			entryID, err := publishCandidate(c, tx, candID, in.KnowledgeBaseID, q, nil, corrected, c.GetString("userId"), "管理员纠错直接发布", nil)
 			if err != nil {
 				fail(c, 400, "publish_failed", err.Error())
 				return
@@ -289,6 +390,13 @@ func (a *App) createFeedback(c *gin.Context) {
 			result["entryId"] = entryID
 		}
 		result["candidateId"] = candID
+	}
+	if tx.Commit(c) != nil {
+		fail(c, 500, "database_error", "保存失败")
+		return
+	}
+	if in.Rating == "good" || in.Rating == "wrong" || in.Rating == "bad" {
+		a.applyEntryFeedback(c, answerID, in.Rating == "good")
 	}
 	ok(c, result)
 }

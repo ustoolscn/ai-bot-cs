@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -56,6 +57,8 @@ func TestGoogleKnowledgeScreenshotReply(t *testing.T) {
 			}
 		}
 		switch {
+		case strings.Contains(term, "TOPAZ"):
+			v[4] = 1
 		case strings.Contains(term, "COBALT"):
 			v[0] = 1
 		case strings.Contains(term, "AMBER"):
@@ -193,6 +196,34 @@ func TestGoogleKnowledgeScreenshotReply(t *testing.T) {
 			t.Fatal("missing screenshot citation in chat context")
 		}
 	}
+	// A published FAQ has its own demonstration image. A verbatim answer also
+	// attaches it when the model omits the optional citation syntax.
+	faqPic := demoPNG(t)
+	req := pictureRequest(t, api+"/knowledge/entries", map[string]string{"knowledgeBaseId": kb, "question": "TOPAZ 如何操作？", "answer": "请打开 TOPAZ 面板。"}, faqPic)
+	response, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil || response.StatusCode != 201 {
+		t.Fatalf("create FAQ: %s %v", raw, err)
+	}
+	id := createdID(t, raw)
+	eventually(t, 8*time.Second, "FAQ index", func() (bool, error) {
+		var ready bool
+		e := pool.QueryRow(ctx, "SELECT index_status='ready' FROM knowledge_entries WHERE id=$1", id).Scan(&ready)
+		return ready, e
+	})
+	mock.SetNextChatContent("请打开 TOPAZ 面板。")
+	postQQWebhook(t, client, server.URL+"/callbacks/qq/"+bot, secret, qqEventBody(t, "evt-faq", "GROUP_AT_MESSAGE_CREATE", "msg-faq", "TOPAZ 如何操作？"))
+	eventually(t, 10*time.Second, "QQ FAQ image", func() (bool, error) { return len(mock.QQSends()) >= 3, nil })
+	upload := mock.QQUploads()
+	send := mock.QQSends()[2].Body
+	if len(upload) != 3 || upload[2].Body["file_data"] != base64.StdEncoding.EncodeToString(faqPic) || send["msg_type"] != float64(7) || !strings.Contains(fmt.Sprint(send["content"]), "请打开 TOPAZ 面板。") {
+		t.Fatalf("FAQ delivery: %v", send)
+	}
+
 }
 
 func TestScreenshotRequiresRetrievedCitation(t *testing.T) {

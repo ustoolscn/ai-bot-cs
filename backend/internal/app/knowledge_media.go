@@ -25,7 +25,22 @@ func selectedKnowledgeImage(answer string, hits []map[string]any) (string, strin
 		}
 		return ""
 	})
-	return strings.TrimSpace(cleaned), selected
+	cleaned = strings.TrimSpace(cleaned)
+	// Models sometimes repeat the complete FAQ answer without its image citation.
+	if selected == "" && cleaned != "" {
+		for _, hit := range hits {
+			if hit["entry_id"] == nil || hit["hasImage"] != true {
+				continue
+			}
+			content, _ := hit["content"].(string)
+			_, faq, ok := strings.Cut(content, "\n答：")
+			if ok && strings.TrimSpace(faq) == cleaned {
+				selected, _ = hit["id"].(string)
+				break
+			}
+		}
+	}
+	return cleaned, selected
 }
 
 func (a *App) prepareKnowledgeImage(ctx context.Context, id string) (domain.ContentPart, error) {

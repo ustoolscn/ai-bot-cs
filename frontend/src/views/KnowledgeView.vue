@@ -89,7 +89,7 @@
               </div>
               <el-table row-key="id" v-loading="loading" :data="entries" @selection-change="selectRows">
                 <el-table-column type="selection" width="48" />
-                <el-table-column label="问题 / 答案" min-width="220"><template #default="{ row }"><div class="qa"><strong>{{ $at(row.question) }}</strong><span>{{ $at(row.answer) }}</span><small v-if="row.aliases?.length">相似问：{{ row.aliases.join('；') }}</small></div></template></el-table-column>
+                <el-table-column label="问题 / 答案" min-width="220"><template #default="{ row }"><div class="qa-row"><div class="qa"><strong>{{ $at(row.question) }}</strong><span>{{ $at(row.answer) }}</span><small v-if="row.aliases?.length">相似问：{{ row.aliases.join('；') }}</small></div><a v-if="row.imageUrl" :href="imgSrc(row)" target="_blank" rel="noopener" class="qa-thumb" title="带配图，点开看原图" @click.stop><img :src="imgSrc(row)" alt="配图" loading="lazy"></a></div></template></el-table-column>
                 <el-table-column label="命中 / 好评 / 差评" width="132" align="right"><template #default="{ row }"><span class="num">{{ row.hitCount }} / {{ row.helpfulCount }} / <span :class="{ 'danger-text': row.unhelpfulCount > row.helpfulCount }">{{ row.unhelpfulCount }}</span></span></template></el-table-column>
                 <el-table-column label="状态 / 来源" width="110"><template #default="{ row }"><div class="stacked-cell"><span class="tag-line"><el-tag size="small" :type="row.status === 'published' ? (row.indexStatus === 'ready' ? 'success' : row.indexStatus === 'failed' ? 'danger' : 'warning') : row.status === 'review' ? 'danger' : 'info'">{{ entryStatusText(row) }}</el-tag></span><span>{{ sourceText[row.source] || row.source }}</span></div></template></el-table-column>
                 <el-table-column label="操作" width="112" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="editEntry(row)">编辑</el-button><el-button link type="danger" @click="removeEntry(row)">删除</el-button></template></el-table-column>
@@ -109,7 +109,7 @@
               </div>
               <el-table row-key="id" v-loading="loading" :data="kbCandidates" @selection-change="selectRows">
                 <el-table-column type="selection" width="48" />
-                <el-table-column label="问题 / 答案" min-width="220"><template #default="{ row }"><div class="qa"><strong>{{ $at(row.question) }}</strong><span>{{ $at(row.answer) }}</span><small v-if="row.aliases?.length">相似问：{{ row.aliases.join('；') }}</small></div></template></el-table-column>
+                <el-table-column label="问题 / 答案" min-width="220"><template #default="{ row }"><div class="qa-row"><div class="qa"><strong>{{ $at(row.question) }}</strong><span>{{ $at(row.answer) }}</span><small v-if="row.aliases?.length">相似问：{{ row.aliases.join('；') }}</small></div><a v-if="row.imageUrl" :href="imgSrc(row)" target="_blank" rel="noopener" class="qa-thumb" title="带配图，点开看原图" @click.stop><img :src="imgSrc(row)" alt="配图" loading="lazy"></a></div></template></el-table-column>
                 <el-table-column label="来源 / 时间" width="140"><template #default="{ row }"><div class="stacked-cell"><strong>{{ sourceText[row.source] || row.source }}</strong><span>{{ formatTime(row.createdAt) }}</span></div></template></el-table-column>
                 <el-table-column label="可信度" width="80" align="right"><template #default="{ row }"><span class="num" :class="row.confidence >= 0.85 ? 'trend-good' : row.confidence < 0.6 ? 'danger-text' : ''">{{ Math.round(row.confidence * 100) }}%</span></template></el-table-column>
                 <el-table-column label="操作" width="184" fixed="right"><template #default="{ row }"><template v-if="row.status === 'pending'"><el-button link type="primary" @click="quickApprove(row)">通过</el-button><el-button link type="primary" @click="review(row)">修改后通过</el-button><el-button link type="danger" @click="reject(row)">驳回</el-button></template><span v-else class="pill" :class="row.status === 'approved' ? 'good' : 'idle'">{{ row.status === 'approved' ? '已通过' : '已驳回' }}</span></template></el-table-column>
@@ -164,11 +164,12 @@
         <el-form-item label="存入知识库"><el-select v-model="entryForm.knowledgeBaseId" :disabled="!!entryForm.id"><el-option v-for="kb in bases" :key="kb.id" :label="kb.name" :value="kb.id" /></el-select></el-form-item>
         <el-form-item label="标准问题"><el-input v-model="entryForm.question" /></el-form-item>
         <el-form-item label="相似问法（每行一个）"><el-input v-model="entryForm.aliasesText" type="textarea" :rows="3" /></el-form-item>
-        <el-form-item label="答案（建议口语化、简洁）"><el-input v-model="entryForm.answer" type="textarea" :rows="6" /></el-form-item>
+        <el-form-item label="答案（建议口语化、简洁）"><el-input v-model="entryForm.answer" type="textarea" :rows="6" @paste="entryPicker?.fromClipboard($event)" /></el-form-item>
+        <el-form-item label="配图（选填）"><ImagePicker ref="entryPicker" v-model:file="entryForm.image" v-model:removed="entryForm.removeImage" :existing-url="entryForm.imageUrl" hint="用户问到这条时，AI 连同答案一起发这张图。PNG 或 JPEG，5 MB 以内，可直接粘贴截图" /></el-form-item>
         <el-form-item v-if="entryForm.id" label="状态"><el-radio-group v-model="entryForm.status"><el-radio-button value="published">发布</el-radio-button><el-radio-button value="review">需复核</el-radio-button><el-radio-button value="archived">归档</el-radio-button></el-radio-group></el-form-item>
         <el-form-item v-if="entryForm.mode === 'candidate' && evidenceText" label="来源对话"><div class="content-box evidence">{{ evidenceText }}</div></el-form-item>
       </el-form>
-      <template #footer><el-button @click="entryDialog = false">取消</el-button><el-button type="primary" @click="submitEntry">{{ entryForm.mode === 'candidate' ? '通过并发布' : entryForm.mode === 'gap' ? '保存答案' : '保存问答' }}</el-button></template>
+      <template #footer><el-button @click="entryDialog = false">取消</el-button><el-button type="primary" :loading="savingEntry" @click="submitEntry">{{ entryForm.mode === 'candidate' ? '通过并发布' : entryForm.mode === 'gap' ? '保存答案' : '保存问答' }}</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="removeVisible" title="删除知识库" width="480px" :close-on-click-modal="!removing">
@@ -242,6 +243,7 @@ import { ChatLineSquare, Delete, Document, Download, Finished, Plus, Refresh, Se
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import ImagePicker from '@/components/ImagePicker.vue'
 import { api } from '@/api'
 import { ApiError } from '@/api/client'
 import { useBulkDelete } from '@/composables/useBulkDelete'
@@ -412,28 +414,34 @@ async function markRead(target: { ids: string[] } | { all: true }) {
 
 // ---- 问答 / 审核 / 补答 共用表单 ----
 const entryDialog = ref(false)
-const entryForm = reactive({ mode: 'entry' as 'entry' | 'candidate' | 'gap', id: '', refId: '', knowledgeBaseId: '', question: '', aliasesText: '', answer: '', status: 'published', evidence: [] as Array<Record<string, string>> })
+const entryForm = reactive({ mode: 'entry' as 'entry' | 'candidate' | 'gap', id: '', refId: '', knowledgeBaseId: '', question: '', aliasesText: '', answer: '', status: 'published', evidence: [] as Array<Record<string, string>>, imageUrl: null as string | null, image: null as File | null, removeImage: false })
+const entryPicker = ref<InstanceType<typeof ImagePicker>>()
+const savingEntry = ref(false)
+/** 列表里的配图地址；带上版本号，换图后不会显示旧图 */
+function imgSrc(row: { imageUrl?: string | null; version?: number; updatedAt?: string }) { return row.imageUrl ? `${row.imageUrl}?v=${row.version ?? encodeURIComponent(row.updatedAt || '')}` : '' }
 const entryDialogTitle = computed(() => ({ entry: entryForm.id ? '编辑问答' : '新建问答', candidate: '审核候选知识', gap: '补充答案' })[entryForm.mode])
 const evidenceText = computed(() => entryForm.evidence.map(e => e.context ? `${e.context}\n→ ${e.content}` : e.question ? `用户：${e.question}` : e.content || '').filter(Boolean).join('\n\n'))
 function openForm(mode: 'entry' | 'candidate' | 'gap', values: Partial<typeof entryForm>) {
-  Object.assign(entryForm, { mode, id: '', refId: '', knowledgeBaseId: current.value?.id || defaultKB.value, question: '', aliasesText: '', answer: '', status: 'published', evidence: [] }, values)
+  Object.assign(entryForm, { mode, id: '', refId: '', knowledgeBaseId: current.value?.id || defaultKB.value, question: '', aliasesText: '', answer: '', status: 'published', evidence: [], imageUrl: null, image: null, removeImage: false }, values)
   entryDialog.value = true
 }
-function editEntry(row?: Entry) { openForm('entry', row ? { id: row.id, knowledgeBaseId: row.knowledgeBaseId, question: row.question, aliasesText: (row.aliases || []).join('\n'), answer: row.answer, status: row.status } : {}) }
-function review(row: Candidate) { openForm('candidate', { refId: row.id, knowledgeBaseId: candidateKb(row), question: row.question, aliasesText: (row.aliases || []).join('\n'), answer: row.answer, evidence: row.evidence || [] }) }
+function editEntry(row?: Entry) { openForm('entry', row ? { id: row.id, knowledgeBaseId: row.knowledgeBaseId, question: row.question, aliasesText: (row.aliases || []).join('\n'), answer: row.answer, status: row.status, imageUrl: row.imageUrl ? imgSrc(row) : null } : {}) }
+function review(row: Candidate) { openForm('candidate', { refId: row.id, knowledgeBaseId: candidateKb(row), question: row.question, aliasesText: (row.aliases || []).join('\n'), answer: row.answer, evidence: row.evidence || [], imageUrl: row.imageUrl || null }) }
 function answerGap(row: Gap) { openForm('gap', { refId: row.id, question: row.question, knowledgeBaseId: kbOf(row) || current.value?.id || defaultKB.value }) }
 async function submitEntry() {
   const aliases = entryForm.aliasesText.split('\n').map(s => s.trim()).filter(Boolean)
   if (!entryForm.knowledgeBaseId || !entryForm.question.trim() || !entryForm.answer.trim()) { ElMessage.warning('知识库、问题和答案必填'); return }
+  const image = { image: entryForm.image, removeImage: !entryForm.image && entryForm.removeImage }
+  savingEntry.value = true
   try {
-    if (entryForm.mode === 'candidate') await agentApi.learning.approve(entryForm.refId, { knowledgeBaseId: entryForm.knowledgeBaseId, question: entryForm.question, aliases, answer: entryForm.answer })
-    else if (entryForm.mode === 'gap') await agentApi.learning.answerGap(entryForm.refId, { knowledgeBaseId: entryForm.knowledgeBaseId, question: entryForm.question, aliases, answer: entryForm.answer })
-    else if (entryForm.id) await agentApi.learning.updateEntry(entryForm.id, { question: entryForm.question, aliases, answer: entryForm.answer, status: entryForm.status })
-    else await agentApi.learning.createEntry({ knowledgeBaseId: entryForm.knowledgeBaseId, question: entryForm.question, aliases, answer: entryForm.answer })
+    if (entryForm.mode === 'candidate') await agentApi.learning.approve(entryForm.refId, { knowledgeBaseId: entryForm.knowledgeBaseId, question: entryForm.question, aliases, answer: entryForm.answer, ...image })
+    else if (entryForm.mode === 'gap') await agentApi.learning.answerGap(entryForm.refId, { knowledgeBaseId: entryForm.knowledgeBaseId, question: entryForm.question, aliases, answer: entryForm.answer, image: entryForm.image })
+    else if (entryForm.id) await agentApi.learning.updateEntry(entryForm.id, { question: entryForm.question, aliases, answer: entryForm.answer, status: entryForm.status, ...image })
+    else await agentApi.learning.createEntry({ knowledgeBaseId: entryForm.knowledgeBaseId, question: entryForm.question, aliases, answer: entryForm.answer, image: entryForm.image })
     entryDialog.value = false
     ElMessage.success('已保存，索引完成后生效')
     await reload()
-  } catch (e) { ElMessage.error(e instanceof Error ? e.message : '保存失败') }
+  } catch (e) { ElMessage.error(e instanceof Error ? e.message : '保存失败') } finally { savingEntry.value = false }
 }
 async function quickApprove(row: Candidate) {
   const knowledgeBaseId = candidateKb(row)
@@ -603,5 +611,10 @@ useAdminEvents(['knowledge_bases', 'knowledge_documents', 'knowledge_entries', '
 .unread-dot i { width: 7px; height: 7px; border-radius: 50%; background: var(--primary); }
 .unread-dot:hover { text-decoration: underline; }
 :deep(.is-unread .qa strong) { font-weight: 600; }
+.qa-row { display: flex; align-items: flex-start; gap: 12px; }
+.qa-row .qa { flex: 1; min-width: 0; }
+.qa-thumb { flex: none; display: block; width: 48px; height: 48px; margin: 2px 0; border: 1px solid var(--line); border-radius: var(--radius-xs); overflow: hidden; background: var(--surface-3); }
+.qa-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform var(--dur) var(--ease); }
+.qa-thumb:hover img { transform: scale(1.06); }
 .faint { font-size: 13px; }
 </style>

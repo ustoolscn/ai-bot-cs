@@ -243,6 +243,10 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	}
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
 	done := make(chan struct{})
+	staffPic := demoPNG(t)
+	mediaServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(staffPic) }))
+	defer mediaServer.Close()
+	application.imageHTTP = mediaServer.Client()
 	go func() { defer close(done); application.RunWorkers(workerCtx) }()
 	defer func() { stopWorkers(); <-done }()
 	server := httptest.NewServer(application.Router())
@@ -444,10 +448,17 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	// Staff answers become FAQ candidates.
 	requestJSON(t, client, http.MethodPut, server.URL+"/api/conversations/"+convID+"/members/bob", map[string]any{"isStaff": true}, http.StatusOK)
 	postQQWebhook(t, client, hook, botSecret, groupEventBody(t, "e4", "GROUP_MESSAGE_CREATE", "m4", "carol", "Carol", "充值了怎么还没到账"))
-	postQQWebhook(t, client, hook, botSecret, groupEventBody(t, "e5", "GROUP_MESSAGE_CREATE", "m5", "bob", "Bob", "充值一般 5 分钟内到账，超过了私聊我"))
+	staffEvent := groupEventBody(t, "e5", "GROUP_MESSAGE_CREATE", "m5", "bob", "Bob", "")
+	var envelope map[string]any
+	if err := json.Unmarshal(staffEvent, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	envelope["d"].(map[string]any)["attachments"] = []map[string]any{{"content_type": "image/png", "filename": "staff.png", "url": mediaServer.URL + "/staff.png"}}
+	staffEvent, _ = json.Marshal(envelope)
+	postQQWebhook(t, client, hook, botSecret, staffEvent)
 	var candidateID string
 	eventually(t, 8*time.Second, "staff candidate created", func() (bool, error) {
-		err := pool.QueryRow(ctx, `SELECT id::text FROM knowledge_candidates WHERE source='staff' AND status='pending'`).Scan(&candidateID)
+		err := pool.QueryRow(ctx, `SELECT id::text FROM knowledge_candidates WHERE source='staff' AND status='pending' AND image_data=$1`, staffPic).Scan(&candidateID)
 		return candidateID != "", nilIfNoRows(err)
 	})
 	requestJSON(t, client, http.MethodPost, server.URL+"/api/conversations/"+convID+"/staff-learning", map[string]any{}, http.StatusOK)
@@ -524,12 +535,34 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 	// Admin correction published directly.
 	var m3 string
 	_ = pool.QueryRow(ctx, `SELECT id::text FROM messages WHERE platform_message_id='m3'`).Scan(&m3)
-	fb := dataMap(t, requestJSON(t, client, http.MethodPost, server.URL+"/api/messages/"+m3+"/feedback", map[string]any{
-		"rating": "wrong", "correctedAnswer": "vip 分组 gpt-4o 输入 2 美元/百万 tokens", "publish": true, "knowledgeBaseId": kbID,
-	}, http.StatusOK))
-	if fb["entryId"] == nil {
-		t.Fatalf("correction not published: %v", fb)
+	pic := demoPNG(t)
+	req := pictureRequest(t, server.URL+"/api/messages/"+m3+"/feedback", map[string]string{"rating": "wrong", "correctedAnswer": "vip 分组 gpt-4o 输入 2 美元/百万 tokens", "publish": "true", "knowledgeBaseId": kbID}, pic)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
 	}
+	raw, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("feedback: %s %v", raw, err)
+	}
+	fb := dataMap(t, raw)
+	for table, key := range map[string]string{"entries": "entryId", "candidates": "candidateId"} {
+		preview, err := client.Get(fmt.Sprintf("%s/api/knowledge/%s/%s/image", server.URL, table, fb[key]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(preview.Body)
+		preview.Body.Close()
+		if err != nil || !bytes.Equal(pic, data) {
+			t.Fatalf("%s preview status=%d", table, preview.StatusCode)
+		}
+	}
+	eventually(t, 8*time.Second, "FAQ image indexed", func() (bool, error) {
+		var data []byte
+		err := pool.QueryRow(ctx, "SELECT i.data FROM knowledge_chunk_images i JOIN knowledge_chunks c ON c.id=i.chunk_id WHERE c.entry_id=$1", fb["entryId"]).Scan(&data)
+		return bytes.Equal(data, pic), nilIfNoRows(err)
+	})
 	detail := requestJSON(t, client, http.MethodGet, server.URL+"/api/messages/"+m3, nil, http.StatusOK)
 	if !bytes.Contains(detail, []byte(`"steps":[`)) || !bytes.Contains(detail, []byte(`get_model_price`)) || !bytes.Contains(detail, []byte(`"rating":"wrong"`)) {
 		t.Fatalf("message detail missing agent info: %s", detail)

@@ -103,8 +103,22 @@ export interface CustomTool {
   parameters: Record<string, unknown>
 }
 
-export interface Candidate { id: string; knowledgeBaseId?: string; knowledgeBaseName?: string; question: string; aliases: string[]; answer: string; source: string; evidence: Array<Record<string, string>>; confidence: number; status: string; reviewNote: string; createdAt: string }
-export interface Entry { id: string; knowledgeBaseId: string; knowledgeBaseName: string; question: string; aliases: string[]; answer: string; source: string; status: string; indexStatus: string; indexError: string; version: number; hitCount: number; helpfulCount: number; unhelpfulCount: number; updatedAt: string }
+/** 图片改动：image 是新选的图；removeImage 表示去掉原来的图。两者都没有就沿用原图。 */
+export interface ImageChange { image?: File | null; removeImage?: boolean }
+/** 带图片（或要移除图片）时改用 multipart，字段名和 JSON 一致；没有图片仍发 JSON。 */
+function withImage<T extends ImageChange>(data: T): T | FormData {
+  if (!data.image && !data.removeImage) { const { image: _i, removeImage: _r, ...rest } = data; return rest as T }
+  const form = new FormData()
+  for (const [key, value] of Object.entries(data)) {
+    if (value === undefined || value === null || value === false && key === 'removeImage') continue
+    if (Array.isArray(value)) value.forEach(v => form.append(key, String(v)))
+    else form.set(key, value instanceof File ? value : String(value))
+  }
+  return form
+}
+
+export interface Candidate { id: string; hasImage?: boolean; imageUrl?: string | null; knowledgeBaseId?: string; knowledgeBaseName?: string; question: string; aliases: string[]; answer: string; source: string; evidence: Array<Record<string, string>>; confidence: number; status: string; reviewNote: string; createdAt: string }
+export interface Entry { id: string; hasImage?: boolean; imageUrl?: string | null; knowledgeBaseId: string; knowledgeBaseName: string; question: string; aliases: string[]; answer: string; source: string; status: string; indexStatus: string; indexError: string; version: number; hitCount: number; helpfulCount: number; unhelpfulCount: number; updatedAt: string }
 export interface Gap { id: string; question: string; occurrences: number; status: string; firstSeenAt: string; lastSeenAt: string; knowledgeBaseId?: string | null; knowledgeBaseName?: string }
 export interface Feedback { id: string; source: string; rating: string; comment: string; correctedAnswer: string; createdAt: string; answer: string; question: string; messageId?: string; conversationName: string; read?: boolean; knowledgeBaseId?: string | null; knowledgeBaseName?: string }
 export interface MemoryMember { botId: string; botName: string; conversationId: string; conversationName: string; conversationType: string; userId: string; displayName: string; count: number }
@@ -175,14 +189,14 @@ export const agentApi = {
   learning: {
     stats: () => request<LearningStats>({ url: '/learning/stats' }, mock.mockLearningStats),
     candidates: (status = 'pending', conversationId?: string) => request<Candidate[]>({ url: '/knowledge/candidates', params: { status, conversationId: conversationId || undefined } }, mock.mockCandidates),
-    approve: (id: string, data: { knowledgeBaseId: string; question: string; aliases: string[]; answer: string; note?: string }) => request<{ entryId: string }>({ method: 'POST', url: `/knowledge/candidates/${id}/approve`, data }),
+    approve: (id: string, data: { knowledgeBaseId: string; question: string; aliases: string[]; answer: string; note?: string } & ImageChange) => request<{ entryId: string }>({ method: 'POST', url: `/knowledge/candidates/${id}/approve`, data: withImage(data) }),
     reject: (id: string, note: string) => request<{ rejected: boolean }>({ method: 'POST', url: `/knowledge/candidates/${id}/reject`, data: { note } }),
     entries: (params: { knowledgeBaseId?: string; status?: string; q?: string }) => request<Entry[]>({ url: '/knowledge/entries', params }, mock.mockEntries),
-    createEntry: (data: { knowledgeBaseId: string; question: string; aliases: string[]; answer: string }) => request<{ id: string }>({ method: 'POST', url: '/knowledge/entries', data }),
-    updateEntry: (id: string, data: { question: string; aliases: string[]; answer: string; status: string }) => request<{ updated: boolean }>({ method: 'PUT', url: `/knowledge/entries/${id}`, data }),
+    createEntry: (data: { knowledgeBaseId: string; question: string; aliases: string[]; answer: string } & ImageChange) => request<{ id: string }>({ method: 'POST', url: '/knowledge/entries', data: withImage(data) }),
+    updateEntry: (id: string, data: { question: string; aliases: string[]; answer: string; status: string } & ImageChange) => request<{ updated: boolean }>({ method: 'PUT', url: `/knowledge/entries/${id}`, data: withImage(data) }),
     deleteEntry: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/knowledge/entries/${id}` }),
     gaps: (status = 'open', knowledgeBaseId = '') => request<Gap[]>({ url: '/knowledge/gaps', params: { status, ...(knowledgeBaseId ? { knowledgeBaseId } : {}) } }, mock.mockGaps),
-    answerGap: (id: string, data: { knowledgeBaseId: string; question: string; answer: string; aliases: string[] }) => request<{ entryId: string }>({ method: 'POST', url: `/knowledge/gaps/${id}/answer`, data }),
+    answerGap: (id: string, data: { knowledgeBaseId: string; question: string; answer: string; aliases: string[] } & ImageChange) => request<{ entryId: string }>({ method: 'POST', url: `/knowledge/gaps/${id}/answer`, data: withImage(data) }),
     ignoreGap: (id: string) => request<{ ignored: boolean }>({ method: 'POST', url: `/knowledge/gaps/${id}/ignore` }),
     feedback: (rating = '', knowledgeBaseId = '') => request<Feedback[]>({ url: '/feedback', params: { rating, ...(knowledgeBaseId ? { knowledgeBaseId } : {}) } }, mock.mockFeedback),
     markFeedbackRead: (target: { ids: string[] } | { all: true }) => request<{ updated: number }>({ method: 'POST', url: '/feedback/read', data: target }, { updated: 0 }),
@@ -208,8 +222,8 @@ export const agentApi = {
   },
   messages: {
     detail: (id: string) => request<MessageAgentDetail>({ url: `/messages/${id}` }, { ...mock.mockMessageAgentDetail, id }),
-    reply: (id: string, text: string, learn: boolean) => request<{ id: string }>({ method: 'POST', url: `/messages/${id}/reply`, data: { text, learn } }),
-    feedback: (id: string, data: { rating: string; comment?: string; correctedAnswer?: string; publish?: boolean; knowledgeBaseId?: string; question?: string }) => request<{ saved: boolean; entryId?: string; candidateId?: string }>({ method: 'POST', url: `/messages/${id}/feedback`, data }),
+    reply: (id: string, text: string, learn: boolean, image?: File | null) => request<{ id: string }>({ method: 'POST', url: `/messages/${id}/reply`, data: withImage({ text, learn, image }), timeout: 60000 }),
+    feedback: (id: string, data: { rating: string; comment?: string; correctedAnswer?: string; publish?: boolean; knowledgeBaseId?: string; question?: string; image?: File | null }) => request<{ saved: boolean; entryId?: string; candidateId?: string }>({ method: 'POST', url: `/messages/${id}/feedback`, data: withImage(data), timeout: 60000 }),
   },
   members: {
     sync:(id:string,refresh:boolean)=>request<{syncedAt:string}>({url:`/conversations/${id}/members/sync`,method:'POST',params:{refresh},timeout:600000}),

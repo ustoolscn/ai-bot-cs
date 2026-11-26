@@ -35,6 +35,10 @@ func TestKnowledgeArchiveRoundTrip(t *testing.T) {
 	kb := id("INSERT INTO knowledge_bases(name,description,embedding_profile_id) VALUES('kb','说明',$1) RETURNING id", profile)
 	entry := id("INSERT INTO knowledge_entries(knowledge_base_id,question,answer) VALUES($1,'q','a') RETURNING id", kb)
 	cand := id("INSERT INTO knowledge_candidates(knowledge_base_id,question,answer,source,entry_id) VALUES($1,'q','a','manual',$2) RETURNING id", kb, entry)
+	pic := demoPNG(t)
+	for table, key := range map[string]string{"knowledge_entries": entry, "knowledge_candidates": cand} {
+		id("UPDATE "+table+" SET image_mime='image/png',image_data=$2 WHERE id=$1 RETURNING id", key, pic)
+	}
 	id("INSERT INTO knowledge_gaps(question,knowledge_base_id,candidate_id) VALUES('q',$1,$2) RETURNING id", kb, cand)
 	id("INSERT INTO eval_cases(question,entry_id) VALUES('q',$1) RETURNING id", entry)
 	key, e := files.Save(ctx, "guide.txt", []byte("abc"))
@@ -75,5 +79,5 @@ func TestKnowledgeArchiveRoundTrip(t *testing.T) {
 	if newKey == key || string(b) != "abc" || e != nil {
 		t.Fatal("original file did not round trip")
 	}
-	id("SELECT e.id FROM knowledge_entries e JOIN knowledge_candidates c ON c.entry_id=e.id JOIN knowledge_gaps g ON g.candidate_id=c.id JOIN eval_cases v ON v.entry_id=e.id JOIN agent_jobs j ON j.payload->>'entryId'=e.id::text WHERE e.knowledge_base_id=$1", res.Data.ID)
+	id("SELECT e.id FROM knowledge_entries e JOIN knowledge_candidates c ON c.entry_id=e.id JOIN knowledge_gaps g ON g.candidate_id=c.id JOIN eval_cases v ON v.entry_id=e.id JOIN agent_jobs j ON j.payload->>'entryId'=e.id::text WHERE e.knowledge_base_id=$1 AND e.image_data=$2 AND c.image_data=$2 AND e.image_mime=c.image_mime", res.Data.ID, pic)
 }

@@ -974,7 +974,9 @@ func (a *App) retrieve(ctx context.Context, kbIDs []string, query string, embedd
 	var b strings.Builder
 	for i, h := range all {
 		fmt.Fprintf(&b, "[%d] %v\n", i+1, h["content"])
-		if h["hasImage"] == true {
+		if h["hasImage"] == true && h["entry_id"] != nil {
+			fmt.Fprintf(&b, "这条问答有固定演示图。采用这条答案时，必须在答复末尾加 [[kb-image:%s]]。每次最多一张。\n", h["id"])
+		} else if h["hasImage"] == true {
 			fmt.Fprintf(&b, "本段附图。如回答实际使用本段且配图能帮助用户，请在答复末尾加 [[kb-image:%s]]。每次最多一张。\n", h["id"])
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"ai-bot/backend/internal/domain"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 )
@@ -74,10 +75,15 @@ func (a *App) webTicketAction(c *gin.Context, claim bool) {
 // humanReply queues an admin reply; delivery falls back to active sending when needed.
 func (a *App) humanReply(c *gin.Context) {
 	var in struct {
-		Text  string `json:"text"`
-		Learn bool   `json:"learn"`
+		Text  string `json:"text" form:"text"`
+		Learn bool   `json:"learn" form:"learn"`
 	}
-	if c.ShouldBindJSON(&in) != nil || strings.TrimSpace(in.Text) == "" {
+	img, err := bindReplyImage(c, &in)
+	if err != nil {
+		fail(c, 400, "invalid_request", err.Error())
+		return
+	}
+	if img.data == nil && strings.TrimSpace(in.Text) == "" {
 		fail(c, 400, "invalid_request", "回复内容必填")
 		return
 	}
@@ -96,6 +102,17 @@ func (a *App) humanReply(c *gin.Context) {
 	if errors.As(err, &conflict) {
 		fail(c, 409, "ticket_handled", err.Error())
 		return
+	}
+	if err == nil && img.data != nil {
+		name := "人工回复" + imageExtension(img.mime)
+		var key string
+		key, err = a.images.Save(c, name, img.data)
+		if err == nil {
+			_, err = tx.Exec(c, "UPDATE messages SET parts=$1 WHERE id=$2", []domain.ContentPart{{Type: "image", Filename: name, ContentType: img.mime, SizeBytes: int64(len(img.data)), StorageKey: key}}, outID)
+			if err != nil {
+				_ = a.images.Delete(c, key)
+			}
+		}
 	}
 	if err != nil || tx.Commit(c) != nil {
 		fail(c, 500, "database_error", "发送失败")

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"ai-bot/backend/internal/agent"
+	"ai-bot/backend/internal/domain"
 	"ai-bot/backend/internal/openai"
 	"github.com/gin-gonic/gin"
 )
@@ -15,7 +16,7 @@ import (
 func (a *App) getStaffLearning(c *gin.Context) {
 	id := c.Param("id")
 	rows, err := a.db.Query(c, `SELECT cm.platform_user_id AS "userId",cm.display_name AS "displayName",
-      (SELECT count(*) FROM messages m WHERE m.conversation_id=cm.conversation_id AND m.sender_id=cm.platform_user_id AND m.direction='inbound' AND m.content<>'' AND NOT m.context_excluded) AS "availableMessages"
+      (SELECT count(*) FROM messages m WHERE m.conversation_id=cm.conversation_id AND m.sender_id=cm.platform_user_id AND m.direction='inbound' AND (m.content<>'' OR m.parts @> '[{"type":"image"}]') AND NOT m.context_excluded) AS "availableMessages"
       FROM conversation_members cm WHERE cm.conversation_id=$1 AND cm.is_staff ORDER BY cm.platform_user_id`, id)
 	if err != nil {
 		fail(c, 500, "database_error", "读取失败")
@@ -88,7 +89,7 @@ func (a *App) jobStaffHistory(ctx context.Context, id string) error {
 	if err := a.db.QueryRow(ctx, `SELECT ARRAY(SELECT platform_user_id FROM conversation_members WHERE conversation_id=$1 AND is_staff ORDER BY platform_user_id)`, id).Scan(&staffIDs); err != nil {
 		return err
 	}
-	rows, err := a.db.Query(ctx, `SELECT m.id::text,m.sender_name,m.content FROM messages m JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id WHERE m.conversation_id=$1 AND cm.is_staff AND m.direction='inbound' AND m.content<>'' AND NOT m.context_excluded ORDER BY m.event_at DESC LIMIT 200`, id)
+	rows, err := a.db.Query(ctx, `SELECT m.id::text,m.sender_name,m.content FROM messages m JOIN conversation_members cm ON cm.conversation_id=m.conversation_id AND cm.platform_user_id=m.sender_id WHERE m.conversation_id=$1 AND cm.is_staff AND m.direction='inbound' AND (m.content<>'' OR m.parts @> '[{"type":"image"}]') AND NOT m.context_excluded ORDER BY m.event_at DESC LIMIT 200`, id)
 	if err != nil {
 		return err
 	}
@@ -133,7 +134,7 @@ func (a *App) jobStaffHistory(ctx context.Context, id string) error {
 }
 
 // Serialise live and historical mining of the same source message, including retries.
-func (a *App) createStaffCandidate(ctx context.Context, messageID, kbID string, res staffMining, evidence any) (string, bool, error) {
+func (a *App) createStaffCandidate(ctx context.Context, messageID, kbID string, res staffMining, evidence any, img replyImage) (string, bool, error) {
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
 		return "", false, err
@@ -157,14 +158,29 @@ func (a *App) createStaffCandidate(ctx context.Context, messageID, kbID string, 
 	if !allowed {
 		return "", false, nil
 	}
-	var kb any
-	if kbID != "" {
-		kb = kbID
-	}
-	var id string
-	err = tx.QueryRow(ctx, `INSERT INTO knowledge_candidates(knowledge_base_id,question,aliases,answer,source,evidence,confidence) VALUES($1,$2,$3::jsonb,$4,'staff',$5::jsonb,$6) RETURNING id::text`, kb, strings.TrimSpace(res.Question), jsonString(cleanAliases(res.Aliases)), strings.TrimSpace(res.Answer), jsonString(evidence), res.Confidence).Scan(&id)
+	id, err := insertCandidate(ctx, tx, kbID, res.Question, res.Aliases, res.Answer, "staff", evidence, res.Confidence, img)
 	if err != nil {
 		return "", false, err
 	}
 	return id, true, tx.Commit(ctx)
+}
+
+func (a *App) staffReplyImage(ctx context.Context, parts []domain.ContentPart) (replyImage, error) {
+	for _, part := range parts {
+		if part.Type != "image" {
+			continue
+		}
+		var data []byte
+		var err error
+		if part.StorageKey != "" {
+			data, err = a.images.Read(ctx, part.StorageKey)
+		} else {
+			data, _, _, err = downloadImage(ctx, a.imageHTTP, part.URL)
+		}
+		if err != nil {
+			return replyImage{}, err
+		}
+		return decodeReplyImage(data)
+	}
+	return replyImage{}, fmt.Errorf("客服回复缺少配图")
 }

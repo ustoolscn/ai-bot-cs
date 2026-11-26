@@ -39,11 +39,16 @@
       <div v-if="detail.feedback?.length" class="chips ap-history">
         <el-tag v-for="f in detail.feedback" :key="f.id" size="small" :type="['good', 'helpful'].includes(f.rating) ? 'success' : 'danger'" effect="plain">{{ feedbackSourceText[f.source] || f.source }}：{{ ratingText[f.rating] || f.rating }}</el-tag>
       </div>
-      <div class="ap-form">
+      <div class="ap-form" @paste="correctPicker?.fromClipboard($event)">
         <div class="ap-ratings" role="radiogroup" aria-label="这条回复怎么样">
           <button v-for="r in ratings" :key="r" type="button" role="radio" :aria-checked="rating === r" class="ap-rating" :class="[{ active: rating === r }, r === 'good' ? 'is-good' : 'is-bad']" @click="rating = rating === r ? '' : r">{{ ratingText[r] }}</button>
         </div>
-        <el-input v-if="rating && rating !== 'good'" v-model="corrected" type="textarea" :rows="3" placeholder="正确的回答应该是…（选填，填了会生成候选知识）" />
+        <Transition name="ap-reveal">
+          <div v-if="rating && rating !== 'good'" class="ap-correct">
+            <el-input v-model="corrected" type="textarea" :rows="3" placeholder="正确的回答应该是…（选填，填了会生成候选知识）" />
+            <ImagePicker ref="correctPicker" v-model:file="correctImage" :disabled="!corrected.trim()" :hint="corrected.trim() ? '配一张演示图，以后 AI 答到这个问题会连图一起发。PNG 或 JPEG，5 MB 以内，可直接粘贴截图' : '先写好正确答案，再配图'" />
+          </div>
+        </Transition>
         <div class="ap-actions">
           <div v-if="corrected.trim()" class="ap-options">
             <el-select v-model="kbID" placeholder="放进哪个知识库" style="width: 180px"><el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" /></el-select>
@@ -56,9 +61,10 @@
 
     <section class="ap-section">
       <h3>人工回复</h3>
-      <div class="ap-form">
+      <div class="ap-form" @paste="replyPicker?.fromClipboard($event)">
         <el-input v-model="replyText" type="textarea" :rows="2" placeholder="以机器人身份补充回复（群聊 5 分钟、私聊 60 分钟内有效）" />
-        <div class="ap-actions"><el-checkbox v-model="learn">同时提交为候选知识</el-checkbox><el-button type="primary" plain :disabled="!replyText.trim()" :loading="replying" @click="sendReply">发送回复</el-button></div>
+        <ImagePicker ref="replyPicker" v-model:file="replyImage" hint="随回复发一张图，PNG 或 JPEG，5 MB 以内，可直接粘贴截图" />
+        <div class="ap-actions"><el-checkbox v-model="learn" :disabled="!replyText.trim()">同时提交为候选知识</el-checkbox><el-button type="primary" plain :disabled="!replyText.trim() && !replyImage" :loading="replying" @click="sendReply">{{ replyImage ? '发送图文回复' : '发送回复' }}</el-button></div>
       </div>
     </section>
   </div>
@@ -70,6 +76,7 @@ import { computed, ref, watch } from 'vue'
 import { ArrowRight, Cpu, EditPen, SetUp } from '@element-plus/icons-vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import MsgText from '@/components/MsgText.vue'
+import ImagePicker from '@/components/ImagePicker.vue'
 import { stageSeconds } from '@/utils/stage-meta'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api'
@@ -83,6 +90,10 @@ const detail = ref<MessageAgentDetail | null>(null)
 const knowledgeBases = ref<KnowledgeBase[]>([])
 const rating = ref('')
 const corrected = ref('')
+const correctImage = ref<File | null>(null)
+const replyImage = ref<File | null>(null)
+const correctPicker = ref<InstanceType<typeof ImagePicker>>()
+const replyPicker = ref<InstanceType<typeof ImagePicker>>()
 const kbID = ref('')
 const publish = ref(false)
 const saving = ref(false)
@@ -109,20 +120,20 @@ async function load() {
     if (!kbID.value) kbID.value = settings?.learningKnowledgeBaseId || kbs[0]?.id || ''
   } catch { detail.value = null }
 }
-watch(() => props.messageId, () => { openStep.value = -1; rating.value = ''; corrected.value = ''; replyText.value = ''; load() }, { immediate: true })
+watch(() => props.messageId, () => { openStep.value = -1; rating.value = ''; corrected.value = ''; correctImage.value = null; replyText.value = ''; replyImage.value = null; load() }, { immediate: true })
 
 async function submitFeedback() {
   saving.value = true
   try {
-    const r = await agentApi.messages.feedback(props.messageId, { rating: rating.value, correctedAnswer: corrected.value.trim() || undefined, publish: publish.value, knowledgeBaseId: kbID.value || undefined })
+    const r = await agentApi.messages.feedback(props.messageId, { rating: rating.value, correctedAnswer: corrected.value.trim() || undefined, publish: publish.value, knowledgeBaseId: kbID.value || undefined, image: corrected.value.trim() ? correctImage.value : null })
     ElMessage.success(r.entryId ? '已发布为 FAQ' : r.candidateId ? '已提交候选知识' : '已记录')
-    rating.value = ''; corrected.value = ''
+    rating.value = ''; corrected.value = ''; correctImage.value = null
     await load()
   } catch (e) { ElMessage.error(e instanceof Error ? e.message : '提交失败') } finally { saving.value = false }
 }
 async function sendReply() {
   replying.value = true
-  try { await agentApi.messages.reply(props.messageId, replyText.value.trim(), learn.value); replyText.value = ''; ElMessage.success('已加入发送队列'); setTimeout(load, 1500) } catch (e) { ElMessage.error(e instanceof Error ? e.message : '发送失败') } finally { replying.value = false }
+  try { await agentApi.messages.reply(props.messageId, replyText.value.trim(), learn.value && !!replyText.value.trim(), replyImage.value); replyText.value = ''; replyImage.value = null; ElMessage.success('已加入发送队列'); setTimeout(load, 1500) } catch (e) { ElMessage.error(e instanceof Error ? e.message : '发送失败') } finally { replying.value = false }
 }
 useAdminEvents(['messages','agent_runs','model_calls','tool_calls','outbox_tasks','message_feedback'], load)
 </script>
@@ -172,6 +183,9 @@ useAdminEvents(['messages','agent_runs','model_calls','tool_calls','outbox_tasks
 .ap-rating.active.is-bad { border-color: var(--danger); background: var(--danger-light); color: var(--danger); }
 .ap-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .ap-actions > .el-button:only-child { margin-left: auto; }
+.ap-correct { display: flex; flex-direction: column; gap: 8px; }
+.ap-reveal-enter-active, .ap-reveal-leave-active { transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.ap-reveal-enter-from, .ap-reveal-leave-to { opacity: 0; transform: translateY(-4px); }
 .ap-options { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-@media (prefers-reduced-motion: reduce) { .ap-track i, .ap-chevron { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .ap-track i, .ap-chevron, .ap-reveal-enter-active, .ap-reveal-leave-active { transition: none; } }
 </style>
