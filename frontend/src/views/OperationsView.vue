@@ -93,7 +93,7 @@
     </template>
 
     <!-- 定时任务抽屉 & 弹窗 -->
-    <el-drawer v-model="editing" :title="form.id ? '编辑定时任务' : '新建定时任务'" size="min(600px, 96vw)">
+    <el-drawer v-model="editing" :title="form.id ? '编辑定时任务' : '新建定时任务'" size="min(600px, 96vw)" append-to-body>
       <el-form label-position="top" @submit.prevent="saveTask">
         <div class="dlg-stack">
           <div class="dlg-section">
@@ -135,7 +135,7 @@
       </template>
     </el-drawer>
 
-    <el-dialog v-model="testing" title="测试发送" width="min(520px, 95vw)">
+    <el-dialog v-model="testing" title="测试发送" width="min(520px, 95vw)" append-to-body>
       <div class="dlg-stack">
         <div class="dlg-tip-box">立即执行「{{ active?.name }}」，结果会真实发送到下面所选的群，不影响当天正常定时触发。</div>
         <div class="dlg-section">
@@ -146,7 +146,7 @@
       <template #footer><el-button @click="testing = false">取消</el-button><el-button type="primary" :disabled="!testGroups.length" :loading="sending" @click="sendTest">发送到 {{ testGroups.length }} 个群</el-button></template>
     </el-dialog>
 
-    <el-drawer v-model="history" :title="(active?.name || '') + ' 的执行记录'" size="min(720px, 96vw)">
+    <el-drawer v-model="history" :title="(active?.name || '') + ' 的执行记录'" size="min(720px, 96vw)" append-to-body>
       <el-table :data="runs" empty-text="还没有执行记录">
         <el-table-column label="开始时间" width="150"><template #default="{ row }">{{ formatTime(row.createdAt) }}</template></el-table-column>
         <el-table-column label="类型" width="70"><template #default="{ row }">{{ row.isTest ? '测试' : '定时' }}</template></el-table-column>

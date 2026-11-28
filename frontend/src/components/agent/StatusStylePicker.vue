@@ -18,7 +18,7 @@
     </button>
   </div>
 
-  <el-dialog :model-value="!!preview" :title="current ? current.name + ' · 示例数据' : ''" width="840px" @close="preview = ''">
+  <el-dialog :model-value="!!preview" :title="current ? current.name + ' · 示例数据' : ''" width="840px" append-to-body @close="preview = ''">
     <div class="preview-frame" :class="{ dark: preview === 'night' }">
        <iframe v-if="preview" :srcdoc="docs[preview]" sandbox="allow-scripts allow-same-origin" :title="current?.name" @load="fit" />
     </div>

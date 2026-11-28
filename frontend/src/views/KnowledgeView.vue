@@ -198,6 +198,7 @@
       v-model="drawerOpen"
       :title="drawerTitle"
       size="min(920px, 94vw)"
+      append-to-body
       @closed="onDrawerClosed"
     >
       <template v-if="sharedView">
@@ -307,7 +308,7 @@
     </el-drawer>
 
     <!-- 各种弹窗（问答、新建、删除、导入、切模型、文档切片） -->
-    <el-dialog v-model="entryDialog" :title="entryDialogTitle" width="680px">
+    <el-dialog v-model="entryDialog" :title="entryDialogTitle" width="680px" append-to-body>
       <div class="dlg-tabs">
         <el-segmented
           v-model="entryDialogTab"
@@ -345,7 +346,7 @@
       <template #footer><el-button @click="entryDialog = false">取消</el-button><el-button type="primary" :loading="savingEntry" @click="submitEntry">{{ entryForm.mode === 'candidate' ? '通过并发布' : entryForm.mode === 'gap' ? '保存答案' : '保存问答' }}</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="removeVisible" title="删除知识库" width="500px" :close-on-click-modal="!removing">
+    <el-dialog v-model="removeVisible" title="删除知识库" width="500px" append-to-body :close-on-click-modal="!removing">
       <div v-if="current" class="kb-remove dlg-stack">
         <div class="dlg-section is-danger">
           <div class="dlg-section-head"><strong>高危操作确认</strong><span>此操作不可撤回</span></div>
@@ -364,7 +365,7 @@
       <template #footer><el-button :disabled="removing" @click="removeVisible = false">取消</el-button><el-button type="danger" :loading="removing" :disabled="removeConfirm.trim() !== current?.name" @click="removeKb">永久删除</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="createVisible" title="新建知识库" width="540px">
+    <el-dialog v-model="createVisible" title="新建知识库" width="540px" append-to-body>
       <el-form label-position="top">
         <div class="dlg-stack">
           <div class="dlg-section">
@@ -381,7 +382,7 @@
       <template #footer><el-button @click="createVisible = false">取消</el-button><el-button type="primary" @click="createKb">创建知识库</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="importVisible" title="导入知识库" width="540px" :close-on-click-modal="!importing" :close-on-press-escape="!importing" :show-close="!importing">
+    <el-dialog v-model="importVisible" title="导入知识库" width="540px" append-to-body :close-on-click-modal="!importing" :close-on-press-escape="!importing" :show-close="!importing">
       <el-form label-position="top">
         <div class="dlg-stack">
           <div class="dlg-section">
@@ -409,7 +410,7 @@
       <template #footer><el-button :disabled="importing" @click="importVisible = false">取消</el-button><el-button type="primary" :loading="importing" :disabled="!importForm.file || !importForm.embeddingProfileId" @click="runImport">导入</el-button></template>
     </el-dialog>
 
-    <el-drawer v-model="chunkDrawerOpen" :title="`文档切片预览 · ${chunkDrawerDoc?.name || ''}`" size="560px">
+    <el-drawer v-model="chunkDrawerOpen" :title="`文档切片预览 · ${chunkDrawerDoc?.name || ''}`" size="560px" append-to-body>
       <div v-loading="chunkDrawerLoading" class="test-results">
         <div v-for="ch in chunkDrawerList" :key="ch.id">
           <strong>切片 #{{ ch.chunkIndex + 1 }}<span v-if="ch.hasImage" class="hit-image-tag">带截图</span></strong>
@@ -420,7 +421,7 @@
       </div>
     </el-drawer>
 
-    <el-dialog v-model="modelSwitchVisible" title="更换向量模型" width="500px">
+    <el-dialog v-model="modelSwitchVisible" title="更换向量模型" width="500px" append-to-body>
       <div class="dlg-stack">
         <div class="dlg-section">
           <div class="dlg-section-head"><strong>目标 Embedding 模型</strong><span>支持切换不同维度向量</span></div>

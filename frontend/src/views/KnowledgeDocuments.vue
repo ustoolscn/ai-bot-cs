@@ -13,7 +13,7 @@
       <el-table-column label="操作" width="268" fixed="right"><template #default="{ row }"><el-button v-if="row.chunks > 0" link type="primary" @click="emit('inspect', row)">查看切片</el-button><el-button v-if="row.status === 'failed' || row.status === 'unindexed' || row.lastError" link type="primary" @click="retryDocument(row.id)">重新索引</el-button><el-button v-if="row.chunks > 0" link @click="deleteIndex(row)">删除索引</el-button><el-button link type="danger" @click="deleteFile(row)">删除文件</el-button></template></el-table-column>
       <template #empty><div class="table-empty"><el-icon><Document /></el-icon><strong>这个知识库还没有文档</strong><span>支持文本、PDF、Word 和图片</span></div></template>
     </el-table>
-    <el-dialog v-model="errorVisible" :title="errorTitle" width="620px"><pre class="error-detail-text">{{ selectedError }}</pre><template #footer><el-button :icon="CopyDocument" @click="copyError">复制原因</el-button><el-button type="primary" @click="errorVisible = false">关闭</el-button></template></el-dialog>
+    <el-dialog v-model="errorVisible" :title="errorTitle" width="620px" append-to-body><pre class="error-detail-text">{{ selectedError }}</pre><template #footer><el-button :icon="CopyDocument" @click="copyError">复制原因</el-button><el-button type="primary" @click="errorVisible = false">关闭</el-button></template></el-dialog>
   </div>
 </template>
 

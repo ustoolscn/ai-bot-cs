@@ -410,7 +410,7 @@
     </div>
 
     <!-- 编辑记忆弹窗 -->
-    <el-dialog v-model="memoryDialog" title="编辑记忆" width="560px">
+    <el-dialog v-model="memoryDialog" title="编辑记忆" width="560px" append-to-body>
       <el-form label-position="top">
         <div class="dlg-stack">
           <div class="dlg-section">
@@ -439,7 +439,7 @@
     </el-dialog>
 
     <!-- 合并人物弹窗 -->
-    <el-dialog v-model="mergeDialog" title="合并为同一人物" width="500px">
+    <el-dialog v-model="mergeDialog" title="合并为同一人物" width="500px" append-to-body>
       <div class="dlg-stack">
         <div class="dlg-tip-box">将另一个人物的跨群/私聊身份、记忆与关系合并到「{{ selectedSubject?.displayName || '当前人物' }}」名下（不会丢失任何记录）。</div>
         <div class="dlg-section">

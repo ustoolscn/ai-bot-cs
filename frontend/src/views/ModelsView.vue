@@ -94,7 +94,7 @@
     </template>
 
     <!-- 添加/编辑模型弹窗 -->
-    <el-dialog v-model="dialog" :title="form.id ? '配置模型' : '添加模型配置'" width="680px">
+    <el-dialog v-model="dialog" :title="form.id ? '配置模型' : '添加模型配置'" width="680px" append-to-body>
       <div class="dlg-tabs">
         <el-segmented
           v-model="dialogTab"
@@ -203,7 +203,7 @@
     </el-dialog>
 
     <!-- 添加/编辑代理弹窗 -->
-    <el-dialog v-model="proxyDialog" :title="proxyForm.id ? '编辑代理' : '添加代理'" width="540px">
+    <el-dialog v-model="proxyDialog" :title="proxyForm.id ? '编辑代理' : '添加代理'" width="540px" append-to-body>
       <el-form label-position="top" @submit.prevent>
         <div class="dlg-stack">
           <div class="dlg-section">
@@ -230,7 +230,7 @@
     </el-dialog>
 
     <!-- 模型测试工作台弹窗 -->
-    <el-dialog v-model="workbenchVisible" title="模型测试工作台" width="760px" class="model-workbench">
+    <el-dialog v-model="workbenchVisible" title="模型测试工作台" width="760px" class="model-workbench" append-to-body>
       <template v-if="testingModel">
         <div class="dlg-stack">
           <div class="dlg-section">

@@ -11,7 +11,7 @@
       <el-table-column label="启用" width="80"><template #default="{ row }"><el-switch v-model="row.enabled" @change="quickSave(row)" /></template></el-table-column>
       <el-table-column label="操作" width="112" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="edit(row)">编辑</el-button><el-button link type="danger" @click="remove(row)">删除</el-button></template></el-table-column>
     </el-table>
-    <el-dialog v-model="dialog" :title="editing.id ? '编辑技能' : '新建技能'" width="660px">
+    <el-dialog v-model="dialog" :title="editing.id ? '编辑技能' : '新建技能'" width="660px" append-to-body>
       <el-form label-position="top">
         <div class="dlg-stack">
           <div class="dlg-section">

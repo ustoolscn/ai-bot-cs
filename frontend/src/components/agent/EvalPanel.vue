@@ -31,7 +31,7 @@
       </el-table>
     </section>
 
-    <el-dialog v-model="caseDialog" :title="editingCase.id ? '编辑用例' : '新增用例'" width="580px">
+    <el-dialog v-model="caseDialog" :title="editingCase.id ? '编辑用例' : '新增用例'" width="580px" append-to-body>
       <el-form label-position="top">
         <div class="dlg-stack">
           <div class="dlg-section">
@@ -48,7 +48,7 @@
       <template #footer><el-button @click="caseDialog = false">取消</el-button><el-button type="primary" @click="saveCase">保存用例</el-button></template>
     </el-dialog>
 
-    <el-drawer v-model="resultDrawer" :title="`评测结果 · ${currentRun?.name || ''}`" size="720px">
+    <el-drawer v-model="resultDrawer" :title="`评测结果 · ${currentRun?.name || ''}`" size="720px" append-to-body>
       <article v-for="r in results" :key="r.id" class="result-item">
         <div class="result-head"><strong>{{ r.question }}</strong><el-tag :type="(r.score ?? 0) >= 7 ? 'success' : (r.score ?? 0) >= 4 ? 'warning' : 'danger'">{{ r.score != null ? r.score : '—' }} 分</el-tag></div>
         <div class="content-box">{{ r.answer || r.error }}</div>

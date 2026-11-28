@@ -47,7 +47,7 @@
     </div>
     <div v-else class="panel"><EmptyState title="还没有接入机器人" description="在 QQ 开放平台创建机器人后，把 AppID 和 AppSecret 填进来，再把回调地址配置到开放平台。"><el-button type="primary" :icon="Plus" @click="openCreate">添加机器人</el-button></EmptyState></div>
 
-    <el-dialog v-model="dialogVisible" :title="form.id ? '配置机器人' : '添加 QQ 机器人'" width="640px">
+    <el-dialog v-model="dialogVisible" :title="form.id ? '配置机器人' : '添加 QQ 机器人'" width="640px" append-to-body>
       <el-form label-position="top">
         <div class="dlg-stack">
           <div class="dlg-section">
@@ -65,7 +65,7 @@
       </el-form>
       <template #footer><div class="dialog-foot"><el-button v-if="form.id" type="danger" link :icon="Delete" @click="remove">删除机器人</el-button><span class="spacer" /><el-button @click="dialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存机器人</el-button></div></template>
     </el-dialog>
-    <el-dialog v-model="opVisible" :title="`人工客服 · ${opBot?.name || ''}`" width="600px">
+    <el-dialog v-model="opVisible" :title="`人工客服 · ${opBot?.name || ''}`" width="600px" append-to-body>
       <div class="dlg-stack">
         <div class="dlg-section">
           <div class="dlg-section-head"><strong>绑定与手机回复说明</strong><span>支持绑定多位人工客服</span></div>

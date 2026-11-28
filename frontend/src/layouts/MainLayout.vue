@@ -58,7 +58,7 @@
       </main>
     </div>
 
-    <el-dialog v-model="searchVisible" width="560px" class="search-dialog" align-center :show-close="false" @opened="focusSearch">
+    <el-dialog v-model="searchVisible" width="560px" class="search-dialog" align-center append-to-body :show-close="false" @opened="focusSearch">
       <el-input ref="searchInput" v-model="search" class="search-input" size="large" placeholder="输入页面名称或要做的事，例如“禁言”“代理”“评测”" :prefix-icon="Search" @keydown="onSearchKey" />
       <div class="search-results">
         <button v-for="(result, index) in filteredResults" :key="result.path" :class="{ active: index === activeIndex }" @click="openResult(result.path)" @mouseenter="activeIndex = index">

@@ -17,7 +17,7 @@
       <el-table-column label="操作" width="160" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="edit(row)">编辑</el-button><el-button link @click="openTest(row)">测试</el-button><el-button link type="danger" @click="remove(row)">删除</el-button></template></el-table-column>
     </el-table>
 
-    <el-dialog v-model="dialog" :title="editing.id ? '编辑工具' : '新建 HTTP 工具'" width="700px">
+    <el-dialog v-model="dialog" :title="editing.id ? '编辑工具' : '新建 HTTP 工具'" width="700px" append-to-body>
       <div class="dlg-tabs">
         <el-segmented v-model="toolTab" :options="[{ label: '接口与开关', value: 'endpoint' }, { label: '认证与参数 Schema', value: 'schema' }]" />
       </div>
@@ -55,7 +55,7 @@
       <template #footer><el-button @click="dialog = false">取消</el-button><el-button type="primary" @click="save">保存工具</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="testDialog" title="测试工具" width="640px">
+    <el-dialog v-model="testDialog" title="测试工具" width="640px" append-to-body>
       <div class="dlg-stack">
         <div class="dlg-section">
           <div class="dlg-section-head"><strong>调用参数 JSON</strong><span>填写实际测试入参</span></div>
