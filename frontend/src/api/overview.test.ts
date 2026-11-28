@@ -61,4 +61,46 @@ describe('system overview mapping', () => {
     expect(overview.knowledge.queues).toEqual([{ id: 'k1', name: '产品库', progress: 50, eta: '正在索引' }])
     expect(overview.queues).toEqual({ inbox: 2, outbox: 1, knowledge: 5, failed: 0 })
   })
+
+  it('maps skipped-inclusive business success rate, failure counts, and repliedCount accurately', async () => {
+    vi.mocked(request).mockResolvedValue({
+      bots: 1,
+      conversations: 2,
+      messages24h: 20,
+      triggered: 10,
+      successful: 8,
+      failedHandled: 2,
+      repliedCount: 3,
+      pendingTasks: 0,
+      readyDocuments: 0,
+      totalDocuments: 0,
+      version: '0.2.0',
+    })
+
+    const overview = await api.overview()
+    expect(overview.successRate).toBe(80)
+    expect(overview.triggeredCount).toBe(10)
+    expect(overview.successfulCount).toBe(8)
+    expect(overview.failedHandledCount).toBe(2)
+    expect(overview.repliedCount).toBe(3)
+
+    vi.mocked(request).mockResolvedValue({
+      bots: 1,
+      conversations: 0,
+      messages24h: 0,
+      triggered: 0,
+      successful: 0,
+      failedHandled: 0,
+      repliedCount: 0,
+      pendingTasks: 0,
+      readyDocuments: 0,
+      totalDocuments: 0,
+      version: '0.2.0',
+    })
+
+    const emptyTriggered = await api.overview()
+    expect(emptyTriggered.successRate).toBeNull()
+    expect(emptyTriggered.triggeredCount).toBe(0)
+    expect(emptyTriggered.repliedCount).toBe(0)
+  })
 })

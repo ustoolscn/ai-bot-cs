@@ -90,7 +90,7 @@ func (a *App) dismissFailed(c *gin.Context) {
 	err := a.db.QueryRow(c, `WITH inbox AS (
  UPDATE inbox_tasks SET dismissed_at=now() WHERE status='failed' AND dismissed_at IS NULL AND ($1='' OR id=nullif($1,'')::uuid) RETURNING id
 ), outbox AS (
- UPDATE outbox_tasks t SET dismissed_at=now() FROM messages m WHERE t.message_id=m.id AND m.event_type<>'PROCESSING_ACK' AND t.status='failed'
+ UPDATE outbox_tasks t SET dismissed_at=now() FROM messages m WHERE t.message_id=m.id AND m.event_type<>'PROCESSING_ACK' AND (t.status='failed' OR (t.status='expired' AND coalesce(t.last_error,'') NOT IN ('blacklisted or excluded','operator removed')))
  AND t.dismissed_at IS NULL AND ($1='' OR t.id=nullif($1,'')::uuid) RETURNING t.id
 ), docs AS (
  UPDATE knowledge_documents SET dismissed_at=now() WHERE status='failed' AND dismissed_at IS NULL AND ($1='' OR id=nullif($1,'')::uuid) RETURNING id

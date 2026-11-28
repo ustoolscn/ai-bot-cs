@@ -31,11 +31,19 @@
       </el-table>
     </section>
 
-    <el-dialog v-model="caseDialog" :title="editingCase.id ? '编辑用例' : '新增用例'" width="560px">
+    <el-dialog v-model="caseDialog" :title="editingCase.id ? '编辑用例' : '新增用例'" width="580px">
       <el-form label-position="top">
-        <el-form-item label="用户会怎么问"><el-input v-model="editingCase.question" type="textarea" :rows="2" /></el-form-item>
-        <el-form-item label="期望答到的要点"><el-input v-model="editingCase.expected" type="textarea" :rows="4" placeholder="用分号分隔多个要点" /></el-form-item>
-        <el-checkbox v-model="editingCase.enabled">参与评测</el-checkbox>
+        <div class="dlg-stack">
+          <div class="dlg-section">
+            <div class="dlg-section-head"><strong>测试问题与评估标准</strong><span>裁判模型将对照期望要点打分</span></div>
+            <el-form-item label="用户会怎么问"><el-input v-model="editingCase.question" type="textarea" :rows="2" /></el-form-item>
+            <el-form-item label="期望答到的要点"><el-input v-model="editingCase.expected" type="textarea" :rows="4" placeholder="用分号分隔多个要点" /></el-form-item>
+          </div>
+          <div class="dlg-section">
+            <div class="dlg-section-head"><strong>用例状态</strong><span>临时停用的用例不计入批量评测</span></div>
+            <el-checkbox v-model="editingCase.enabled">参与评测</el-checkbox>
+          </div>
+        </div>
       </el-form>
       <template #footer><el-button @click="caseDialog = false">取消</el-button><el-button type="primary" @click="saveCase">保存用例</el-button></template>
     </el-dialog>

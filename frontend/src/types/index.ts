@@ -290,6 +290,134 @@ export interface KnowledgeBase {
   boundAgents?: Array<{ id: string; name: string }>
 }
 
+export interface KnowledgeSearchHit {
+  id?: string
+  documentId?: string
+  entryId?: string
+  content: string
+  score: number
+  hasImage?: boolean
+}
+
+export interface KnowledgeDocumentChunk {
+  id: string
+  chunkIndex: number
+  content: string
+  hasImage: boolean
+  imageUrl?: string
+}
+
+export interface KnowledgeMapBoundItem {
+  id: string
+  name: string
+  type?: 'group' | 'private' | string
+}
+
+export interface KnowledgeMapDocument {
+  id: string
+  name: string
+  type: string
+  status: string
+  sizeBytes: number
+  chunkCount: number
+  imageCount: number
+  lastError: string
+  updatedAt: string
+  preview: string
+}
+
+export interface KnowledgeMapEntry {
+  id: string
+  question: string
+  answer: string
+  aliases: string[]
+  status: string
+  indexStatus: string
+  source: string
+  hitCount: number
+  helpfulCount: number
+  unhelpfulCount: number
+  materialCount: number
+  updatedAt: string
+}
+
+export interface KnowledgeMapCandidate {
+  id: string
+  question: string
+  answer: string
+  confidence: number
+  source: string
+  status: string
+  createdAt: string
+}
+
+export interface KnowledgeMapGap {
+  id: string
+  question: string
+  occurrences: number
+  lastSeenAt: string
+}
+
+export interface KnowledgeMapCluster {
+  id: number
+  label: string
+  keywords: string[]
+  count: number
+  x: number
+  y: number
+  z?: number
+  radius: number
+  colorIndex: number
+}
+
+export interface KnowledgeMapPoint {
+  id: string
+  kind: 'document' | 'entry' | 'gap'
+  sourceId: string
+  title: string
+  snippet: string
+  chunkIndex: number
+  hasImage: boolean
+  imageUrl?: string
+  hitCount: number
+  helpfulCount: number
+  unhelpfulCount: number
+  clusterId: number
+  x: number
+  y: number
+  z?: number
+}
+
+export interface KnowledgeMapData {
+  id: string
+  name: string
+  description: string
+  embeddingProfileId: string
+  embeddingModel: string
+  documentCount: number
+  readyDocumentCount: number
+  entryCount: number
+  readyEntryCount: number
+  chunkCount: number
+  unreadNegativeFeedback: number
+  boundAgents: KnowledgeMapBoundItem[]
+  boundConversations: KnowledgeMapBoundItem[]
+  documents: KnowledgeMapDocument[]
+  entries: KnowledgeMapEntry[]
+  candidates: KnowledgeMapCandidate[]
+  gaps: KnowledgeMapGap[]
+  clusters: KnowledgeMapCluster[]
+  points: KnowledgeMapPoint[]
+}
+
+export type KnowledgeInspectorSelection =
+  | { type: 'document'; id: string }
+  | { type: 'entry'; id: string }
+  | { type: 'candidate'; id: string }
+  | { type: 'gap'; id: string }
+  | { type: 'point'; point: KnowledgeMapPoint }
+  | null
+
 export type PipelineOutcome = 'replied' | 'handoff' | 'skipped' | 'merged' | 'failed' | 'processing'
 
 export interface PipelineRow {
@@ -352,6 +480,10 @@ export interface SystemOverview {
   active: ActiveTask[]
   messages24h: number | null
   successRate: number | null
+  triggeredCount: number | null
+  successfulCount: number | null
+  failedHandledCount: number | null
+  repliedCount: number | null
   metrics: Array<{ label: string; value: string; sub?: string; trend?: string; direction?: 'up' | 'down'; good?: boolean }>
   pipelines: PipelineRow[]
   alerts: AlertItem[]

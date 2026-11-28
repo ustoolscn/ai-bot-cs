@@ -145,6 +145,8 @@ func (a *App) Router() http.Handler {
 	auth.POST("/knowledge-bases/import", a.importKnowledge)
 	auth.GET("/knowledge-bases/:id/export", a.exportKnowledge)
 	auth.GET("/knowledge-bases/:id", a.getKB)
+	auth.GET("/knowledge-bases/:id/map", a.getKBMap)
+	auth.GET("/knowledge-bases/:id/documents/:documentId/chunks", a.listDocumentChunks)
 	auth.DELETE("/knowledge-bases/:id", a.deleteKB)
 	auth.POST("/knowledge-bases/:id/documents", a.uploadDocument)
 	auth.DELETE("/knowledge-bases/:id/documents/:documentId", a.deleteDocument)
@@ -1161,7 +1163,7 @@ func (a *App) searchKB(c *gin.Context) {
 		fail(c, 502, "model_error", err.Error())
 		return
 	}
-	rows, err := a.db.Query(c, `SELECT id::text,document_id::text,content,EXISTS(SELECT FROM knowledge_chunk_images ci WHERE ci.chunk_id=knowledge_chunks.id) AS "hasImage",1-(embedding <=> $1::vector) AS score FROM knowledge_chunks WHERE knowledge_base_id=$2 AND EXISTS(SELECT FROM knowledge_bases WHERE id=$2 AND embedding_profile_id=$4) ORDER BY embedding <=> $1::vector LIMIT $3`, vectorLiteral(vs[0]), c.Param("id"), in.Limit, pid)
+	rows, err := a.db.Query(c, `SELECT id::text,COALESCE(document_id::text,'') AS "documentId",COALESCE(entry_id::text,'') AS "entryId",content,EXISTS(SELECT FROM knowledge_chunk_images ci WHERE ci.chunk_id=knowledge_chunks.id) AS "hasImage",1-(embedding <=> $1::vector) AS score FROM knowledge_chunks WHERE knowledge_base_id=$2 AND EXISTS(SELECT FROM knowledge_bases WHERE id=$2 AND embedding_profile_id=$4) ORDER BY embedding <=> $1::vector LIMIT $3`, vectorLiteral(vs[0]), c.Param("id"), in.Limit, pid)
 	if err != nil {
 		fail(c, 500, "search_error", "检索失败")
 		return

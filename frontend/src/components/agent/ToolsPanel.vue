@@ -17,31 +17,56 @@
       <el-table-column label="操作" width="160" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="edit(row)">编辑</el-button><el-button link @click="openTest(row)">测试</el-button><el-button link type="danger" @click="remove(row)">删除</el-button></template></el-table-column>
     </el-table>
 
-    <el-dialog v-model="dialog" :title="editing.id ? '编辑工具' : '新建 HTTP 工具'" width="680px">
+    <el-dialog v-model="dialog" :title="editing.id ? '编辑工具' : '新建 HTTP 工具'" width="700px">
+      <div class="dlg-tabs">
+        <el-segmented v-model="toolTab" :options="[{ label: '接口与开关', value: 'endpoint' }, { label: '认证与参数 Schema', value: 'schema' }]" />
+      </div>
       <el-form label-position="top">
-        <el-form-item label="工具名（英文，模型调用时使用）"><el-input v-model="editing.name" placeholder="query_order" /></el-form-item>
-        <el-form-item label="说明（告诉 AI 什么时候用、返回什么）"><el-input v-model="editing.description" type="textarea" :rows="2" /></el-form-item>
-        <div class="form-row">
-          <el-form-item label="方法"><el-select v-model="editing.method" style="width:110px"><el-option label="GET" value="GET" /><el-option label="POST" value="POST" /></el-select></el-form-item>
-          <el-form-item label="接口地址" class="grow"><el-input v-model="editing.url" placeholder="https://api.example.com/orders/{order_id}" /></el-form-item>
+        <div v-show="toolTab === 'endpoint'" class="dlg-stack">
+          <div class="dlg-section">
+            <div class="dlg-section-head"><strong>基础标识</strong><span>供 AI 识别与调度</span></div>
+            <el-form-item label="工具名（英文，模型调用时使用）"><el-input v-model="editing.name" placeholder="query_order" /></el-form-item>
+            <el-form-item label="说明（告诉 AI 什么时候用、返回什么）"><el-input v-model="editing.description" type="textarea" :rows="2" /></el-form-item>
+          </div>
+          <div class="dlg-section">
+            <div class="dlg-section-head"><strong>HTTP 端点配置</strong><span>{参数名} 占位符将自动替换</span></div>
+            <div class="form-row">
+              <el-form-item label="方法"><el-select v-model="editing.method" style="width:110px"><el-option label="GET" value="GET" /><el-option label="POST" value="POST" /></el-select></el-form-item>
+              <el-form-item label="接口地址" class="grow"><el-input v-model="editing.url" placeholder="https://api.example.com/orders/{order_id}" /></el-form-item>
+            </div>
+            <small class="form-tip" style="display: block; margin: -6px 0 12px">GET 其余参数拼到查询串，POST 以 JSON 发送。响应最多读取 4KB。</small>
+            <div class="form-row">
+              <el-form-item label="超时（秒）"><el-input-number v-model="editing.timeoutSeconds" :min="1" :max="30" /></el-form-item>
+              <el-form-item label="状态"><el-checkbox v-model="editing.enabled">启用该工具</el-checkbox></el-form-item>
+            </div>
+          </div>
         </div>
-        <small class="form-tip">地址里的 {参数名} 会被替换；GET 其余参数拼到查询串，POST 以 JSON 发送。响应最多读取 4KB。</small>
-        <el-form-item label="请求头（每行 名称: 值，加密保存）">
-          <el-input v-model="headersText" type="textarea" :rows="3" :placeholder="editing.headerNames?.length ? `已保存：${editing.headerNames.join(', ')}（留空不修改）` : 'Authorization: Bearer xxx'" />
-        </el-form-item>
-        <el-form-item label="参数定义（JSON Schema）"><el-input v-model="paramsText" type="textarea" :rows="7" class="mono" /></el-form-item>
-        <div class="form-row">
-          <el-form-item label="超时（秒）"><el-input-number v-model="editing.timeoutSeconds" :min="1" :max="30" /></el-form-item>
-          <el-form-item label=" "><el-checkbox v-model="editing.enabled">启用</el-checkbox></el-form-item>
+        <div v-show="toolTab === 'schema'" class="dlg-stack">
+          <div class="dlg-section">
+            <div class="dlg-section-head"><strong>加密请求头</strong><span>每行 名称: 值，加密落库</span></div>
+            <el-form-item label="请求头"><el-input v-model="headersText" type="textarea" :rows="3" :placeholder="editing.headerNames?.length ? `已保存：${editing.headerNames.join(', ')}（留空不修改）` : 'Authorization: Bearer xxx'" /></el-form-item>
+          </div>
+          <div class="dlg-section">
+            <div class="dlg-section-head"><strong>参数定义（JSON Schema）</strong><span>标准 OpenAI Function Call Schema</span></div>
+            <el-form-item label="Schema"><el-input v-model="paramsText" type="textarea" :rows="8" class="mono" /></el-form-item>
+          </div>
         </div>
       </el-form>
       <template #footer><el-button @click="dialog = false">取消</el-button><el-button type="primary" @click="save">保存工具</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="testDialog" title="测试工具" width="600px">
-      <el-input v-model="testArgs" type="textarea" :rows="4" class="mono" />
-      <div v-if="testResult" class="content-box result">{{ testResult }}</div>
-      <template #footer><el-button type="primary" :loading="testing" @click="runTest">调用</el-button></template>
+    <el-dialog v-model="testDialog" title="测试工具" width="640px">
+      <div class="dlg-stack">
+        <div class="dlg-section">
+          <div class="dlg-section-head"><strong>调用参数 JSON</strong><span>填写实际测试入参</span></div>
+          <el-input v-model="testArgs" type="textarea" :rows="4" class="mono" />
+        </div>
+        <div v-if="testResult" class="dlg-section">
+          <div class="dlg-section-head"><strong>接口返回结果</strong><span>原始响应内容</span></div>
+          <div class="content-box result" style="margin-top: 0">{{ testResult }}</div>
+        </div>
+      </div>
+      <template #footer><el-button @click="testDialog = false">关闭</el-button><el-button type="primary" :loading="testing" @click="runTest">调用</el-button></template>
     </el-dialog>
   </section>
 </template>
@@ -57,6 +82,7 @@ const builtin = ref<BuiltinTool[]>([])
 const custom = ref<CustomTool[]>([])
 const loading = ref(false)
 const dialog = ref(false)
+const toolTab = ref<'endpoint' | 'schema'>('endpoint')
 const editing = reactive<CustomTool>({ name: '', description: '', enabled: true, method: 'GET', url: '', timeoutSeconds: 10, parameters: {} })
 const headersText = ref('')
 const paramsText = ref('')
@@ -76,6 +102,7 @@ function edit(row?: CustomTool) {
   Object.assign(editing, row ? { ...row } : { id: undefined, name: '', description: '', enabled: true, method: 'GET', url: '', timeoutSeconds: 10, parameters: {}, headerNames: [] })
   headersText.value = ''
   paramsText.value = row ? JSON.stringify(row.parameters, null, 2) : defaultParams
+  toolTab.value = 'endpoint'
   dialog.value = true
 }
 function parseHeaders(): Record<string, string> | null {

@@ -1,9 +1,26 @@
 <template>
-  <div class="content-page page-fill">
-    <PageHeader title="消息记录" description="每条触发了机器人的消息。点任意一行，查看它从收到到发出回复的完整过程。">
-      <el-button :icon="Download" @click="exportRows">导出记录</el-button>
-      <el-button :icon="Refresh" @click="load">刷新</el-button>
-    </PageHeader>
+  <div ref="pageRef" class="content-page page-fill">
+    <section class="holo-hero">
+      <HoloBanner3D variant="messages" class="holo-hero-bg" :alert="failedCount > 0" />
+      <div class="holo-hero-scrim" aria-hidden="true" />
+      <div class="holo-hero-content">
+        <div class="holo-hero-title-row">
+          <span class="holo-badge" :class="{ 'is-alert': failedCount > 0 }"><i /><span>MESSAGE TELEMETRY STREAM</span></span>
+          <h1>消息追踪</h1>
+        </div>
+        <p class="holo-hero-desc">实时观测每条触发机器人的消息从收到、上下文装配、知识检索、模型生成到 QQ 投递的完整链路。</p>
+        <div class="holo-kpi-row">
+          <span class="holo-kpi is-cyan">总记录 <strong>{{ messages.length }}</strong></span>
+          <span class="holo-kpi is-green">已回复 <strong>{{ repliedCount }}</strong></span>
+          <span class="holo-kpi is-warn">转人工 <strong>{{ handoffCount }}</strong></span>
+          <span v-if="failedCount" class="holo-kpi is-danger">失败 <strong>{{ failedCount }}</strong></span>
+        </div>
+      </div>
+      <div class="holo-hero-actions">
+        <el-button :icon="Download" @click="exportRows">导出记录</el-button>
+        <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+      </div>
+    </section>
     <div class="toolbar">
       <el-input v-model="search" placeholder="搜索问题、回复、发送者或消息 ID" :prefix-icon="Search" clearable />
       <el-segmented v-model="status" :options="[{ label: '全部', value: 'all' }, { label: '成功', value: 'success' }, { label: '转人工', value: 'handoff' }, { label: '无需回复', value: 'skipped' }, { label: '已合并', value: 'merged' }, { label: '失败', value: 'failed' }]" />
@@ -33,20 +50,25 @@
 
 <script setup lang="ts">
 import { useAdminEvents } from '@/composables/useAdminEvents'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { formatMentions as mentions } from '@/utils/mentions'
 import { Download, Refresh, Search } from '@element-plus/icons-vue'
 import EmptyState from '@/components/EmptyState.vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api'
-import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import MessageDetailDrawer from '@/components/message/MessageDetailDrawer.vue'
+import HoloBanner3D from '@/components/three/HoloBanner3D.vue'
+import { animateStagger } from '@/utils/motion'
 import type { MessageRecord } from '@/types'
 import { formatDuration, messageVerdict, statusText } from '@/utils/format'
 
+const pageRef = ref<HTMLElement>()
 const messages = ref<MessageRecord[]>([])
+const repliedCount = computed(() => messages.value.filter(m => !m.handoffStatus && m.status === 'success').length)
+const handoffCount = computed(() => messages.value.filter(m => Boolean(m.handoffStatus)).length)
+const failedCount = computed(() => messages.value.filter(m => !m.handoffStatus && m.status === 'failed').length)
 const search = ref('')
 const status = ref('all')
 const drawer = ref(false)
@@ -70,7 +92,7 @@ function openById(id: string) { selectedId.value = id; drawer.value = true }
 function open(row: MessageRecord) { openById(row.id) }
 watch(() => [route.query.id, route.query.status], applyQuery)
 watch(drawer, visible => { if (!visible && route.query.id) router.replace({ query: { ...route.query, id: undefined } }) })
-onMounted(async () => { await load(); applyQuery() })
+onMounted(async () => { await load(); applyQuery(); nextTick(() => animateStagger(pageRef.value)) })
 async function load(background: unknown = false) {
   if (background !== true) loading.value = true
   loadError.value = ''

@@ -1,13 +1,33 @@
 <template>
-  <div class="content-page">
-    <PageHeader title="机器人与客服" description="每个 QQ 机器人接入一次，再给它配置一个或多个 AI 客服。点一行进入它的 AI 客服。"><el-button :icon="Refresh" @click="load">刷新状态</el-button><el-button type="primary" :icon="Plus" @click="openCreate">添加机器人</el-button></PageHeader>
-    <div class="stat-strip"><div><span>机器人</span><strong>{{ bots.length }}</strong></div><div><span>在线</span><strong>{{ bots.filter(b => b.status === 'online').length }}</strong></div><div><span>最近 24 小时消息</span><strong>{{ todayMessages }}</strong></div><div><span>成功回复率</span><strong>{{ averageSuccessRate }}</strong></div></div>
-    <div v-if="bots.length" class="entity-list">
+  <div ref="pageRef" class="content-page">
+    <section class="holo-hero">
+      <HoloBanner3D variant="bots" class="holo-hero-bg" />
+      <div class="holo-hero-scrim" aria-hidden="true" />
+      <div class="holo-hero-content">
+        <div class="holo-hero-title-row">
+          <span class="holo-badge"><i /><span>BOT MATRIX & PERSONA</span></span>
+          <h1>机器人与客服</h1>
+        </div>
+        <p class="holo-hero-desc">每个 QQ 机器人接入一次，可挂载多个专属 AI 客服（独立人设、知识库、陪伴性格与网站实时数据）。点击任意机器人进入管理。</p>
+        <div class="holo-kpi-row">
+          <span class="holo-kpi is-cyan">已接入 <strong>{{ bots.length }}</strong></span>
+          <span class="holo-kpi is-green">在线 <strong>{{ bots.filter(b => b.status === 'online').length }}</strong></span>
+          <span class="holo-kpi">24h 消息 <strong>{{ todayMessages }}</strong></span>
+          <span class="holo-kpi is-cyan">处理成功率 <strong>{{ averageSuccessRate }}</strong></span>
+        </div>
+      </div>
+      <div class="holo-hero-actions">
+        <el-button :icon="Refresh" @click="load">刷新状态</el-button>
+        <el-button type="primary" :icon="Plus" @click="openCreate">添加机器人</el-button>
+      </div>
+    </section>
+
+    <div v-if="bots.length" class="entity-list cyber-panel">
       <div v-for="bot in bots" :key="bot.id" class="entity-row clickable" @click="$router.push({ name: 'bot-services', params: { id: bot.id } })">
         <div class="entity-name"><span class="entity-icon"><el-icon><Connection /></el-icon></span><div><strong><span>{{ bot.name }}</span><StatusBadge :status="bot.enabled ? bot.status : 'offline'" :text="bot.enabled ? undefined : '已停用'" /></strong><small>AppID {{ bot.appId }}</small></div></div>
         <div class="entity-facts">
           <div><span>最近收到消息</span><strong>{{ bot.lastEventAt || '—' }}</strong></div>
-          <div class="wide-fact"><span>回调地址</span><strong v-if="isAbsolute(bot.callbackUrl)" class="mono" :title="bot.callbackUrl">{{ bot.callbackUrl }}</strong><el-button v-else link type="warning" @click.stop="$router.push('/system')">先配置公网地址</el-button></div>
+          <div class="wide-fact"><span>回调地址</span><strong v-if="isAbsolute(bot.callbackUrl)" class="mono" :title="bot.callbackUrl">{{ bot.callbackUrl }}</strong><el-button v-else link type="warning" @click.stop="$router.push({ path: '/system', query: { tab: 'settings' } })">先配置公网地址</el-button></div>
         </div>
         <div class="entity-actions" @click.stop>
           <el-tooltip :content="bot.enabled ? '停用后不再回复任何消息' : '启用机器人'"><el-switch v-model="bot.enabled" :aria-label="'启用 ' + bot.name" @change="toggle(bot)" /></el-tooltip>
@@ -27,24 +47,45 @@
     </div>
     <div v-else class="panel"><EmptyState title="还没有接入机器人" description="在 QQ 开放平台创建机器人后，把 AppID 和 AppSecret 填进来，再把回调地址配置到开放平台。"><el-button type="primary" :icon="Plus" @click="openCreate">添加机器人</el-button></EmptyState></div>
 
-    <el-dialog v-model="dialogVisible" :title="form.id ? '配置机器人' : '添加 QQ 机器人'" width="620px">
-      <el-form label-position="top"><div class="form-grid"><el-form-item label="机器人名称"><el-input v-model="form.name" placeholder="例如：客服小Q" /></el-form-item><el-form-item label="AppID"><el-input v-model="form.appId" placeholder="QQ 开放平台 AppID" /></el-form-item></div><el-form-item label="AppSecret"><el-input v-model="secret" type="password" show-password :placeholder="form.id ? '留空则不覆盖现有密钥' : '请输入 AppSecret'" /><small class="form-tip">保存后不会再显示。修改时留空表示不变。</small></el-form-item></el-form>
+    <el-dialog v-model="dialogVisible" :title="form.id ? '配置机器人' : '添加 QQ 机器人'" width="640px">
+      <el-form label-position="top">
+        <div class="dlg-stack">
+          <div class="dlg-section">
+            <div class="dlg-section-head"><strong>机器人身份</strong><span>在 QQ 开放平台创建应用后获取 AppID</span></div>
+            <div class="form-grid">
+              <el-form-item label="机器人名称"><el-input v-model="form.name" placeholder="例如：客服小Q" /></el-form-item>
+              <el-form-item label="AppID"><el-input v-model="form.appId" placeholder="QQ 开放平台 AppID" /></el-form-item>
+            </div>
+          </div>
+          <div class="dlg-section">
+            <div class="dlg-section-head"><strong>开放平台凭证</strong><span>加密存储在服务端</span></div>
+            <el-form-item label="AppSecret"><el-input v-model="secret" type="password" show-password :placeholder="form.id ? '留空则不覆盖现有密钥' : '请输入 AppSecret'" /><small class="form-tip">保存后不会再显示。修改时留空表示不变。</small></el-form-item>
+          </div>
+        </div>
+      </el-form>
       <template #footer><div class="dialog-foot"><el-button v-if="form.id" type="danger" link :icon="Delete" @click="remove">删除机器人</el-button><span class="spacer" /><el-button @click="dialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存机器人</el-button></div></template>
     </el-dialog>
-    <el-dialog v-model="opVisible" :title="`人工客服 · ${opBot?.name || ''}`" width="560px">
-      <ol class="op-steps">
-        <li>用自己的 QQ 加这个机器人为好友，再给它发一条私聊，比如“绑定人工客服”。</li>
-        <li>在下面找到这个私聊，打开开关。可以绑定多个人。</li>
-        <li>有人转人工时，机器人会私信你工单。在手机 QQ 回复 <code>#工单号 回复内容</code>，例如 <code>#123 已为您处理，请重试。</code>，就会以“【人工客服】”开头发回原来的群。</li>
-      </ol>
-      <div class="op-head"><strong>私聊过机器人的账号</strong><el-button size="small" link :icon="Refresh" :loading="opLoading" @click="loadOperators">刷新</el-button></div>
-      <div v-loading="opLoading" class="op-list">
-        <div v-for="op in operators" :key="op.conversationId" class="op-row">
-          <span><strong>{{ op.name || '未命名用户' }}</strong><small class="mono" :title="op.userOpenId">{{ op.userOpenId }}</small></span>
-          <span class="op-state"><StatusBadge :status="op.enabled ? 'success' : 'skipped'" :text="op.enabled ? '人工客服' : '未绑定'" /></span>
-          <el-switch v-model="op.enabled" :loading="opSaving === op.conversationId" :aria-label="'设为人工客服 ' + (op.name || op.userOpenId)" @change="toggleOperator(op)" />
+    <el-dialog v-model="opVisible" :title="`人工客服 · ${opBot?.name || ''}`" width="600px">
+      <div class="dlg-stack">
+        <div class="dlg-section">
+          <div class="dlg-section-head"><strong>绑定与手机回复说明</strong><span>支持绑定多位人工客服</span></div>
+          <ol class="op-steps" style="margin-bottom: 0">
+            <li>用自己的 QQ 加这个机器人为好友，再给它发一条私聊，比如“绑定人工客服”。</li>
+            <li>在下方找到这个私聊，打开开关即可绑定。</li>
+            <li>有人转人工时，机器人会私信你工单。在手机 QQ 回复 <code>#工单号 回复内容</code>，就会以“【人工客服】”开头发回原来的群。</li>
+          </ol>
         </div>
-        <p v-if="!opLoading && !operators.length" class="muted op-empty">还没有人私聊过这个机器人。按上面第 1 步发一条私聊后点“刷新”。</p>
+        <div class="dlg-section">
+          <div class="op-head"><strong>私聊过机器人的账号</strong><el-button size="small" link :icon="Refresh" :loading="opLoading" @click="loadOperators">刷新</el-button></div>
+          <div v-loading="opLoading" class="op-list">
+            <div v-for="op in operators" :key="op.conversationId" class="op-row">
+              <span><strong>{{ op.name || '未命名用户' }}</strong><small class="mono" :title="op.userOpenId">{{ op.userOpenId }}</small></span>
+              <span class="op-state"><StatusBadge :status="op.enabled ? 'success' : 'skipped'" :text="op.enabled ? '人工客服' : '未绑定'" /></span>
+              <el-switch v-model="op.enabled" :loading="opSaving === op.conversationId" :aria-label="'设为人工客服 ' + (op.name || op.userOpenId)" @change="toggleOperator(op)" />
+            </div>
+            <p v-if="!opLoading && !operators.length" class="muted op-empty">还没有人私聊过这个机器人。按上面第 1 步发一条私聊后点“刷新”。</p>
+          </div>
+        </div>
       </div>
       <template #footer><el-button @click="opVisible = false">完成</el-button></template>
     </el-dialog>
@@ -53,18 +94,21 @@
 
 <script setup lang="ts">
 import { useAdminEvents } from '@/composables/useAdminEvents'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { Connection, CopyDocument, Delete, Headset, Plus, Refresh, MoreFilled, ArrowRight } from '@element-plus/icons-vue'
 import EmptyState from '@/components/EmptyState.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
-import PageHeader from '@/components/PageHeader.vue'; import StatusBadge from '@/components/StatusBadge.vue'
+import StatusBadge from '@/components/StatusBadge.vue'
+import HoloBanner3D from '@/components/three/HoloBanner3D.vue'
+import { animateStagger } from '@/utils/motion'
 import type { Bot, HumanOperator, SystemOverview } from '@/types'
 import { createEmptyOverview } from '@/utils/overview'
+const pageRef = ref<HTMLElement>()
 const bots = ref<Bot[]>([]); const overview = ref<SystemOverview>(createEmptyOverview()); const dialogVisible = ref(false); const secret = ref(''); const form = reactive<Partial<Bot>>({})
 const todayMessages = computed(() => overview.value.messages24h === null ? '—' : overview.value.messages24h.toLocaleString())
 const averageSuccessRate = computed(() => overview.value.successRate === null ? '—' : `${overview.value.successRate.toFixed(1)}%`)
-onMounted(load)
+onMounted(async () => { await load(); nextTick(() => animateStagger(pageRef.value)) })
 async function load() { [bots.value, overview.value] = await Promise.all([api.bots.list(), api.overview()]) }
 function openCreate() { Object.assign(form, { id: '', name: '', appId: '', enabled: true }); secret.value = ''; dialogVisible.value = true }
 function edit(bot: Bot) { Object.assign(form, bot); secret.value = ''; dialogVisible.value = true }

@@ -1,5 +1,5 @@
 <template>
-  <div class="content-page dash">
+  <div ref="pageRef" class="content-page dash">
     <div class="greeting">
       <h1>{{ greeting }}，{{ auth.username || '管理员' }}</h1>
       <div class="greeting-actions">
@@ -9,40 +9,49 @@
       </div>
     </div>
 
-    <!-- 最需要盯的：现在正在处理哪条。空闲时显示刚处理完的那条。 -->
-    <section class="panel now" :class="{ busy }">
-      <header class="now-head">
-        <span class="now-state"><LiveDot :active="busy" :tone="busy ? 'primary' : 'success'" />{{ busy ? `正在处理 ${overview.active.length} 条` : '空闲，等待新消息' }}</span>
-        <span v-if="!busy && latest" class="muted">最近一条</span>
-      </header>
-      <TransitionGroup v-if="busy" name="live" tag="ul" class="now-list">
-        <li v-for="task in overview.active" :key="task.id" class="now-item">
-          <span class="who"><b>{{ task.sender || '用户' }}</b> · {{ task.conversation || '私聊' }} · {{ task.bot }}</span>
-          <strong class="now-q">{{ mentions(task.question, task.mentionNames) || '（图片或表情）' }}</strong>
-          <span class="stage-run"><i />{{ task.stage }}<template v-if="task.elapsedMs"> · 已用 {{ (task.elapsedMs / 1000).toFixed(1) }} 秒</template></span>
-        </li>
-      </TransitionGroup>
-      <div v-else-if="latest" class="now-item is-done" role="button" tabindex="0" @click="openMessage(latest.id)" @keydown.enter.self="openMessage(latest.id)">
-        <span class="who"><b>{{ latest.sender || '未知用户' }}</b><template v-if="latest.conversation"> · {{ latest.conversation }}</template> · {{ latest.bot }} · {{ latest.time }}</span>
-        <strong class="now-q">{{ mentions(latest.content, latest.mentionNames) || '（没有文字内容）' }}</strong>
-        <span class="now-result">
-          <span class="pill" :class="outcomeOf(latest).tone" :title="outcomeOf(latest).title">{{ outcomeOf(latest).text }}</span>
-          <span class="live-ms" :class="{ slow: rowTotal(latest) > 5000 }">用时 {{ rowTotal(latest) ? (rowTotal(latest) / 1000).toFixed(1) + ' 秒' : '—' }}</span>
-          <span class="now-open">查看处理详情<el-icon><ArrowRight /></el-icon></span>
-        </span>
+    <!-- AI 神经中枢指挥英雄舱 + 实时处理动态 -->
+    <section class="panel now hero-command" :class="{ busy }">
+      <div class="hero-core" :title="busy ? 'AI 引擎高负载运行中' : 'AI 引擎待命中'">
+        <NeuralCoreCanvas :mode="busy ? 'busy' : 'idle'" />
+        <span class="core-tag">{{ busy ? 'ACTIVE' : 'STANDBY' }}</span>
       </div>
-      <p v-else class="muted now-empty">机器人被 @ 或收到私聊后，正在处理的消息会出现在这里。</p>
+      <div class="hero-main">
+        <header class="now-head">
+          <span class="now-state"><LiveDot :active="busy" :tone="busy ? 'primary' : 'success'" />{{ busy ? `正在处理 ${overview.active.length} 条消息` : 'AI 中枢待命 · 等待新消息' }}</span>
+          <span v-if="!busy && latest" class="muted">最近一条处理记录</span>
+        </header>
+        <TransitionGroup v-if="busy" name="live" tag="ul" class="now-list">
+          <li v-for="task in overview.active" :key="task.id" class="now-item">
+            <span class="who"><b>{{ task.sender || '用户' }}</b> · {{ task.conversation || '私聊' }} · {{ task.bot }}</span>
+            <strong class="now-q">{{ mentions(task.question, task.mentionNames) || '（图片或表情）' }}</strong>
+            <span class="stage-run"><i />{{ task.stage }}<template v-if="task.elapsedMs"> · 已用 {{ (task.elapsedMs / 1000).toFixed(1) }} 秒</template></span>
+          </li>
+        </TransitionGroup>
+        <div v-else-if="latest" class="now-item is-done" role="button" tabindex="0" @click="openMessage(latest.id)" @keydown.enter.self="openMessage(latest.id)">
+          <span class="who"><b>{{ latest.sender || '未知用户' }}</b><template v-if="latest.conversation"> · {{ latest.conversation }}</template> · {{ latest.bot }} · {{ latest.time }}</span>
+          <strong class="now-q">{{ mentions(latest.content, latest.mentionNames) || '（没有文字内容）' }}</strong>
+          <span class="now-result">
+            <span class="pill" :class="outcomeOf(latest).tone" :title="outcomeOf(latest).title">{{ outcomeOf(latest).text }}</span>
+            <span class="live-ms" :class="{ slow: rowTotal(latest) > 5000 }">用时 {{ rowTotal(latest) ? (rowTotal(latest) / 1000).toFixed(1) + ' 秒' : '—' }}</span>
+            <span class="now-open">查看处理详情<el-icon><ArrowRight /></el-icon></span>
+          </span>
+        </div>
+        <p v-else class="muted now-empty">机器人被 @ 或收到私聊后，正在处理的消息会在此实时驱动。</p>
+      </div>
     </section>
 
     <div class="dash-stats">
-      <section class="panel dash-card">
+      <section class="panel cyber-panel dash-card">
         <header>
           <h2>任务状态</h2>
           <span class="head-actions">
             <el-popover v-if="activeAlerts.length" placement="bottom-end" :width="400" trigger="click" popper-class="alert-popover">
               <template #reference><el-button text type="danger">{{ activeAlerts.length }} 条告警</el-button></template>
               <div class="alert-pop">
-                <p class="alert-pop-title">{{ activeAlerts.length }} 条未处理的告警</p>
+                <div class="alert-pop-head">
+                  <p class="alert-pop-title">{{ activeAlerts.length }} 条未处理的告警</p>
+                  <el-button text size="small" :loading="dismissing" @click="dismissFailed">全部清除</el-button>
+                </div>
                 <ul class="alert-list">
                   <li v-for="alert in activeAlerts" :key="alert.id" :class="'is-' + alert.level">
                     <i class="alert-dot" />
@@ -52,18 +61,21 @@
                       <code v-if="alert.detail" class="alert-detail" :title="alert.detail">{{ alert.detail }}</code>
                       <span class="alert-meta">{{ alert.impact }} · {{ alert.bot }} · {{ alert.time }}</span>
                     </div>
-                    <el-button size="small" @click="openAlert(alert)">{{ alertAction(alert) }}</el-button>
+                    <div class="alert-actions">
+                      <el-button size="small" @click="openAlert(alert)">{{ alertAction(alert) }}</el-button>
+                      <el-button size="small" text type="info" :loading="dismissingId === alert.id" @click="dismissAlert(alert)">清除</el-button>
+                    </div>
                   </li>
                 </ul>
               </div>
             </el-popover>
-            <el-button v-if="overview.queues.failed" text :loading="dismissing" @click="dismissFailed">忽略失败</el-button>
+            <el-button v-if="overview.queues.failed || activeAlerts.length" text :loading="dismissing" @click="dismissFailed">忽略失败</el-button>
           </span>
         </header>
         <div class="top-body"><QueueFlow :nodes="queueNodes" @select="node => node.to && $router.push(node.to)" /></div>
       </section>
 
-      <section class="panel dash-card">
+      <section class="panel cyber-panel dash-card">
         <header><h2>处理消息</h2><span class="muted">24 小时</span></header>
         <div class="top-body">
           <div class="stat-nums">
@@ -71,7 +83,7 @@
             <div><strong :title="exact(successCount)"><CountUp v-if="!isBig(successCount)" :value="successCount" /><template v-else>{{ wan(successCount) }}<small>万</small></template></strong><span>条成功回复</span></div>
             <div><strong>{{ avgTotal ? (avgTotal / 1000).toFixed(1) : '—' }}<small v-if="avgTotal">秒</small></strong><span>平均用时</span></div>
           </div>
-          <div class="meter-row">
+          <div class="meter-row" :title="successRateHint">
             <span>成功率</span>
             <span class="meter"><i :style="{ transform: `scaleX(${(overview.successRate ?? 0) / 100})` }" /></span>
             <strong><CountUp :value="overview.successRate" :decimals="1" suffix="%" /></strong>
@@ -79,7 +91,7 @@
         </div>
       </section>
 
-      <section class="panel dash-card">
+      <section class="panel cyber-panel dash-card">
         <header><h2>知识库</h2><el-button text type="primary" @click="$router.push('/knowledge')">管理</el-button></header>
         <div class="top-body">
           <div class="stat-nums">
@@ -143,7 +155,7 @@
 
 <script setup lang="ts">
 import { useAdminEvents } from '@/composables/useAdminEvents'
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { ArrowRight, Refresh } from '@element-plus/icons-vue'
 import { api } from '@/api'
 import { agentApi, type LearningStats } from '@/api/agent'
@@ -155,6 +167,8 @@ import CountUp from '@/components/fx/CountUp.vue'
 import LiveDot from '@/components/fx/LiveDot.vue'
 import QueueFlow from '@/components/fx/QueueFlow.vue'
 import StageBars from '@/components/fx/StageBars.vue'
+import NeuralCoreCanvas from '@/components/three/NeuralCoreCanvas.vue'
+import { animateStagger } from '@/utils/motion'
 import type { AlertItem, CostSummary, PipelineRow, SystemOverview, TimingStage } from '@/types'
 import { formatMentions as mentions } from '@/utils/mentions'
 import { useRouter } from 'vue-router'
@@ -163,20 +177,33 @@ import { sortByFlow } from '@/utils/stage-meta'
 import { useAuthStore } from '@/stores/auth'
 import { useShellStore } from '@/stores/shell'
 
+const pageRef = ref<HTMLElement>()
 const overview = ref<SystemOverview>(createEmptyOverview())
 const stats = ref<LearningStats | null>(null)
 const loading = ref(false)
 const dismissing = ref(false)
+const dismissingId = ref('')
 const costPanel = ref<InstanceType<typeof CostPanel>>()
 
-// 403 这类重试也不会好的失败，忽略后不再计入失败数，记录仍保留
+// 403 这类重试也不会好的失败，清除后不再计入失败与告警，记录仍保留
 async function dismissFailed() {
-  const n = overview.value.queues.failed
-  try { await ElMessageBox.confirm(`把 ${n} 个失败任务标记为已忽略？忽略后不再计入失败，也不会被“重试失败任务”重新执行，记录仍会保留。`, '忽略失败任务', { confirmButtonText: '忽略', cancelButtonText: '取消', type: 'warning' }) } catch { return }
+  try { await ElMessageBox.confirm('把当前未处理的失败/告警任务全部清除？清除后不再计入失败或告警，也不会被“重试失败任务”重新执行，历史记录仍会保留。', '清除全部告警', { confirmButtonText: '全部清除', cancelButtonText: '取消', type: 'warning' }) } catch { return }
   dismissing.value = true
-  try { const { dismissed } = await api.system.dismissFailed(); ElMessage.success(`已忽略 ${dismissed} 个失败任务`); await load(true) }
-  catch (e) { ElMessage.error(e instanceof Error ? e.message : '忽略失败') }
+  try { const { dismissed } = await api.system.dismissFailed(); ElMessage.success(`已清除 ${dismissed} 条告警`); await load(true) }
+  catch (e) { ElMessage.error(e instanceof Error ? e.message : '清除失败') }
   finally { dismissing.value = false }
+}
+async function dismissAlert(alert: AlertItem) {
+  dismissingId.value = alert.id
+  try {
+    await api.system.dismissFailed(alert.id)
+    ElMessage.success('已清除该条告警')
+    await load(true)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '清除失败')
+  } finally {
+    dismissingId.value = ''
+  }
 }
 const shell = useShellStore()
 const router = useRouter()
@@ -224,7 +251,14 @@ const queueNodes = computed(() => [
 const activeIds = computed(() => new Set(overview.value.active.map(task => task.id)))
 const recent = computed(() => overview.value.pipelines.filter(row => !activeIds.value.has(row.id)).slice(0, 20))
 const latest = computed(() => recent.value[0])
-const successCount = computed(() => overview.value.messages24h == null || overview.value.successRate == null ? null : Math.round(overview.value.messages24h * overview.value.successRate / 100))
+const successCount = computed(() => overview.value.repliedCount ?? overview.value.successfulCount)
+const successRateHint = computed(() => {
+  const total = overview.value.triggeredCount
+  if (!total) return '24 小时内暂无已完结的处理任务'
+  const ok = overview.value.successfulCount ?? 0
+  const failed = overview.value.failedHandledCount ?? Math.max(0, total - ok)
+  return `24 小时内正常处理 ${ok.toLocaleString()} / ${total.toLocaleString()} 条（含判断无需回复），业务失败 ${failed.toLocaleString()} 条；仅模型返回失败或投递失败/超时计入失败`
+})
 
 const rowTotal = (row: PipelineRow) => row.timeline ? row.timeline.totalMs ?? 0 : row.totalMs
 function rowFailed(row: PipelineRow) {
@@ -296,7 +330,7 @@ async function load(background: unknown = false) {
   shell.refreshCounts(true)
   loading.value = false
 }
-onMounted(load)
+onMounted(async () => { await load(); nextTick(() => animateStagger(pageRef.value)) })
 useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_calls','handoffs','knowledge_candidates','agent_runs','bots','message_stages','group_reviews','knowledge_documents'], () => load(true))
 </script>
 
@@ -313,9 +347,13 @@ useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_c
 .dash-stats { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
 .dash-bottom { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; height: 420px; }
 
-/* 正在处理：页面顶部，问题本身用较大字号；忙时整块浅蓝，空闲时白底 */
-.now { display: flex; flex-direction: column; gap: 10px; padding: 16px 20px; transition: background .4s var(--ease), border-color .4s var(--ease); }
-.now.busy { background: var(--primary-light); border-color: var(--primary-soft); }
+/* AI 神经中枢指挥英雄舱 */
+.hero-command { display: grid; grid-template-columns: 184px minmax(0, 1fr); align-items: center; gap: 18px; padding: 14px 20px; }
+.hero-core { position: relative; width: 184px; height: 132px; border-radius: var(--radius-md); overflow: hidden; background: radial-gradient(circle at center, rgba(14, 165, 233, 0.16), rgba(5, 9, 20, 0.85)); border: 1px solid var(--line); }
+.core-tag { position: absolute; left: 8px; bottom: 8px; padding: 1px 6px; border-radius: 4px; background: rgba(8, 13, 26, 0.78); color: #7dd3fc; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; }
+.hero-main { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.now { transition: background .4s var(--ease), border-color .4s var(--ease), box-shadow .4s var(--ease); }
+.now.busy { background: linear-gradient(135deg, var(--primary-light), var(--surface)); border-color: var(--primary-soft); box-shadow: 0 0 28px var(--primary-light); }
 .now-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 24px; font-size: 13px; }
 .now-state { display: inline-flex; align-items: center; gap: 8px; color: var(--text-2); font-weight: 600; }
 .now.busy .now-state { color: var(--primary-text); }
@@ -345,12 +383,13 @@ useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_c
 .meter-row { display: grid; grid-template-columns: 56px minmax(0, 1fr) 64px; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
 .meter-row strong { text-align: right; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .meter { position: relative; height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
-.meter i { position: absolute; inset: 0; border-radius: 3px; background: var(--success); transform-origin: left; transition: transform .8s var(--ease); }
-.meter i.is-time { background: var(--primary); }
+.meter i { position: absolute; inset: 0; border-radius: 3px; background: var(--success); box-shadow: 0 0 10px var(--success); transform-origin: left; transition: transform .8s var(--ease); }
+.meter i.is-time { background: var(--primary); box-shadow: 0 0 10px var(--primary); }
 .meter.indexing i { background: linear-gradient(90deg, var(--primary) 0 40%, #7fb8f2 50%, var(--primary) 60% 100%); background-size: 250% 100%; animation: flow 1.4s linear infinite; }
 .stat-nums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .stat-nums div { display: flex; flex-direction: column; min-width: 0; }
-.stat-nums strong { overflow: hidden; font-size: 24px; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.stat-nums strong { overflow: hidden; font-size: 24px; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; transition: color var(--dur-fast) var(--ease); }
+.dash-card:hover .stat-nums strong { color: var(--primary-text); }
 .stat-nums strong small { margin-left: 2px; color: var(--muted); font-size: 13px; font-weight: 400; }
 .stat-nums strong.warn { color: var(--warning); }
 .stat-nums div > span { color: var(--muted); font-size: 12px; white-space: nowrap; }
@@ -401,7 +440,9 @@ useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_c
 .live-leave-to { opacity: 0; }
 .live-leave-active { position: absolute; left: 0; right: 0; }
 
-.alert-pop-title { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+.alert-pop-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.alert-pop-title { margin: 0; color: var(--muted); font-size: 12px; }
+.alert-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .alert-list { display: flex; flex-direction: column; gap: 4px; max-height: min(60vh, 420px); margin: 0 -12px; padding: 0; overflow-y: auto; list-style: none; }
 .alert-list li { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 10px 12px; border-radius: var(--radius-sm); transition: background var(--dur-fast) var(--ease); }
 .alert-list li:hover { background: var(--surface-2); }
@@ -415,5 +456,5 @@ useAdminEvents(['messages','system_alerts','inbox_tasks','outbox_tasks','model_c
 .alert-detail { display: -webkit-box; overflow: hidden; color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 
 @media (max-width: 1100px) { .dash-stats { grid-template-columns: 1fr 1fr; } .dash-stats > :first-child { grid-column: 1 / -1; } .dash-bottom { grid-template-columns: 1fr; height: auto; } .live-scroll { max-height: 360px; } }
-@media (max-width: 640px) { .dash-stats { grid-template-columns: 1fr; } .now-result { flex-wrap: wrap; } .greeting { flex-direction: column; align-items: flex-start; } .greeting-actions { justify-content: flex-start; } }
+@media (max-width: 640px) { .hero-command { grid-template-columns: 1fr; } .hero-core { width: 100%; height: 148px; } .dash-stats { grid-template-columns: 1fr; } .now-result { flex-wrap: wrap; } .greeting { flex-direction: column; align-items: flex-start; } .greeting-actions { justify-content: flex-start; } }
 </style>

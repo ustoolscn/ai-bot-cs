@@ -1,8 +1,24 @@
 <template>
-  <div class="content-page wide page-fill">
-    <PageHeader title="人工台" description="接单后可以连续回复，结单或双方一段时间没说话后机器人才恢复。手机 QQ 里发“#工单号 接单 / 回复内容 / 结单”同样有效。">
-      <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
-    </PageHeader>
+  <div ref="pageRef" class="content-page wide page-fill">
+    <section class="holo-hero is-compact handoff-hero">
+      <HoloBanner3D variant="handoff" class="holo-hero-bg" :alert="openTicketCount > 0" />
+      <div class="holo-hero-scrim" aria-hidden="true" />
+      <div class="holo-hero-content">
+        <div class="holo-hero-title-row">
+          <span class="holo-badge" :class="{ 'is-alert': openTicketCount > 0 }"><i /><span>HUMAN ESCALATION RADAR</span></span>
+          <h1>人工接管台</h1>
+        </div>
+        <p class="holo-hero-desc">接单后可连续回复，结单或双方超时静默后 AI 自动恢复接管。手机 QQ 回复“#工单号 接单 / 回复 / 结单”同样实时同步。</p>
+        <div class="holo-kpi-row">
+          <span class="holo-kpi" :class="openTicketCount ? 'is-warn' : 'is-green'">待接单 <strong>{{ openTicketCount }}</strong></span>
+          <span class="holo-kpi is-cyan">处理中 <strong>{{ processingTicketCount }}</strong></span>
+          <span class="holo-kpi">当前列表 <strong>{{ items.length }}</strong></span>
+        </div>
+      </div>
+      <div class="holo-hero-actions">
+        <el-button :icon="Refresh" :loading="loading" @click="load">刷新工单</el-button>
+      </div>
+    </section>
 
     <div class="inbox">
       <aside class="inbox-list">
@@ -73,11 +89,13 @@ import { ChatLineSquare, CircleCheck, Headset, Loading, Promotion, Refresh, Warn
 import { ElMessage, ElMessageBox } from 'element-plus'
 import EmptyState from '@/components/EmptyState.vue'
 import MsgText from '@/components/MsgText.vue'
-import PageHeader from '@/components/PageHeader.vue'
+import HoloBanner3D from '@/components/three/HoloBanner3D.vue'
 import { agentApi, formatTime, type Handoff } from '@/api/agent'
 import { useShellStore } from '@/stores/shell'
 import { useAuthStore } from '@/stores/auth'
+import { animateStagger } from '@/utils/motion'
 
+const pageRef = ref<HTMLElement>()
 const statusOptions = [{ label: '进行中', value: 'active' }, { label: '已结单', value: 'resolved' }, { label: '全部', value: 'all' }]
 const status = ref('active')
 const acting = ref(false)
@@ -92,6 +110,9 @@ const learn = ref(true)
 const sending = ref(false)
 const chatBox = ref<HTMLElement | null>(null)
 const shell = useShellStore()
+
+const openTicketCount = computed(() => items.value.filter(h => h.status === 'open').length)
+const processingTicketCount = computed(() => items.value.filter(h => h.status === 'processing').length)
 
 const current = computed(() => items.value.find(h => h.id === selectedId.value))
 // 网页接单人才能在这里回复；QQ 接单的工单只能在手机 QQ 上处理
@@ -179,7 +200,7 @@ async function resolve(h: Handoff) {
     await load()
   } catch (e) { ElMessage.error(e instanceof Error ? e.message : '结单失败'); await load(true) } finally { acting.value = false }
 }
-onMounted(load)
+onMounted(async () => { await load(); nextTick(() => animateStagger(pageRef.value)) })
 useAdminEvents(['handoffs','messages','outbox_tasks'], () => load(true))
 </script>
 

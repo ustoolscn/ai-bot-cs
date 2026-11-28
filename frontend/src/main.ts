@@ -4,12 +4,15 @@ import ElementPlus from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import 'element-plus/dist/index.css'
 import './styles/index.css'
+import './styles/theme-tech.css'
 import App from './App.vue'
 import router from './router'
 import { useAuthStore } from './stores/auth'
 import { formatMentions } from './utils/mentions'
+import { initTheme } from './utils/theme'
 
 async function bootstrap() {
+  initTheme()
   const app = createApp(App)
   // 模板里显示用户文字统一走 $at()：<@openid> 换成 @昵称
   app.config.globalProperties.$at = formatMentions

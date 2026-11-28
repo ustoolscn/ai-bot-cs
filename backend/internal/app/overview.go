@@ -33,7 +33,7 @@ type overviewPipeline struct {
 }
 
 func (a *App) overview(c *gin.Context) {
-	var bots, conversations, messages24h, totalEvents, triggered, successful, triggeredConversations int64
+	var bots, conversations, messages24h, totalEvents, triggered, successful, failedHandled, repliedCount, triggeredConversations int64
 	var inboxPending, outboxPending, documentPending, documentProcessing, failedTasks int64
 	var readyDocuments, totalDocuments, failedDocuments int64
 	var averageLatencyMS float64
@@ -43,7 +43,57 @@ func (a *App) overview(c *gin.Context) {
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM conversations").Scan(&conversations)
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM messages WHERE created_at>now()-interval '24 hours' AND event_type<>'PROCESSING_ACK'").Scan(&messages24h)
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM webhook_events WHERE created_at>now()-interval '24 hours'").Scan(&totalEvents)
-	_ = a.db.QueryRow(c, `SELECT count(*),count(*) FILTER(WHERE t.status='completed'),count(DISTINCT m.conversation_id) FROM inbox_tasks t JOIN messages m ON m.id=t.message_id WHERE t.created_at>now()-interval '24 hours'`).Scan(&triggered, &successful, &triggeredConversations)
+	_ = a.db.QueryRow(c, `WITH recent_inbox AS (
+		SELECT
+			m.conversation_id,
+			CASE
+				WHEN t.status = 'merged' THEN false
+				WHEN t.status = 'failed' OR ar.status = 'failed' OR coalesce(delivery.failed, false) THEN true
+				ELSE false
+			END AS is_failed,
+			CASE
+				WHEN t.status = 'merged' THEN false
+				WHEN t.status = 'failed' OR ar.status = 'failed' OR coalesce(delivery.failed, false) THEN false
+				WHEN t.status IN ('pending', 'processing') THEN true
+				WHEN t.status = 'completed' AND coalesce(delivery.waiting, false) THEN true
+				ELSE false
+			END AS is_in_progress,
+			coalesce(delivery.sent, false) AS has_sent
+		FROM inbox_tasks t
+		JOIN messages m ON m.id = t.message_id
+		LEFT JOIN LATERAL (
+			SELECT status FROM agent_runs WHERE message_id = m.id ORDER BY started_at DESC LIMIT 1
+		) ar ON true
+		LEFT JOIN LATERAL (
+			SELECT
+				bool_or(
+					coalesce(ot.status, x.status) = 'failed'
+					OR (
+						coalesce(ot.status, x.status) = 'expired'
+						AND coalesce(ot.last_error, '') NOT IN ('blacklisted or excluded', 'operator removed')
+					)
+				) AS failed,
+				bool_or(coalesce(ot.status, x.status) IN ('pending', 'processing')) AS waiting,
+				bool_or(coalesce(ot.status, x.status) = 'sent') AS sent
+			FROM messages x
+			LEFT JOIN outbox_tasks ot ON ot.message_id = x.id
+			WHERE x.conversation_id = m.conversation_id
+				AND x.direction = 'outbound'
+				AND x.event_type <> 'PROCESSING_ACK'
+				AND x.status <> 'merged'
+				AND coalesce(ot.status, '') <> 'merged'
+				AND coalesce(m.platform_message_id, '') <> ''
+				AND x.reply_to_message_id = m.platform_message_id
+		) delivery ON true
+		WHERE t.created_at > now() - interval '24 hours'
+	)
+	SELECT
+		count(*) FILTER (WHERE NOT is_in_progress),
+		count(*) FILTER (WHERE NOT is_in_progress AND NOT is_failed),
+		count(*) FILTER (WHERE NOT is_in_progress AND is_failed),
+		count(*) FILTER (WHERE NOT is_in_progress AND NOT is_failed AND has_sent),
+		count(DISTINCT conversation_id)
+	FROM recent_inbox`).Scan(&triggered, &successful, &failedHandled, &repliedCount, &triggeredConversations)
 	_ = a.db.QueryRow(c, `SELECT COALESCE(avg(EXTRACT(EPOCH FROM (completed_at-started_at))*1000),0) FROM agent_runs WHERE completed_at IS NOT NULL AND started_at>now()-interval '24 hours'`).Scan(&averageLatencyMS)
 	_ = a.db.QueryRow(c, `SELECT count(*) FILTER(WHERE latency_ms>5000),count(*) FROM model_calls WHERE created_at>now()-interval '24 hours'`).Scan(&slowCalls, &modelCalls)
 	_ = a.db.QueryRow(c, `SELECT count(*) FILTER(WHERE t.status='sent'),count(*) FILTER(WHERE t.status IN ('sent','failed','expired')) FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE t.created_at>now()-interval '24 hours' AND m.event_type<>'PROCESSING_ACK'`).Scan(&sentDeliveries, &totalDeliveries)
@@ -54,7 +104,7 @@ func (a *App) overview(c *gin.Context) {
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents WHERE status='ready'").Scan(&readyDocuments)
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents WHERE status='failed'").Scan(&failedDocuments)
 	_ = a.db.QueryRow(c, "SELECT count(*) FROM knowledge_documents").Scan(&totalDocuments)
-	_ = a.db.QueryRow(c, `SELECT (SELECT count(*) FROM inbox_tasks WHERE status='failed' AND dismissed_at IS NULL)+(SELECT count(*) FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE t.status='failed' AND t.dismissed_at IS NULL AND m.event_type<>'PROCESSING_ACK')+(SELECT count(*) FROM knowledge_documents WHERE status='failed' AND dismissed_at IS NULL)`).Scan(&failedTasks)
+	_ = a.db.QueryRow(c, `SELECT (SELECT count(*) FROM inbox_tasks WHERE status='failed' AND dismissed_at IS NULL)+(SELECT count(*) FROM outbox_tasks t JOIN messages m ON m.id=t.message_id WHERE (t.status='failed' OR (t.status='expired' AND coalesce(t.last_error,'') NOT IN ('blacklisted or excluded','operator removed'))) AND t.dismissed_at IS NULL AND m.event_type<>'PROCESSING_ACK')+(SELECT count(*) FROM knowledge_documents WHERE status='failed' AND dismissed_at IS NULL)`).Scan(&failedTasks)
 
 	var active, stages json.RawMessage
 	err := a.db.QueryRow(c, `SELECT coalesce(jsonb_agg(to_jsonb(q)),'[]') FROM (
@@ -98,7 +148,7 @@ func (a *App) overview(c *gin.Context) {
 	ok(c, gin.H{
 		"activeTasks": active, "stageAverages": stages, "queuedTasks": queued, "processingTasks": processing, "knowledge": gin.H{"documentCount": totalDocuments, "entryCount": entries, "indexedCount": readyDocuments + indexed, "indexedRatio": ratio},
 		"bots": bots, "conversations": conversations, "messages24h": messages24h,
-		"totalEvents": totalEvents, "triggered": triggered, "successful": successful,
+		"totalEvents": totalEvents, "triggered": triggered, "successful": successful, "failedHandled": failedHandled, "repliedCount": repliedCount,
 		"triggeredConversations": triggeredConversations, "averageLatencyMs": int64(averageLatencyMS),
 		"slowCalls": slowCalls, "modelCalls": modelCalls, "sentDeliveries": sentDeliveries, "totalDeliveries": totalDeliveries,
 		"pendingTasks": inboxPending + outboxPending, "pendingInbox": inboxPending, "pendingOutbox": outboxPending,
@@ -137,12 +187,12 @@ func (a *App) overviewPipelines(c *gin.Context) []overviewPipeline {
 		LEFT JOIN LATERAL (SELECT * FROM messages WHERE conversation_id=m.conversation_id AND direction='outbound' AND event_type<>'PROCESSING_ACK' AND reply_to_message_id=m.platform_message_id ORDER BY created_at DESC LIMIT 1) om ON true
 		LEFT JOIN outbox_tasks ot ON ot.message_id=om.id
 		LEFT JOIN LATERAL (
- SELECT bool_or(coalesce(task.status,x.status) IN ('failed','expired')) AS failed,
+ SELECT bool_or(coalesce(task.status,x.status)='failed' OR (coalesce(task.status,x.status)='expired' AND coalesce(task.last_error,'') NOT IN ('blacklisted or excluded','operator removed'))) AS failed,
  bool_or(coalesce(task.status,x.status) IN ('pending','processing')) AS waiting,
  bool_or(coalesce(task.status,x.status)='sent') AS sent,
- max(task.last_error) FILTER(WHERE task.status IN ('failed','expired')) AS error
+ max(task.last_error) FILTER(WHERE coalesce(task.status,x.status)='failed' OR (coalesce(task.status,x.status)='expired' AND coalesce(task.last_error,'') NOT IN ('blacklisted or excluded','operator removed'))) AS error
  FROM messages x LEFT JOIN outbox_tasks task ON task.message_id=x.id WHERE x.conversation_id=m.conversation_id
- AND x.direction='outbound' AND x.event_type<>'PROCESSING_ACK' AND x.reply_to_message_id=m.platform_message_id) delivery ON true
+ AND x.direction='outbound' AND x.event_type<>'PROCESSING_ACK' AND x.status<>'merged' AND coalesce(task.status,'')<>'merged' AND coalesce(m.platform_message_id,'')<>'' AND x.reply_to_message_id=m.platform_message_id) delivery ON true
  WHERE t.id IS NOT NULL OR gr.message_id IS NOT NULL
  ORDER BY m.event_at DESC LIMIT 10`)
 	if err != nil {
@@ -223,7 +273,7 @@ func (a *App) overviewAlerts(c *gin.Context) []map[string]any {
  CASE WHEN t.status='expired' THEN '回复已超过发送时限：' ELSE '发送 QQ 消息失败：' END||left(display_mentions(m,m.content),80),t.last_error,'回复未送达','critical',false
  FROM outbox_tasks t JOIN messages m ON m.id=t.message_id JOIN bots b ON b.id=m.bot_id
  LEFT JOIN messages i ON i.conversation_id=m.conversation_id AND i.direction='inbound' AND i.platform_message_id=m.reply_to_message_id
- WHERE t.status IN ('failed','expired') AND t.dismissed_at IS NULL AND m.event_type<>'PROCESSING_ACK'
+ WHERE (t.status='failed' OR (t.status='expired' AND coalesce(t.last_error,'') NOT IN ('blacklisted or excluded','operator removed'))) AND t.dismissed_at IS NULL AND m.event_type<>'PROCESSING_ACK'
  UNION ALL SELECT d.id::text,d.updated_at,'知识索引','document',NULL,d.id::text,d.knowledge_base_id::text,
  '文档索引失败：'||d.name,d.last_error,'知识检索可能不完整','warning',false
  FROM knowledge_documents d WHERE d.status='failed' AND d.dismissed_at IS NULL) failures ORDER BY time DESC LIMIT 8`)

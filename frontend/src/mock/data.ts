@@ -54,6 +54,10 @@ export const mockOverview: SystemOverview = {
   ],
   messages24h: 23842,
   successRate: 95.1,
+  triggeredCount: 23842,
+  successfulCount: 22681,
+  failedHandledCount: 1161,
+  repliedCount: 18420,
   metrics: [
     { label: '总事件数', value: '23,842', trend: '18.6%', direction: 'up', good: false },
     { label: '成功处理', value: '22,681', sub: '(95.1%)', trend: '12.4%', direction: 'up', good: true },

@@ -2,7 +2,7 @@ import client, { ApiError, mockFallbackEnabled, request } from './client'
 import { connection } from '@/utils/connection'
 import { modelProviderPresets } from '@/utils/model-providers'
 import { mockBots, mockConversations, mockHumanOperators, mockKnowledgeBases, mockMessages, mockModels, mockOverview, mockProxies, mockCosts, mockChat } from '@/mock/data'
-import type { ActiveTask, AlertItem, Bot, Conversation, KnowledgeBase, KnowledgeDocument, MessageAttachment, MessageTimeline, MessageRecord, HandoffStatus, HumanOperator, ModelKind, ModelProfile, ModelProviderId, ModelProviderPreset, ModelProxy, ModelProxyInput, WebSearchMode, ModelTestInput, ProxyTestResult, ModelTestResult, CostRange, CostSummary, Status, SystemOverview, SystemSettings, PipelineOutcome, ChatItem, ChatPage, ChatPreview } from '@/types'
+import type { ActiveTask, AlertItem, Bot, Conversation, KnowledgeBase, KnowledgeDocument, KnowledgeDocumentChunk, KnowledgeMapData, KnowledgeSearchHit, MessageAttachment, MessageTimeline, MessageRecord, HandoffStatus, HumanOperator, ModelKind, ModelProfile, ModelProviderId, ModelProviderPreset, ModelProxy, ModelProxyInput, WebSearchMode, ModelTestInput, ProxyTestResult, ModelTestResult, CostRange, CostSummary, Status, SystemOverview, SystemSettings, PipelineOutcome, ChatItem, ChatPage, ChatPreview } from '@/types'
 import { createEmptyOverview } from '@/utils/overview'
 import { rememberMentionNames } from '@/utils/mentions'
 
@@ -18,7 +18,7 @@ type BackendKnowledgeDocument = { id: string; name: string; status: string; size
 type BackendKnowledgeDetail = BackendKnowledgeBase & { documents: BackendKnowledgeDocument[]; boundConversations?: Array<{ id: string; name: string }>; boundAgents?: Array<{ id: string; name: string }> }
 type BackendPipeline = { sender?: string; senderId?: string; mentionNames?: Record<string, string>; timeline?: MessageTimeline; id: string; time: string; bot: string; conversation: string; content: string; eventType?: string; eventMs: number; contextMs: number; contextLabel?: string; contextStatus?: Status; retrieval: { status: Status; ms: number; hit: string }; model: { status: Status; ms?: number; name?: string }; delivery: { status: Status; ms?: number }; totalMs: number }
 type BackendAlert = AlertItem
-type BackendOverview = { bots: number; conversations: number; messages24h: number; totalEvents?: number; triggered?: number; successful?: number; triggeredConversations?: number; averageLatencyMs?: number; slowCalls?: number; modelCalls?: number; sentDeliveries?: number; totalDeliveries?: number; pendingTasks: number; pendingInbox?: number; pendingOutbox?: number; pendingDocuments?: number; processingDocuments?: number; failedTasks?: number; readyDocuments: number; failedDocuments?: number; totalDocuments?: number; pipelines?: BackendPipeline[]; alerts?: BackendAlert[]; knowledgeQueues?: Array<{ id: string; name: string; progress: number; eta: string }>; activeTasks?: ActiveTask[]; queuedTasks?: number; processingTasks?: number; knowledge?: { documentCount: number; entryCount: number; indexedCount: number; indexedRatio: number }; stageAverages?: Array<{ label: string; averageMs: number; samples: number; startOffsetMs?: number }>; version: string }
+type BackendOverview = { bots: number; conversations: number; messages24h: number; totalEvents?: number; triggered?: number; successful?: number; failedHandled?: number; repliedCount?: number; triggeredConversations?: number; averageLatencyMs?: number; slowCalls?: number; modelCalls?: number; sentDeliveries?: number; totalDeliveries?: number; pendingTasks: number; pendingInbox?: number; pendingOutbox?: number; pendingDocuments?: number; processingDocuments?: number; failedTasks?: number; readyDocuments: number; failedDocuments?: number; totalDocuments?: number; pipelines?: BackendPipeline[]; alerts?: BackendAlert[]; knowledgeQueues?: Array<{ id: string; name: string; progress: number; eta: string }>; activeTasks?: ActiveTask[]; queuedTasks?: number; processingTasks?: number; knowledge?: { documentCount: number; entryCount: number; indexedCount: number; indexedRatio: number }; stageAverages?: Array<{ label: string; averageMs: number; samples: number; startOffsetMs?: number }>; version: string }
 
 const clone = <T>(value: T): T => structuredClone(value)
 // 选填单价：没填就传 null，让后端清空。
@@ -121,6 +121,10 @@ export const api = {
     const deliveryRate = raw.totalDeliveries ? (raw.sentDeliveries || 0) / raw.totalDeliveries * 100 : 0
     view.messages24h = raw.messages24h
     view.successRate = triggered ? successRate : null
+    view.triggeredCount = triggered
+    view.successfulCount = successful
+    view.failedHandledCount = raw.failedHandled ?? Math.max(0, triggered - successful)
+    view.repliedCount = raw.repliedCount ?? null
     view.metrics[0].value = totalEvents.toLocaleString()
     view.metrics[1].value = successful.toLocaleString()
     view.metrics[1].sub = triggered ? `(${successRate.toFixed(1)}%)` : '(暂无触发)'
@@ -219,7 +223,9 @@ export const api = {
       return request<{ id: string; name: string; documentCount: number; entryCount: number }>({ method: 'POST', url: '/knowledge-bases/import', data, timeout: 60 * 60 * 1000, onUploadProgress: e => onProgress?.(e.total ? e.loaded / e.total : 0) })
     },
     chunkImageUrl: (id: string, chunkId: string) => `/api/knowledge-bases/${id}/chunks/${chunkId}/image`,
-    test: (id: string, query: string) => loadOrMock(() => request<Array<{ id?: string; content: string; score: number; hasImage?: boolean }>>({ method: 'POST', url: `/knowledge-bases/${id}/search`, data: { query, limit: 8 } }), [{ content: '命中知识片段：机器人通过统一消息入口接收 QQ Webhook 事件。', score: 0.92 }]),
+    map: (id: string) => request<KnowledgeMapData>({ url: `/knowledge-bases/${id}/map` }),
+    documentChunks: (id: string, documentId: string) => request<KnowledgeDocumentChunk[]>({ url: `/knowledge-bases/${id}/documents/${documentId}/chunks` }),
+    test: (id: string, query: string) => loadOrMock(() => request<KnowledgeSearchHit[]>({ method: 'POST', url: `/knowledge-bases/${id}/search`, data: { query, limit: 8 } }), [{ content: '命中知识片段：机器人通过统一消息入口接收 QQ Webhook 事件。', score: 0.92 }]),
   },
   system: {
     retryFailed: () => request<{ queued: number }>({ method: 'POST', url: '/system/retry-failed' }, { queued: 0 }),

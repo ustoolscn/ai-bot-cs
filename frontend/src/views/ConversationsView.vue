@@ -207,7 +207,9 @@ useAdminEvents(['conversations', 'messages', 'conversation_members', 'bots', 'kn
 .drawer-tabs { display: flex; gap: 4px; margin: -4px 0 16px; padding: 4px; border-radius: var(--radius-md); background: var(--surface-3); overflow-x: auto; }
 .drawer-tabs button { display: flex; flex: 1 0 auto; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 120px; padding: 6px 12px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text-2); text-align: left; cursor: pointer; transition: background var(--dur) var(--ease), color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
 .drawer-tabs button:hover { color: var(--text); }
-.drawer-tabs button.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(17, 24, 39, .08); }
+.inbox-item.conv-item.active,
+.conv-item.active { border-left: 2px solid var(--primary); background: linear-gradient(90deg, rgba(56, 189, 248, 0.16), transparent); }
+.drawer-tabs button.active { background: rgba(56, 189, 248, 0.16); color: var(--text); box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.36); }
 .drawer-tabs strong { font-size: 13px; font-weight: 600; }
 .drawer-tabs small { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .tab-enter-active, .tab-leave-active { transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }

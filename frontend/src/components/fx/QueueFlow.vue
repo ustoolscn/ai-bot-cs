@@ -27,12 +27,12 @@ const emit = defineEmits<{ select: [node: QueueNode] }>()
 .node.link:active { transform: scale(.97); }
 .node strong { font-size: 22px; font-weight: 600; line-height: 1.2; }
 .node > span { color: var(--muted); font-size: 12px; white-space: nowrap; }
-.node.busy { border-color: var(--primary-soft, #bcd5f5); background: var(--primary-light); }
+.node.busy { border-color: var(--primary-soft); background: var(--primary-light); box-shadow: 0 0 18px var(--primary-light); }
 .node.busy strong { color: var(--primary-text); }
-.node.danger.busy { border-color: #f0c4c4; background: var(--danger-light); }
+.node.danger.busy { border-color: color-mix(in srgb, var(--danger) 42%, transparent); background: var(--danger-light); box-shadow: 0 0 18px var(--danger-light); }
 .node.danger.busy strong { color: var(--danger); }
 .pipe { position: relative; flex: 0 1 28px; min-width: 12px; height: 2px; background: var(--line); overflow: hidden; }
-.pipe.moving { background: transparent; }
-.pipe.moving i { position: absolute; inset: 0 0 0 -12px; background: repeating-linear-gradient(90deg, var(--primary) 0 6px, transparent 6px 12px); animation: march .6s linear infinite; }
+.pipe.moving { background: transparent; overflow: visible; }
+.pipe.moving i { position: absolute; inset: 0 0 0 -12px; background: repeating-linear-gradient(90deg, var(--primary) 0 6px, transparent 6px 12px); filter: drop-shadow(0 0 4px var(--primary)); animation: march .6s linear infinite; }
 @keyframes march { from { transform: translateX(-12px); } to { transform: translateX(0); } }
 </style>

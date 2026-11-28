@@ -5,6 +5,10 @@ export function createEmptyOverview(): SystemOverview {
     active: [],
     messages24h: null,
     successRate: null,
+    triggeredCount: null,
+    successfulCount: null,
+    failedHandledCount: null,
+    repliedCount: null,
     metrics: [
       { label: '总事件数', value: '—' },
       { label: '成功处理', value: '—' },

@@ -99,13 +99,14 @@ defineExpose({ refresh })
 </script>
 
 <style scoped>
-.cost { display: flex; flex-direction: column; gap: 16px; padding: 16px 20px 20px; }
+.cost { display: flex; flex-direction: column; gap: 18px; padding: 18px 22px 22px; }
 .cost > header { display: flex; align-items: center; gap: 12px; height: 32px; }
 .cost h2 { display: flex; align-items: baseline; gap: 8px; font-size: 15px; font-weight: 600; white-space: nowrap; }
 .cost h2 .muted { font-size: 12px; font-weight: 400; }
 .unpriced { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 0; border-radius: var(--radius-xs); background: var(--warning-light); color: var(--warning); font-size: 12px; cursor: pointer; transition: filter var(--dur-fast) var(--ease); }
 .unpriced:hover { filter: brightness(.97); }
-.cost-grid { display: grid; grid-template-columns: minmax(140px, .6fr) minmax(0, 1.2fr) minmax(0, 1.3fr); gap: 32px; align-items: start; }
+.cost-grid { display: grid; grid-template-columns: minmax(140px, .6fr) minmax(0, 1.2fr) minmax(0, 1.3fr); gap: 16px; align-items: stretch; }
+.cost-totals, .cost-kinds, .cost-rank { padding: 14px 16px; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: var(--radius-md); background: rgba(13, 22, 42, 0.65); }
 .col-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 28px; margin-bottom: 8px; color: var(--muted); font-size: 12px; }
 
 .cost-totals { display: flex; flex-direction: column; gap: 16px; padding-top: 2px; }

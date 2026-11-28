@@ -1,5 +1,5 @@
 <template>
-  <div class="content-page">
+  <div ref="pageRef" class="content-page">
     <PageHeader :title="isNew ? '添加 AI 客服' : form?.name || 'AI 客服'" :back="{ label: (botName || '机器人') + ' 的 AI 客服', to: { name: 'bot-services', params: { id: botId } } }">
       <el-button v-if="!isNew && form" :icon="Delete" :loading="removing" @click="remove">删除客服</el-button>
     </PageHeader>
@@ -212,8 +212,10 @@ import StatusStylePicker from '@/components/agent/StatusStylePicker.vue'
 import { api } from '@/api'
 import { agentApi, defaultCompanionSettings, type Skill, type StatusImageStyle } from '@/api/agent'
 import { botServices, type BotService, type HandoffHours } from '@/api/support'
+import { animateStagger } from '@/utils/motion'
 import type { KnowledgeBase, ModelProfile } from '@/types'
 
+const pageRef = ref<HTMLElement>()
 const props = defineProps<{ botId: string; serviceId: string }>()
 const router = useRouter()
 const sections = [
@@ -316,7 +318,7 @@ async function load() {
       apply(found)
       applyHours(await botServices(props.botId).handoffHours(found.id).get())
     }
-    nextTick(observeSections)
+    nextTick(() => { observeSections(); animateStagger(pageRef.value) })
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : '加载失败'
   }
