@@ -427,18 +427,18 @@ func TestAgentToolsMemoryAndLearning(t *testing.T) {
 		t.Fatalf("memory API: %s", memJSON)
 	}
 
-	// A matching user identifier in a second group must not recall the first group's memory.
+	// A matching user identifier in a second group under the same bot shares unified subject memories.
 	var otherGroup string
 	if err := pool.QueryRow(ctx, `INSERT INTO conversations(channel,bot_id,platform_id,type) VALUES('qq',$1,'memory-other','group') RETURNING id::text`, botID).Scan(&otherGroup); err != nil {
 		t.Fatal(err)
 	}
 	memorySettings := application.agentSettings(ctx)
-	if got := application.loadMemories(ctx, memorySettings, botID, otherGroup, "alice", "", &queryEmbeddings{}); len(got) != 0 {
+	if got := application.loadMemories(ctx, memorySettings, botID, otherGroup, "alice", "", &queryEmbeddings{}); len(got) != 1 || !strings.Contains(got[0].Content, "用户使用 vip 分组") {
 		t.Fatalf("cross-group recall: %v", got)
 	}
-	requestJSON(t, client, http.MethodPost, server.URL+"/api/memories", map[string]any{"botId": botID, "conversationId": otherGroup, "userId": "alice", "content": "用户使用 vip 分组", "pinned": true}, http.StatusCreated)
+	requestJSON(t, client, http.MethodPost, server.URL+"/api/memories", map[string]any{"botId": botID, "conversationId": otherGroup, "userId": "alice", "content": "跨群测试偏好", "pinned": true}, http.StatusCreated)
 	var scopes int
-	if err := pool.QueryRow(ctx, `SELECT count(DISTINCT conversation_id) FROM user_memories WHERE platform_user_id='alice' AND content='用户使用 vip 分组'`).Scan(&scopes); err != nil || scopes != 2 {
+	if err := pool.QueryRow(ctx, `SELECT count(DISTINCT conversation_id) FROM user_memories WHERE platform_user_id='alice' AND status='active'`).Scan(&scopes); err != nil || scopes != 2 {
 		t.Fatalf("scoped deduplication: %d %v", scopes, err)
 	}
 	directory := requestJSON(t, client, http.MethodGet, server.URL+"/api/memories/directory", nil, http.StatusOK)

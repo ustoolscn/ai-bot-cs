@@ -176,18 +176,24 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 	}
 	requireWebSearch := false
 	skipKB := len(imageParts) == 0 && socialOnly(j.Content)
+	var perception TurnPerception
+	perception.SocialOnly = skipKB
+	perception.normalize(skipKB)
+	ranGroupDecision := false
 	if j.ConversationType == "group" && (j.TriggerMode == "smart" || j.TriggerMode == "always") {
-		var decision struct {
-			NeedsWebSearch bool  `json:"needsWebSearch"`
-			Reply          *bool `json:"reply"`
-			SocialOnly     bool  `json:"socialOnly"`
-		}
+		ranGroupDecision = true
 		finish := a.startStage(ctx, j.MessageID, "判断是否回复")
 		recent, err := a.decisionHistory(ctx, j, senderID)
 		if err != nil {
 			finish("", err)
 			return a.retryInbox(ctx, j, err)
 		}
+		var lastChimeAt *time.Time
+		_ = a.db.QueryRow(ctx, "SELECT last_chime_in_at FROM conversations WHERE id=$1", j.ConversationID).Scan(&lastChimeAt)
+		lastSenderIsBot := len(recent) > 0 && recent[len(recent)-1].Role == "机器人"
+		chimeBlocked, _ := isChimeInBlocked(settings, lastChimeAt, lastSenderIsBot, time.Now())
+		mentioned := j.EventType == "GROUP_AT_MESSAGE_CREATE" || j.MentionsBot
+
 		// Only override a negative judgment for an unambiguous call in the user's own text.
 		// Quotes, mentions of others and other QQ elements stay with the contextual judge.
 		calledByName := j.Content == strings.TrimSpace(originalQuestion) && directNameCall(originalQuestion, recent, settings.PersonaName, botName)
@@ -197,6 +203,8 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 			"QQ机器人名称":    botName,
 			"人设性格":       settings.StylePrompt,
 			"命中直接点名短句":   calledByName,
+			"允许主动搭茬":     !chimeBlocked && !mentioned && !calledByName,
+			"搭茬活跃度":      settings.Companion.GroupChimeIn,
 			"客服职责":       instructions,
 			"群说明":        j.SystemPrompt,
 			"近期群聊":       recent,
@@ -204,34 +212,51 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 			"当前消息时间":     eventAt,
 			"当前发言人":      agent.TruncateRunes(firstNonEmpty(senderName, senderID), 48),
 			"当前发言人是人工客服": isStaff,
-			"被直接提及":      j.EventType == "GROUP_AT_MESSAGE_CREATE" || j.MentionsBot,
+			"被直接提及":      mentioned,
 			"含图片附件":      len(imageParts) > 0,
 			"图片来自同一用户上一条未答的消息": priorImage,
 		})
-		err = a.auxJSON(ctx, settings, profileID, "", j.MessageID, "reply_decision", replyDecisionPrompt, string(input), &decision, imageParts...)
-		if err == nil && decision.Reply == nil {
+		err = a.auxJSON(ctx, settings, profileID, "", j.MessageID, "reply_decision", replyDecisionPrompt, string(input), &perception, imageParts...)
+		if err == nil && perception.Reply == nil {
 			err = fmt.Errorf("回复判断缺少 reply 字段")
 		}
 		if err == nil && calledByName {
-			*decision.Reply = true
+			*perception.Reply = true
+			perception.IsChimeIn = false
 		}
-		decisionText := "需要回复"
-		if decision.Reply != nil && !*decision.Reply {
-			decisionText = "无需回复"
+		if err == nil && mentioned {
+			perception.IsChimeIn = false
 		}
-		finish(fmt.Sprintf("%s，客服 %s，性格 %d 字，近期群聊 %d 条", decisionText, personaName, len([]rune(settings.StylePrompt)), len(recent)), err)
-		requireWebSearch = decision.NeedsWebSearch
+		if err == nil && perception.Reply != nil && *perception.Reply && perception.IsChimeIn && chimeBlocked {
+			*perception.Reply = false
+		}
+		perception.normalize(skipKB)
+		finish(formatPerceptionFinish(perception, personaName, len([]rune(settings.StylePrompt)), len(recent)), err)
+		requireWebSearch = perception.NeedsWebSearch
 		if openai.IsHTTPStatus(err, 403) {
 			return a.excludeModeratedMessage(ctx, j, err)
 		}
 		if err != nil {
 			return a.retryInbox(ctx, j, err)
 		}
-		skipKB = skipKB || (decision.SocialOnly && len(imageParts) == 0)
-		if !*decision.Reply {
+		skipKB = skipKB || (perception.SocialOnly && len(imageParts) == 0)
+		if !*perception.Reply {
 			_, err = a.db.Exec(ctx, `WITH recovered AS (`+clearModerationStreakSQL+`)
               UPDATE inbox_tasks SET status='skipped',last_error=NULL,updated_at=now() WHERE id=$2 AND status='processing'`, j.ConversationID, j.TaskID)
 			return err
+		}
+		// If a binary decision model (such as typesafe) handled routing, optionally enrich emotion via aux chat.
+		if perception.TopicHint == "" && settings.Companion.RealTimeEmotion && settings.DecisionProfileID != "" {
+			if cl, _, e := a.auxJSONModel(ctx, settings, profileID, "reply_decision", len(imageParts) > 0); e == nil && cl.Provider == "typesafe" {
+				rich := a.perceivePrivateTurn(ctx, settings, profileID, j.MessageID, j.Content, nil, imageParts...)
+				rich.Reply = perception.Reply
+				rich.NeedsWebSearch = perception.NeedsWebSearch
+				rich.IsChimeIn = perception.IsChimeIn
+				if perception.SocialOnly {
+					rich.SocialOnly = true
+				}
+				perception = rich
+			}
 		}
 	}
 	if profileID == "" {
@@ -248,21 +273,25 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 
 	ctx = context.WithValue(ctx, usageScopeKey{}, usageScope{run: runID, message: j.MessageID, conversation: j.ConversationID})
 	rt := &turnRuntime{recentStatus: recentStatus, chatProfileID: profileID, question: originalQuestion, settings: settings, botID: j.BotID, conversationID: j.ConversationID, conversationType: j.ConversationType,
-		senderID: senderID, senderName: senderName, messageID: j.MessageID, runID: runID}
+		senderID: senderID, senderName: senderName, messageID: j.MessageID, runID: runID, isChimeIn: perception.IsChimeIn}
 	rt.knowledgeBases = a.conversationKnowledgeBases(ctx, j.ConversationID)
 	if settings.KnowledgeBaseIDs != nil {
 		rt.knowledgeBases = settings.KnowledgeBaseIDs
 	}
-	if skipKB {
-		rt.knowledgeBases = nil
-	}
 	rt.snapshot, rt.snapshotStale, rt.snapshotOK = a.liveSnapshot(ctx, settings)
 
-	// Working memory.
+	// Working memory & real-time emotion perception for private / mention-only chats.
 	finishContext := a.startStage(ctx, j.MessageID, "上下文构建")
 	contextStarted := time.Now()
 	scope := threadScope(j.ConversationType, senderID, settings)
 	turns, oldestKept, dropped := a.loadHistory(ctx, j.ConversationID, j.MessageID, eventAt, scope, settings, contextHistoryLimit(j.ContextLimit))
+	if !ranGroupDecision && settings.Companion.RealTimeEmotion {
+		perception = a.perceivePrivateTurn(ctx, settings, profileID, j.MessageID, j.Content, turns, imageParts...)
+		skipKB = skipKB || (perception.SocialOnly && len(imageParts) == 0)
+	}
+	if skipKB {
+		rt.knowledgeBases = nil
+	}
 	var summary string
 	if settings.SummaryEnabled {
 		_ = a.db.QueryRow(ctx, "SELECT summary FROM conversation_summaries WHERE conversation_id=$1 AND scope_key=$2", j.ConversationID, scope).Scan(&summary)
@@ -270,16 +299,56 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 			a.enqueueJob(ctx, "summarize", map[string]any{"conversationId": j.ConversationID, "scope": scope, "until": oldestKept, "botId": j.BotID, "profileId": profileID}, "summarize:"+j.ConversationID+":"+scope)
 		}
 	}
-	var memories []agent.Memory
+	var bundle subjectContextBundle
 	if settings.MemoryEnabled && senderID != "" {
 		memoryQuery := j.Content
 		if skipKB {
 			memoryQuery = ""
 		} // Recent and pinned memories suffice for social turns.
-		memories = a.loadMemories(ctx, settings, j.BotID, j.ConversationID, senderID, memoryQuery, &rt.embeddings)
+		bundle = a.loadSubjectContext(ctx, settings, j.BotID, j.ConversationID, j.ConversationType, senderID, senderName, memoryQuery, perception.MemoryFocus, &rt.embeddings)
+		rt.subjectID = bundle.SubjectID
+	} else if j.ConversationType == "group" {
+		bundle.GroupMemories, bundle.GroupVibe = a.loadGroupMemories(ctx, j.ConversationID, 5)
 	}
+	memories := bundle.Memories
 	contextLatency := time.Since(contextStarted).Milliseconds()
-	finishContext(fmt.Sprintf("历史 %d 条，记忆 %d 条", len(turns), len(memories)), nil)
+	finishContext(fmt.Sprintf("历史 %d 条，记忆 %d 条，群情景 %d 条", len(turns), len(memories), len(bundle.GroupMemories)), nil)
+
+	// Build dynamic persona & affective director instructions.
+	allowSemanticSplit := settings.Companion.DynamicTypingDelay && settings.SplitLongReplies && settings.MaxReplyParts >= 2 && len(segments) == 1
+	directorNotes := agent.BuildDirectorInstructions(agent.DirectorInput{
+		Settings:         settings,
+		ConversationType: j.ConversationType,
+		Now:              time.Now().In(chinaLocation),
+		Subject: agent.SubjectContext{
+			DisplayName:       firstNonEmpty(bundle.Subject.DisplayName, senderName),
+			Nicknames:         bundle.Subject.Nicknames,
+			RelationshipStage: bundle.Subject.RelationshipStage,
+			Familiarity:       bundle.Subject.Familiarity,
+			Affinity:          bundle.Subject.Affinity,
+			Trust:             bundle.Subject.Trust,
+			InteractionTurns:  bundle.Subject.InteractionTurns,
+			InteractionDays:   bundle.Subject.InteractionDays,
+			Persona:           bundle.Subject.Persona,
+			NegativeStreak:    bundle.Subject.MoodState.NegativeStreak,
+			LastMood:          bundle.Subject.MoodState.CurrentMood,
+		},
+		BotMood: a.loadBotMood(ctx, botMoodScope(j.ConversationID, j.BotID)),
+		Perception: agent.PerceptionContext{
+			ReplyMode:        perception.ReplyMode,
+			IsChimeIn:        perception.IsChimeIn,
+			UserMood:         perception.UserMood,
+			MoodIntensity:    perception.MoodIntensity,
+			Valence:          perception.Valence,
+			Sarcasm:          perception.Sarcasm,
+			NeedEmpathyFirst: perception.NeedEmpathyFirst,
+			TopicHint:        perception.TopicHint,
+		},
+		AllowSemanticSplit: allowSemanticSplit,
+	})
+	if j.ConversationType == "private" && settings.Companion.TypingIndicator && settings.Companion.Enabled {
+		go a.sendPrivateTyping(ctx, j.BotID, j.PlatformConversationID, j.PlatformMessageID, 8)
+	}
 
 	// Understand: rewrite the question using recent context.
 	var steps []agentStep
@@ -362,13 +431,15 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 	if userContent == "" && len(imageParts) > 0 {
 		userContent = "请分析用户发送的图片并回答。"
 	}
-	in := agentInput{rt: rt, client: client, profileID: profileID, businessPrompt: strings.TrimSpace(instructions+"\n"+j.SystemPrompt) + a.staffStylePrompt(ctx, j.ConversationID), senderIsStaff: isStaff,
-		summary: summary, memories: memories, knowledge: kbContext, history: turns, requireWebSearch: requireWebSearch, userContent: userContent, imageParts: imageParts, deadline: j.Deadline}
+	in := agentInput{rt: rt, client: client, profileID: profileID, businessPrompt: strings.TrimSpace(instructions+"\n"+j.SystemPrompt) + a.staffStylePrompt(ctx, j.ConversationID), directorNotes: directorNotes, senderIsStaff: isStaff,
+		summary: summary, memories: memories, groupMemories: bundle.GroupMemories, groupVibe: bundle.GroupVibe, knowledge: kbContext, history: turns, requireWebSearch: requireWebSearch, userContent: userContent, imageParts: imageParts, deadline: j.Deadline}
 	out := a.runAgent(ctx, in)
 	steps = append(steps, out.steps...)
 	contextJSON, _ := json.Marshal(out.messages)
 	stepsJSON, _ := json.Marshal(steps)
-	_, _ = a.db.Exec(ctx, "UPDATE agent_runs SET context_latency_ms=$1,retrieval_latency_ms=$2,context_messages=$3::jsonb,rewritten_query=$4,steps=$5::jsonb WHERE id=$6", contextLatency, retrievalLatency, string(contextJSON), rewrittenOrEmpty(query, j.Content), string(stepsJSON), runID)
+	perceptionJSON, _ := json.Marshal(perception)
+	recalledJSON, _ := json.Marshal(memories)
+	_, _ = a.db.Exec(ctx, "UPDATE agent_runs SET context_latency_ms=$1,retrieval_latency_ms=$2,context_messages=$3::jsonb,rewritten_query=$4,steps=$5::jsonb,perception=$6::jsonb,recalled_memories=$7::jsonb,director_notes=$8 WHERE id=$9", contextLatency, retrievalLatency, string(contextJSON), rewrittenOrEmpty(query, j.Content), string(stepsJSON), string(perceptionJSON), string(recalledJSON), directorNotes, runID)
 	if out.err != nil {
 		_, _ = a.db.Exec(ctx, "UPDATE agent_runs SET status='failed',error=$1,completed_at=now() WHERE id=$2", out.err.Error(), runID)
 		if openai.IsHTTPStatus(out.err, 403) {
@@ -485,6 +556,11 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 	if j.ConversationType == "private" && len(segments) > 1 {
 		rt.quoteTarget = j.MessageID
 	}
+	var remainingDeadline time.Duration
+	if j.Deadline != nil {
+		remainingDeadline = time.Until(*j.Deadline)
+	}
+	replyDelays := agent.ReplyDelays(replyParts, settings.Companion.Enabled && settings.Companion.DynamicTypingDelay, remainingDeadline)
 	for i, part := range replyParts {
 		if err != nil {
 			break
@@ -510,8 +586,15 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 			_, err = tx.Exec(ctx, "UPDATE messages SET qq_quote_target=$2 WHERE id=$1", outID, rt.quoteTarget)
 		}
 		if err == nil {
-			_, err = tx.Exec(ctx, "INSERT INTO outbox_tasks(message_id,msg_seq,next_attempt_at) VALUES($1,$2,now()+($3 * interval '1500 milliseconds'))", outID, firstSeq+i, i)
+			delayMs := int64(0)
+			if i < len(replyDelays) {
+				delayMs = replyDelays[i].Milliseconds()
+			}
+			_, err = tx.Exec(ctx, "INSERT INTO outbox_tasks(message_id,msg_seq,next_attempt_at) VALUES($1,$2,now()+($3 * interval '1 millisecond'))", outID, firstSeq+i, delayMs)
 		}
+	}
+	if err == nil && rt.isChimeIn {
+		_, err = tx.Exec(ctx, "UPDATE conversations SET last_chime_in_at=now() WHERE id=$1", j.ConversationID)
 	}
 	if err == nil {
 		_, err = tx.Exec(ctx, "UPDATE agent_runs SET status='completed',retrieved_chunks=$1::jsonb,completed_at=now() WHERE id=$2", string(hitsJSON), runID)
@@ -524,7 +607,8 @@ func (a *App) handleInbox(ctx context.Context, j inboxJob) error {
 		return a.retryInbox(ctx, j, err)
 	}
 	if settings.EvaluationEnabled || settings.MemoryEnabled {
-		_, err = tx.Exec(ctx, `INSERT INTO agent_jobs(kind,payload,dedupe_key) VALUES('evaluate',jsonb_build_object('runId',$1::text,'messageId',$2::text,'profileId',$3::text),'evaluate:'||$1::text)`, runID, j.MessageID, profileID)
+		_, err = tx.Exec(ctx, `INSERT INTO agent_jobs(kind,payload,dedupe_key) VALUES('evaluate',jsonb_build_object('runId',$1::text,'messageId',$2::text,'profileId',$3::text,'subjectId',$4::text,'perception',$5::jsonb,'isChimeIn',$6::bool),'evaluate:'||$1::text)`,
+			runID, j.MessageID, profileID, rt.subjectID, string(perceptionJSON), rt.isChimeIn)
 		if err != nil {
 			_ = tx.Rollback(ctx)
 			return a.retryInbox(ctx, j, err)
@@ -579,9 +663,9 @@ func (a *App) shapeReply(s agent.Settings, conversationType, content string) []s
 	}
 	text = agent.PlainLinks(text)
 	if !s.SplitLongReplies {
-		return []string{text}
+		return []string{strings.ReplaceAll(text, "|||", "\n")}
 	}
-	parts := agent.SplitReply(text, s.ReplyChars(conversationType), s.MaxReplyParts)
+	parts := agent.SplitSemanticReply(text, s.ReplyChars(conversationType), s.MaxReplyParts)
 	if len(parts) == 0 {
 		return []string{text}
 	}
@@ -764,10 +848,13 @@ type agentInput struct {
 	client           *openai.Client
 	profileID        string
 	businessPrompt   string
+	directorNotes    string
 	senderIsStaff    bool
 	requireWebSearch bool
 	summary          string
 	memories         []agent.Memory
+	groupMemories    []agent.GroupMemoryItem
+	groupVibe        string
 	knowledge        string
 	history          []agent.Turn
 	userContent      string
@@ -826,8 +913,8 @@ func (a *App) runAgent(ctx context.Context, in agentInput) agentOutput {
 		}
 	}
 	systems := agent.BuildSystemPrompt(agent.PromptInput{Settings: s, ConversationType: rt.conversationType, BusinessPrompt: in.businessPrompt,
-		SenderName: rt.senderName, SenderIsStaff: in.senderIsStaff, Now: time.Now().In(chinaLocation), Summary: in.summary, Memories: in.memories,
-		Knowledge: in.knowledge, LiveSnapshot: live, Skills: skills, ToolsAvailable: len(tools) > 0, WebSearchAvailable: in.client.HasWebSearch()})
+		DirectorNotes: in.directorNotes, SenderName: rt.senderName, SenderIsStaff: in.senderIsStaff, Now: time.Now().In(chinaLocation), Summary: in.summary, Memories: in.memories,
+		GroupMemories: in.groupMemories, GroupVibe: in.groupVibe, Knowledge: in.knowledge, LiveSnapshot: live, Skills: skills, ToolsAvailable: len(tools) > 0, WebSearchAvailable: in.client.HasWebSearch()})
 	if rt.recentStatus {
 		systems = append(systems, "本群已有近期网站状态答复。若被追问状态，简短提示查看群里的状态消息。不要重复指标、发状态图、调用状态技能或用联网搜索重新查状态。其他问题照常回答。")
 	}

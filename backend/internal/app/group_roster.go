@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"ai-bot/backend/internal/qq"
@@ -89,6 +90,16 @@ func (a *App) syncGroupMembers(c *gin.Context) {
 	}
 	if err == nil {
 		_, err = tx.Exec(ctx, "UPDATE conversations SET roster_synced_at=$2 WHERE id=$1", id, started)
+	}
+	if err == nil {
+		for _, m := range roster {
+			if strings.TrimSpace(m.Union) != "" && strings.TrimSpace(m.ID) != "" {
+				if _, e := a.resolveSubjectTx(ctx, tx, botID, id, "group", m.ID, m.Username, m.Union); e != nil {
+					err = e
+					break
+				}
+			}
+		}
 	}
 	if err != nil || tx.Commit(ctx) != nil {
 		fail(c, 500, "database_error", "保存群成员名单失败")

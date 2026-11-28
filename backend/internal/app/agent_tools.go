@@ -43,6 +43,8 @@ type turnRuntime struct {
 	snapshotStale     bool
 	dryRun            bool // evaluation: no side effects
 	handoff           bool
+	isChimeIn         bool
+	subjectID         string
 	hits              []map[string]any
 	toolsUsed         []string
 	quoteTarget       string
@@ -72,7 +74,7 @@ var builtinTools = []builtinTool{
 	}, "scope")}, needsLive: true},
 	{spec: domain.ToolSpec{Name: "get_group_status", Description: "查询网站分组列表（倍率）和各分组/服务的实时可用状态，按客服设置自动附上状态图。", Parameters: objSchema(map[string]any{"group": strProp("分组或服务名称，可选；为空返回全部")})}, needsLive: true},
 	{spec: domain.ToolSpec{Name: "get_announcements", Description: "获取网站最新公告和通知全文。", Parameters: objSchema(map[string]any{"limit": map[string]any{"type": "integer", "description": "返回条数，默认 3"}})}, needsLive: true},
-	{spec: domain.ToolSpec{Name: "remember_user_fact", Description: "记住关于当前用户的一条长期有用的信息（如常用分组、接入方式、偏好）。不要记录密钥、密码等敏感信息。", Parameters: objSchema(map[string]any{"content": strProp("一句话描述的事实"), "kind": map[string]any{"type": "string", "enum": []string{"fact", "preference", "issue"}}}, "content")}},
+	{spec: domain.ToolSpec{Name: "remember_user_fact", Description: "记住关于当前用户的一条长期有用的信息（如常用分组、偏好、共同经历、老梗、个人关系）。不要记录密钥、密码等敏感信息。", Parameters: objSchema(map[string]any{"content": strProp("一句话描述的事实或经历"), "kind": map[string]any{"type": "string", "enum": []string{"fact", "preference", "issue", "episode", "inside_joke", "social"}}}, "content")}},
 	{spec: domain.ToolSpec{Name: "handoff_to_human", Description: "把当前用户转给人工客服处理。用户要求人工、涉及退款/到账/封号等需人工核实、或你无法解决时使用。", Parameters: objSchema(map[string]any{"reason": strProp("转人工原因，一句话")}, "reason")}},
 }
 

@@ -138,6 +138,14 @@ func (a *App) generateScheduledPost(ctx context.Context, jobID string) error {
 			return err
 		}
 		system += fmt.Sprintf("\n昨日群消息 %d 条，发言 %d 人，已答复 %d 条提问。", incoming, members, answers)
+		if gMems, vibe := a.loadGroupMemories(ctx, cid, 5); len(gMems) > 0 || vibe != "" {
+			if vibe != "" {
+				system += "\n近期群氛围：" + vibe
+			}
+			for _, gm := range gMems {
+				system += "\n- 群近期话题：" + gm.Content
+			}
+		}
 	}
 	if source == "web" {
 		system += "\n必须实际搜索近期资料，核实发布日期。每条注明日期和可核对的来源链接，资料不足时如实说明，不补写虚构条目。"

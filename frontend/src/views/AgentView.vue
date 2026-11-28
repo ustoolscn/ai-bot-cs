@@ -34,10 +34,12 @@
             <div class="setting-row"><div><strong>超长历史自动摘要</strong><span>超出预算的旧消息压缩成摘要，而不是直接丢掉</span></div><el-switch v-model="settings.summaryEnabled" /></div>
           </div>
           <div class="settings-card">
-            <h3>长期记忆</h3>
-            <div class="setting-row"><div><strong>记住用户的关键信息</strong><span>每轮对话后自动记下分组、接入方式、常遇到的问题等。可以在“记忆”里查看和修改</span></div><el-switch v-model="settings.memoryEnabled" /></div>
+            <h3>长期记忆（全系统跨机器人共享）</h3>
+            <div class="setting-row"><div><strong>记住用户的关键信息</strong><span>每轮对话后提取事实、偏好、共同经历与老梗，跨群聊、私聊与不同机器人统一关联（支持 QQ UnionID 自动融合及管理台手动合并）</span></div><el-switch v-model="settings.memoryEnabled" /></div>
             <div class="setting-row"><div><strong>每次回复最多带入几条记忆</strong></div><el-input-number v-model="settings.maxMemories" :min="1" :max="30" :disabled="!settings.memoryEnabled" /></div>
-            <p class="form-tip" style="margin-top: 12px">QQ 里同一个人在群聊和私聊的 ID 不同，记忆会按“机器人 + 用户 ID”分开保存。</p>
+            <div v-if="settings.companion" class="setting-row"><div><strong>全局默认陪伴与拟人导演层</strong><span>启用实时情绪预判、群聊主动搭茬、动态打字延迟与慢通道反思。每个 AI 客服可在各自详情页单独定制性格和背景</span></div><el-switch v-model="settings.companion.enabled" /></div>
+            <div v-if="settings.companion?.enabled" class="setting-row"><div><strong>私聊发送“正在输入”状态</strong><span>需 QQ 机器人已开通输入状态权限</span></div><el-switch v-model="settings.companion.typingIndicator" /></div>
+            <p class="form-tip" style="margin-top: 12px">系统已在底层预留 QQ UnionID 全局锚点；若当前未开通 UnionID 权限，可在“用户记忆”页面手动合并同一用户的跨群/私聊身份。</p>
           </div>
         </section>
 
@@ -90,7 +92,7 @@ import EmptyState from '@/components/EmptyState.vue'
 import SkillsPanel from '@/components/agent/SkillsPanel.vue'
 import ToolsPanel from '@/components/agent/ToolsPanel.vue'
 import { api } from '@/api'
-import { agentApi, type AgentSettings } from '@/api/agent'
+import { agentApi, defaultCompanionSettings, type AgentSettings } from '@/api/agent'
 import type { KnowledgeBase, ModelProfile } from '@/types'
 
 const sections = [
@@ -116,6 +118,7 @@ const dirty = computed(() => !!settings.value && (JSON.stringify(settings.value)
 
 function applySettings(value: AgentSettings) {
   value.examples = value.examples || []
+  value.companion = { ...defaultCompanionSettings(), ...(value.companion || {}) }
   settings.value = value
   snapshot.value = JSON.stringify(value)
 }

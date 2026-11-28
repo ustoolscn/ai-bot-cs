@@ -42,6 +42,58 @@
             </div>
             <el-button :icon="Plus" @click="form.settings.examples.push({ question: '', answer: '' })">添加示例</el-button>
           </div>
+          <div v-if="companion" class="settings-card">
+            <h3>强人设与社群陪伴引擎</h3>
+            <div class="setting-row"><div><strong>启用拟人陪伴与动态导演层</strong><span>实时感知情绪、匹配用户人格画像、随关系阶段调整语气</span></div><el-switch v-model="companion.enabled" /></div>
+            <template v-if="companion.enabled">
+              <el-form label-position="top" style="margin-top: 12px">
+                <el-form-item label="角色背景故事 / 日常身份">
+                  <el-input v-model="companion.backstory" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" maxlength="1500" show-word-limit placeholder="例如：常年泡在群里写 Go 和折腾各种 AI 模型的老群友，懂技术也爱凑热闹" />
+                </el-form-item>
+                <div class="two-col-inline">
+                  <el-form-item label="性格关键词（回车添加）">
+                    <el-select v-model="companion.personalityTraits" multiple filterable allow-create default-first-option placeholder="例如：真诚、幽默、懂行" style="width: 100%" />
+                  </el-form-item>
+                  <el-form-item label="常用口癖 / 语气词（回车添加）">
+                    <el-select v-model="companion.catchphrases" multiple filterable allow-create default-first-option placeholder="例如：哈哈、绝了、稳" style="width: 100%" />
+                  </el-form-item>
+                </div>
+              </el-form>
+              <div class="setting-row"><div><strong>幽默度</strong><span>越高越爱接梗开玩笑；负面情绪或故障排障时自动压制</span></div><el-slider v-model="companion.humorLevel" :min="0" :max="100" style="width: 220px" /></div>
+              <div class="setting-row"><div><strong>温暖度</strong><span>越高越有人情味和生活感</span></div><el-slider v-model="companion.warmthLevel" :min="0" :max="100" style="width: 220px" /></div>
+              <div class="setting-row"><div><strong>表情策略</strong></div>
+                <el-select v-model="companion.emojiPolicy" style="width: 180px">
+                  <el-option value="off" label="禁止表情" />
+                  <el-option value="minimal" label="极简克制" />
+                  <el-option value="natural" label="自然适量" />
+                  <el-option value="expressive" label="活泼丰富" />
+                </el-select>
+              </div>
+              <div class="setting-row"><div><strong>实时情绪预判（小模型）</strong><span>回复前识别愤怒、反话、委屈或闲聊意图，动态切换共情优先</span></div><el-switch v-model="companion.realTimeEmotion" /></div>
+              <div class="setting-row"><div><strong>群聊无 @ 主动搭茬</strong><span>群友吐槽、聊到人设话题或冷场时自然搭一两句</span></div>
+                <el-select v-model="companion.groupChimeIn" style="width: 180px">
+                  <el-option value="off" label="关闭（仅点名/求助）" />
+                  <el-option value="restrained" label="克制（间隔≥15分钟）" />
+                  <el-option value="moderate" label="适中（推荐）" />
+                  <el-option value="active" label="活跃（更像活人群友）" />
+                </el-select>
+              </div>
+              <div v-if="companion.groupChimeIn !== 'off'" class="setting-row"><div><strong>同群搭茬冷却时间</strong></div><span><el-input-number v-model="companion.chimeInCooldownMinutes" :min="1" :max="120" /><span class="unit-label">分钟</span></span></div>
+              <div class="setting-row"><div><strong>深夜免打扰时段（北京时间）</strong><span>免打扰期间不主动搭茬，也不发主动关怀</span></div>
+                <span class="hours-range">
+                  <el-time-select v-model="companion.quietHoursStart" start="00:00" end="23:30" step="00:30" placeholder="开始" />
+                  <span class="unit-label">至</span>
+                  <el-time-select v-model="companion.quietHoursEnd" start="00:00" end="23:30" step="00:30" placeholder="结束" />
+                </span>
+              </div>
+              <div class="setting-row"><div><strong>时段作息氛围</strong><span>清晨/深夜带有轻微符合时间的聊天氛围</span></div><el-switch v-model="companion.circadianAware" /></div>
+              <div class="setting-row"><div><strong>动态打字延迟与语义拆条</strong><span>允许把反应和正文拆成自然短句，按字数模拟打字停顿</span></div><el-switch v-model="companion.dynamicTypingDelay" /></div>
+              <div class="setting-row"><div><strong>私聊发送“正在输入”状态</strong><span>需 QQ 机器人已开通输入状态权限</span></div><el-switch v-model="companion.typingIndicator" /></div>
+              <div class="setting-row"><div><strong>慢通道反思整理周期</strong><span>每积累多少轮对话触发一次深度整合与人格画像更新</span></div><span><el-input-number v-model="companion.reflectionIntervalTurns" :min="3" :max="30" /><span class="unit-label">轮</span></span></div>
+              <div class="setting-row"><div><strong>克制主动关怀</strong><span>对重要待跟进事件，在经过防打扰自检后主动发去关心</span></div><el-switch v-model="companion.proactiveEnabled" /></div>
+              <div v-if="companion.proactiveEnabled" class="setting-row"><div><strong>每人每日主动触达上限</strong></div><span><el-input-number v-model="companion.proactiveDailyBudget" :min="1" :max="10" /><span class="unit-label">条/天</span></span></div>
+            </template>
+          </div>
         </section>
 
         <section id="timing" class="settings-section">
@@ -158,7 +210,7 @@ import EmptyState from '@/components/EmptyState.vue'
 import LiveDataPanel from '@/components/agent/LiveDataPanel.vue'
 import StatusStylePicker from '@/components/agent/StatusStylePicker.vue'
 import { api } from '@/api'
-import { agentApi, type Skill, type StatusImageStyle } from '@/api/agent'
+import { agentApi, defaultCompanionSettings, type Skill, type StatusImageStyle } from '@/api/agent'
 import { botServices, type BotService, type HandoffHours } from '@/api/support'
 import type { KnowledgeBase, ModelProfile } from '@/types'
 
@@ -203,6 +255,7 @@ const chatModels = computed(() => models.value.filter(m => m.kind === 'chat'))
 const decisionCandidates = computed(() => [...models.value.filter(m => m.kind === 'decision'), ...chatModels.value])
 const imageModels = computed(() => models.value.filter(m => m.kind === 'image'))
 const live = computed(() => form.value!.settings.liveData)
+const companion = computed(() => form.value!.settings.companion)
 // 旧配置没有样式字段：填过状态页地址的沿用截网页，否则默认简报
 const statusStyle = computed({
   get: () => live.value.statusImageStyle || (live.value.statusPageUrl ? 'page' : 'brief'),
@@ -218,6 +271,12 @@ const liveBlockedReason = computed(() => {
 
 function apply(value: BotService) {
   value.settings.examples = value.settings.examples || []
+  value.settings.companion = {
+    ...defaultCompanionSettings(),
+    ...(value.settings.companion || {}),
+    personalityTraits: value.settings.companion?.personalityTraits || defaultCompanionSettings().personalityTraits,
+    catchphrases: value.settings.companion?.catchphrases || [],
+  }
   value.settings.replyQuietSeconds = value.settings.replyQuietSeconds || 6
   value.settings.replyMaxWaitSeconds = value.settings.replyMaxWaitSeconds || 20
   value.settings.liveData.statusPageUrl = value.settings.liveData.statusPageUrl || ''
@@ -245,7 +304,7 @@ async function load() {
       apply({
         id: '', name: '', instructions: '', chatProfileId: '', imageProfileId: '', simpleProfileId: '', decisionProfileId: '',
         settings: {
-          stylePrompt: defaults.stylePrompt, examples: structuredClone(defaults.examples || []), toolsEnabled: defaults.toolsEnabled, maxToolSteps: defaults.maxToolSteps,
+          stylePrompt: defaults.stylePrompt, examples: structuredClone(defaults.examples || []), companion: structuredClone(defaults.companion || defaultCompanionSettings()), toolsEnabled: defaults.toolsEnabled, maxToolSteps: defaults.maxToolSteps,
           skillIds: null, toolNames: null, knowledgeBaseIds: null, evaluationEnabled: defaults.evaluationEnabled, staffMiningEnabled: defaults.staffMiningEnabled,
           autoPublishStaff: defaults.autoPublishStaff, autoPublishMinConfidence: defaults.autoPublishMinConfidence, learningKnowledgeBaseId: defaults.learningKnowledgeBaseId,
           handoffPauseMinutes: defaults.handoffPauseMinutes, replyQuietSeconds: defaults.replyQuietSeconds || 6, replyMaxWaitSeconds: defaults.replyMaxWaitSeconds || 20, liveData: { ...defaults.liveData, enabled: false, baseUrl: '', hasAccessToken: false, userId: '', statusPageUrl: '' },
@@ -335,6 +394,8 @@ onBeforeUnmount(() => { observer?.disconnect(); window.removeEventListener('befo
 .token-field { display: flex; align-items: center; gap: 12px; }
 .token-field .el-input { width: 280px; }
 .setting-row p { margin: 2px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.two-col-inline { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 720px) { .two-col-inline { grid-template-columns: 1fr; } }
 .hours-range { display: inline-flex; align-items: center; gap: 8px; }
 .hours-range .el-select { width: 112px; }
 .hours-row-enter-active, .hours-row-leave-active { transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }

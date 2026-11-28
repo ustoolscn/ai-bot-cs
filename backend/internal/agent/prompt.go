@@ -6,10 +6,26 @@ import (
 	"time"
 )
 
-// Memory is a long-term fact about a user.
+// Memory is a long-term fact, preference, issue, or shared experience about a user.
 type Memory struct {
-	Kind    string
-	Content string
+	ID          string  `json:"id,omitempty"`
+	Kind        string  `json:"kind"`
+	Content     string  `json:"content"`
+	Importance  int     `json:"importance,omitempty"`
+	EmotionTag  string  `json:"emotionTag,omitempty"`
+	SourceWhere string  `json:"sourceWhere,omitempty"`
+	EventDate   string  `json:"eventDate,omitempty"`
+	Resolved    bool    `json:"resolved,omitempty"`
+	Score       float64 `json:"score,omitempty"`
+}
+
+// GroupMemoryItem is a recent shared topic, event, or meme in a group.
+type GroupMemoryItem struct {
+	ID         string `json:"id,omitempty"`
+	Kind       string `json:"kind"`
+	Content    string `json:"content"`
+	Importance int    `json:"importance,omitempty"`
+	EventDate  string `json:"eventDate,omitempty"`
 }
 
 // SkillPrompt is the prompt-relevant part of a skill.
@@ -22,11 +38,14 @@ type PromptInput struct {
 	Settings           Settings
 	ConversationType   string
 	BusinessPrompt     string // per-conversation system prompt
+	DirectorNotes      string // dynamic companion / persona / emotion / relationship instructions
 	SenderName         string
 	SenderIsStaff      bool
 	Now                time.Time
 	Summary            string
 	Memories           []Memory
+	GroupMemories      []GroupMemoryItem
+	GroupVibe          string
 	Knowledge          string
 	LiveSnapshot       string
 	Skills             []SkillPrompt
@@ -86,6 +105,26 @@ func BuildSystemPrompt(in PromptInput) []string {
 		out = append(out, "网站实时信息（自动同步，仅在相关时使用）：\n"+in.LiveSnapshot)
 	}
 
+	if dn := strings.TrimSpace(in.DirectorNotes); dn != "" {
+		out = append(out, dn)
+	}
+
+	if in.ConversationType == "group" && (len(in.GroupMemories) > 0 || strings.TrimSpace(in.GroupVibe) != "") {
+		var gm strings.Builder
+		gm.WriteString("本群近期氛围与共同记忆（供你自然融入群聊语境，不要生硬背诵）：")
+		if v := strings.TrimSpace(in.GroupVibe); v != "" {
+			fmt.Fprintf(&gm, "\n- 当前群氛围：%s", v)
+		}
+		for _, item := range in.GroupMemories {
+			prefix := ""
+			if item.EventDate != "" {
+				prefix = item.EventDate + " · "
+			}
+			fmt.Fprintf(&gm, "\n- %s%s", prefix, item.Content)
+		}
+		out = append(out, gm.String())
+	}
+
 	var u strings.Builder
 	if in.SenderName != "" {
 		fmt.Fprintf(&u, "当前提问用户：%s。", in.SenderName)
@@ -94,9 +133,40 @@ func BuildSystemPrompt(in PromptInput) []string {
 		u.WriteString("该用户是平台官方客服/管理员。")
 	}
 	if len(in.Memories) > 0 {
-		u.WriteString("\n关于这位用户你已知的信息（来自以往对话，可能过时，必要时向用户确认）：")
+		u.WriteString("\n关于这位群友你记住的信息（跨群/私聊共享，可能随时间变化；像朋友自然想起一样带出，不要说“根据记录”）：")
 		for _, m := range in.Memories {
-			fmt.Fprintf(&u, "\n- %s", m.Content)
+			if m.Kind == "profile" {
+				fmt.Fprintf(&u, "\n- %s", m.Content)
+				continue
+			}
+			var tags []string
+			switch m.Kind {
+			case "episode":
+				tags = append(tags, "共同经历")
+			case "inside_joke":
+				tags = append(tags, "老梗默契")
+			case "social":
+				tags = append(tags, "社交关系")
+			case "preference":
+				tags = append(tags, "偏好")
+			case "issue":
+				if m.Resolved {
+					tags = append(tags, "已解决旧问题")
+				} else {
+					tags = append(tags, "待关注问题")
+				}
+			}
+			if m.EmotionTag != "" {
+				tags = append(tags, m.EmotionTag)
+			}
+			if m.SourceWhere != "" {
+				tags = append(tags, m.SourceWhere)
+			}
+			if len(tags) > 0 {
+				fmt.Fprintf(&u, "\n- [%s] %s", strings.Join(tags, "/"), m.Content)
+			} else {
+				fmt.Fprintf(&u, "\n- %s", m.Content)
+			}
 		}
 	}
 	if in.Summary != "" {
@@ -127,19 +197,62 @@ const RewritePrompt = `你负责把客服对话中用户的最新一句话改写
 const SummaryPrompt = `你负责维护客服对话的滚动摘要。根据“已有摘要”和“新增对话”，输出更新后的摘要。
 要求：200 字以内；保留用户的问题、已确认的关键信息（模型、分组、报错、订单等）、已给出的结论和尚未解决的事项；去掉寒暄。只输出摘要正文。`
 
-// EvaluationPrompt asks the auxiliary model to analyse one completed turn.
-const EvaluationPrompt = `你是客服质检与记忆整理助手。阅读下面一轮客服对话，输出 JSON（不要输出其它内容）：
+// EvaluationPrompt asks the auxiliary model to analyse one completed turn (fast path).
+const EvaluationPrompt = `你是客服质检与记忆整理助手。阅读下面一轮对话，输出 JSON（不要输出其它内容）：
 {
-  "answered": true/false,             // 客服的回答是否实质解决了用户本轮问题（寒暄视为 true）
-  "knowledge_gap": "",                // 若因缺少资料没能回答，写出一个概括后的标准问题，否则为空字符串
-  "previous_feedback": "none",        // 用户本轮发言是否表明“上一条客服回答”没帮上忙：helpful / unhelpful / none
-  "too_long": true/false,             // 客服回答是否明显啰嗦
-  "profile": "以已有档案为基础整体改写，保留仍有效且由用户确认的身份与偏好，上限约2000 token，不推断敏感属性；没有变化沿用原文",
-  "memories": [                       // 关于该用户、值得长期记住的事实（最多 3 条，没有则为空数组；每项另含 action=add/update/delete/unchanged，更新删除须引用已有事件 id。eventAt 为用户明确提及的事件时间 RFC3339，未知留空。禁止保存手机号、证件号、令牌、密码）
-    {"kind": "fact|preference|issue", "content": "一句话描述", "confidence": 0.0-1.0}
+  "answered": true/false,             // 本轮回应是否妥当或解决了用户问题（日常闲聊/搭茬视为 true）
+  "knowledge_gap": "",                // 若因缺少业务资料没能回答，写出概括后的标准问题，否则为空字符串
+  "previous_feedback": "none",        // 用户本轮发言是否表明“上一条AI回答”没帮上忙：helpful / unhelpful / none
+  "too_long": true/false,             // 回复是否明显啰嗦
+  "mood_delta": "neutral",            // 本轮结束时用户的情绪/满意度倾向：positive / neutral / negative
+  "memories": [                       // 值得跨会话长期记住的原子记忆（最多 3 条，没有则为空数组）
+    {
+      "action": "add|update|resolve|delete",
+      "id": "更新、解决或删除时填已有记忆id",
+      "kind": "fact|preference|issue|episode|inside_joke|social",
+      "content": "一句话描述（40字以内最好）",
+      "importance": 5,                // 1-10 重要程度（普通闲聊3-4，稳定偏好6-7，重要经历/核心故障8-9）
+      "emotionTag": "",               // 如 开心/委屈/吐槽/感动，无则留空
+      "eventAt": "",                  // 用户明确提及的事件时间 RFC3339，未知留空
+      "confidence": 0.0-1.0
+    }
+  ],
+  "proactive_candidate": null         // 可选：仅当用户明确提到近期将要发生的个人重要事件或待跟进事项（如“明天答辩/今晚发版/等下看结果”）时填 {"kind":"event_care|issue_followup","topic":"一句话事由","delayHours":4}，否则填 null
+}
+规则：只记录对以后互动有价值的事实、偏好、共同经历（episode）、默契老梗（inside_joke）、社交关系（social）或待解决事项（issue）；若旧 issue 在本轮已确认解决，使用 action="resolve" 并引用其 id；严禁保存手机号、证件号、密钥、密码、令牌或一次性无意义寒暄。`
+
+// ReflectionPrompt asks the auxiliary model to consolidate a user's long-term
+// memories, refine their narrative profile, and incrementally update persona traits.
+const ReflectionPrompt = `你是人物记忆巩固与画像反思专家。阅读关于同一个人的“已有档案”“已有结构化画像”“互动数据”和“多条零散记忆”，进行慢思考整合，输出 JSON（不要输出其它内容）：
+{
+  "profile": "整合去重后的跨会话人物档案（自然语言，保留核心身份、习惯、经历、相处模式，不超过 1200 字，无敏感隐私；若无明显新信息可保持原样）",
+  "nicknames": ["可选：仅在互动中自然形成的亲切称呼，最多 3 个，没有则为空数组"],
+  "archive_ids": ["过时、重复、已解决且低价值的琐碎记忆 id（用于自然遗忘归档）"],
+  "merged_memories": [
+    {"kind": "fact|preference|issue|episode|inside_joke|social", "content": "由多条碎片提炼出的高阶洞察或长期经历", "importance": 7, "confidence": 0.85}
+  ],
+  "persona": {}
+}
+`
+
+// GroupDigestPrompt asks the auxiliary model to summarize recent group chat vibes and shared topics.
+const GroupDigestPrompt = `你是社群群聊记忆整理助手。阅读最近一段时间的群聊记录与已有群记忆，提炼出本群近期最重要的 1～3 条公共情景记忆和当前群氛围，输出 JSON（不要输出其它内容）：
+{
+  "group_vibe": "一句话描述当前群气氛（如：晚上大家都在热烈折腾新模型，氛围轻松）",
+  "memories": [
+    {"kind": "topic|event|meme|incident", "content": "一句话概括群里最近发生的共同话题、梗或大事", "importance": 6, "ttlDays": 7}
   ]
 }
-记忆只记录用户本人相关且以后有用的信息（如使用的分组/模型、接入方式、反复遇到的问题、沟通偏好），不要记录密钥、密码、手机号等敏感信息，不要记录一次性的寒暄。`
+规则：不记录个人隐私、密钥或无意义刷屏；如无值得沉淀的话题，memories 返回空数组。`
+
+// ProactiveGatePrompt decides whether a scheduled follow-up message is natural and non-intrusive right now.
+const ProactiveGatePrompt = `你是社群防打扰自检器。判断现在主动向用户发一条关怀/跟进消息是否自然、不突兀、不打扰。
+阅读“计划事由”“用户近期记忆与情绪”“最近对话记录”和“机器人人设”，输出 JSON（不要输出其它内容）：
+{
+  "shouldSend": true/false,
+  "reason": "一句话说明原因",
+  "draft": "若 shouldSend 为 true，写一句像真人朋友一样轻松自然、低压力的短消息（1～2 句，35 字以内，不带客服腔）"
+}`
 
 // StaffMiningPrompt asks a model to turn a staff answer into an FAQ candidate.
 const StaffMiningPrompt = `下面是一段 QQ 群聊记录，最后一条是官方客服的发言。

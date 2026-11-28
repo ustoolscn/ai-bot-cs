@@ -3,8 +3,10 @@
 package agent
 
 import (
+	"hash/fnv"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -415,4 +417,86 @@ func ExtractJSON(s string) string {
 		return ""
 	}
 	return s[i : j+1]
+}
+
+// SplitSemanticReply splits text first by explicit semantic break markers (`|||`)
+// and then delegates overly long chunks to SplitReply, respecting maxParts.
+func SplitSemanticReply(s string, target, maxParts int) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	if maxParts <= 1 {
+		return []string{strings.ReplaceAll(s, "|||", "\n")}
+	}
+	if !strings.Contains(s, "|||") {
+		return SplitReply(s, target, maxParts)
+	}
+	rawSegments := strings.Split(s, "|||")
+	var parts []string
+	for _, seg := range rawSegments {
+		seg = strings.TrimSpace(seg)
+		if seg == "" {
+			continue
+		}
+		if target > 0 && utf8.RuneCountInString(seg) > target {
+			sub := SplitReply(seg, target, maxParts)
+			parts = append(parts, sub...)
+		} else {
+			parts = append(parts, seg)
+		}
+	}
+	if len(parts) == 0 {
+		return []string{strings.TrimSpace(strings.ReplaceAll(s, "|||", ""))}
+	}
+	if len(parts) > maxParts {
+		parts = append(parts[:maxParts-1], strings.Join(parts[maxParts-1:], "\n"))
+	}
+	return parts
+}
+
+// ReplyDelays computes cumulative delivery offsets for multi-part replies.
+// When dynamic is false, it preserves the fixed 1500ms step; when dynamic is true,
+// it simulates human typing duration based on each subsequent chunk's length while
+// respecting remaining deadline headroom.
+func ReplyDelays(parts []string, dynamic bool, remaining time.Duration) []time.Duration {
+	if len(parts) == 0 {
+		return nil
+	}
+	offsets := make([]time.Duration, len(parts))
+	if !dynamic {
+		for i := range parts {
+			offsets[i] = time.Duration(i) * 1500 * time.Millisecond
+		}
+		return offsets
+	}
+	var cumulative time.Duration
+	for i := 1; i < len(parts); i++ {
+		runes := utf8.RuneCountInString(strings.TrimSpace(parts[i]))
+		h := fnv.New32a()
+		_, _ = h.Write([]byte(parts[i]))
+		jitter := time.Duration(int(h.Sum32()%401)-150) * time.Millisecond // -150ms .. +250ms
+		step := 700*time.Millisecond + time.Duration(runes)*45*time.Millisecond + jitter
+		if step < 700*time.Millisecond {
+			step = 700 * time.Millisecond
+		}
+		if step > 2800*time.Millisecond {
+			step = 2800 * time.Millisecond
+		}
+		cumulative += step
+		offsets[i] = cumulative
+	}
+	if remaining > 0 {
+		budget := remaining - 10*time.Second
+		if budget < 0 {
+			budget = 0
+		}
+		if cumulative > budget && cumulative > 0 {
+			scale := float64(budget) / float64(cumulative)
+			for i := 1; i < len(offsets); i++ {
+				offsets[i] = time.Duration(float64(offsets[i]) * scale)
+			}
+		}
+	}
+	return offsets
 }

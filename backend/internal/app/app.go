@@ -199,6 +199,18 @@ func (a *App) Router() http.Handler {
 	auth.POST("/memories", a.createMemory)
 	auth.PUT("/memories/:id", a.updateMemory)
 	auth.DELETE("/memories/:id", a.deleteMemory)
+	auth.GET("/subjects", a.listSubjects)
+	auth.GET("/subjects/:id", a.getSubject)
+	auth.PUT("/subjects/:id", a.updateSubject)
+	auth.DELETE("/subjects/:id", a.deleteSubject)
+	auth.POST("/subjects/merge", a.mergeSubjectsAPI)
+	auth.POST("/subjects/:id/unlink", a.unlinkSubjectAPI)
+	auth.POST("/subjects/:id/reflect", a.triggerSubjectReflectionAPI)
+	auth.GET("/conversations/:id/group-memories", a.listGroupMemoriesAPI)
+	auth.POST("/conversations/:id/group-memories/digest", a.triggerGroupDigestAPI)
+	auth.DELETE("/group-memories/:id", a.deleteGroupMemoryAPI)
+	auth.GET("/proactive-triggers", a.listProactiveTriggersAPI)
+	auth.DELETE("/proactive-triggers/:id", a.cancelProactiveTriggerAPI)
 	auth.GET("/handoffs", a.listHandoffs)
 	auth.POST("/handoffs/:id/claim", a.claimHandoff)
 	auth.POST("/handoffs/:id/resolve", a.resolveHandoff)
@@ -935,6 +947,7 @@ func (a *App) getMessage(c *gin.Context) {
 	}
 	decorateMessageParts(msg)
 	runs, _ := a.db.Query(c, `SELECT r.id::text,r.status,r.context_messages AS "contextMessages",r.rewritten_query AS "rewrittenQuery",r.steps,r.evaluation,r.retrieved_chunks AS "retrievedChunks",
+		r.perception,r.recalled_memories AS "recalledMemories",r.director_notes AS "directorNotes",
 		r.context_latency_ms AS "contextLatencyMs",r.retrieval_latency_ms AS "retrievalLatencyMs",r.error,r.started_at AS "startedAt",r.completed_at AS "completedAt",
 		COALESCE(json_agg(json_build_object('kind',mc.kind,'profileName',COALESCE(mp.name,mp.model,''),'model',COALESCE(mp.model,''),'inputTokens',mc.input_tokens,'outputTokens',mc.output_tokens,'cachedInputTokens',mc.cached_input_tokens,'cacheWriteTokens',mc.cache_write_tokens,'cacheHitRate',coalesce(mc.cached_input_tokens::float8/nullif(mc.input_tokens,0),0),'images',mc.images,'estimatedCost',mc.cost,'latencyMs',mc.latency_ms,'error',mc.error) ORDER BY mc.created_at) FILTER(WHERE mc.id IS NOT NULL),'[]') AS calls
 	FROM agent_runs r LEFT JOIN priced_model_calls mc ON mc.agent_run_id=r.id LEFT JOIN model_profiles mp ON mp.id=mc.profile_id
@@ -1283,6 +1296,19 @@ func (a *App) persistInbound(ctx context.Context, botID string, env qq.Envelope,
 		_, err = tx.Exec(ctx, `INSERT INTO conversation_members(conversation_id,platform_user_id,display_name,active,last_seen_at,qq_avatar,qq_union_id) VALUES($1,$2,$3,true,$4,COALESCE($5::jsonb#>>'{d,author,avatar}',''),COALESCE($5::jsonb#>>'{d,author,union_openid}','')) ON CONFLICT(conversation_id,platform_user_id) DO UPDATE SET qq_avatar=COALESCE(NULLIF(EXCLUDED.qq_avatar,''),conversation_members.qq_avatar),qq_union_id=COALESCE(NULLIF(EXCLUDED.qq_union_id,''),conversation_members.qq_union_id),display_name=CASE WHEN EXCLUDED.display_name<>'' THEN EXCLUDED.display_name ELSE conversation_members.display_name END,active=true,membership_updated_at=clock_timestamp(),last_seen_at=EXCLUDED.last_seen_at`, cid, msg.SenderID, msg.SenderName, msg.EventTime, string(msg.Raw))
 		if err != nil {
 			return err
+		}
+		var rawUnion struct {
+			D struct {
+				Author struct {
+					UnionOpenID string `json:"union_openid"`
+				} `json:"author"`
+			} `json:"d"`
+		}
+		_ = json.Unmarshal(msg.Raw, &rawUnion)
+		if strings.TrimSpace(rawUnion.D.Author.UnionOpenID) != "" {
+			if _, err = a.resolveSubjectTx(ctx, tx, msg.BotID, cid, msg.ConversationType, msg.SenderID, msg.SenderName, rawUnion.D.Author.UnionOpenID); err != nil {
+				return err
+			}
 		}
 	}
 	parts, _ := json.Marshal(msg.Parts)

@@ -1,11 +1,12 @@
 import { request } from './client'
-import type { AgentExample, LiveData, LiveDataSettings } from './agent'
+import { defaultCompanionSettings, type AgentExample, type CompanionSettings, type LiveData, type LiveDataSettings } from './agent'
 import { mockLiveData } from '@/mock/agent'
 
 /** 每个 AI 客服自己的设置。null 表示沿用（技能/工具：全部可用；知识库：跟随群绑定）。 */
 export interface ServiceSettings {
   stylePrompt: string
   examples: AgentExample[]
+  companion?: CompanionSettings
   toolsEnabled: boolean
   maxToolSteps: number
   skillIds: string[] | null
@@ -38,7 +39,7 @@ export interface BotService {
 const mockService: BotService = {
   id: 'svc-demo', name: '网站 A 客服', instructions: '回答网站 A 的接入、价格和分组问题', chatProfileId: '', simpleProfileId: '', decisionProfileId: '',
   settings: {
-    stylePrompt: '像熟练的真人客服一样说话，先给结论，一般 1～3 句话。', examples: [], toolsEnabled: true, maxToolSteps: 4, skillIds: null, toolNames: null, knowledgeBaseIds: null,
+    stylePrompt: '像熟练的真人客服一样说话，先给结论，一般 1～3 句话。', examples: [], companion: defaultCompanionSettings(), toolsEnabled: true, maxToolSteps: 4, skillIds: null, toolNames: null, knowledgeBaseIds: null,
     evaluationEnabled: true, staffMiningEnabled: true, autoPublishStaff: false, autoPublishMinConfidence: 0.85, learningKnowledgeBaseId: '', handoffPauseMinutes: 30, replyQuietSeconds: 6, replyMaxWaitSeconds: 20,
     liveData: { enabled: true, baseUrl: 'https://example.com', hasAccessToken: false, userId: '', injectSnapshot: true, priceNote: '', statusPageUrl: '' },
   },

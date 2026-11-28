@@ -4,6 +4,54 @@ import { mockMemories, mockMemoryDirectory, mockProfile } from '@/mock/data'
 
 export interface AgentExample { question: string; answer: string }
 export type StatusImageStyle = 'brief' | 'table' | 'heatmap' | 'night' | 'page' | 'off'
+export type EmojiPolicy = 'off' | 'minimal' | 'natural' | 'expressive'
+export type GroupChimeInLevel = 'off' | 'restrained' | 'moderate' | 'active'
+export type RelationshipStage = 'stranger' | 'acquaintance' | 'familiar' | 'close_friend'
+
+export interface CompanionSettings {
+  enabled: boolean
+  backstory: string
+  personalityTraits: string[]
+  catchphrases: string[]
+  humorLevel: number
+  warmthLevel: number
+  emojiPolicy: EmojiPolicy
+  circadianAware: boolean
+  realTimeEmotion: boolean
+  groupChimeIn: GroupChimeInLevel
+  chimeInCooldownMinutes: number
+  quietHoursStart: string
+  quietHoursEnd: string
+  reflectionIntervalTurns: number
+  proactiveEnabled: boolean
+  proactiveDailyBudget: number
+  typingIndicator: boolean
+  dynamicTypingDelay: boolean
+}
+
+export function defaultCompanionSettings(): CompanionSettings {
+  return {
+    enabled: true,
+    backstory: '',
+    personalityTraits: ['真诚', '幽默', '懂行', '不端着'],
+    catchphrases: [],
+    humorLevel: 45,
+    warmthLevel: 70,
+    emojiPolicy: 'natural',
+    circadianAware: true,
+    realTimeEmotion: true,
+    groupChimeIn: 'moderate',
+    chimeInCooldownMinutes: 8,
+    quietHoursStart: '01:00',
+    quietHoursEnd: '08:00',
+    reflectionIntervalTurns: 6,
+    proactiveEnabled: true,
+    proactiveDailyBudget: 1,
+    typingIndicator: false,
+    dynamicTypingDelay: true,
+  }
+}
+
 export interface LiveDataSettings {
   enabled: boolean
   baseUrl: string
@@ -18,6 +66,7 @@ export interface AgentSettings {
   personaName: string
   stylePrompt: string
   examples: AgentExample[]
+  companion?: CompanionSettings
   groupReplyChars: number
   privateReplyChars: number
   splitLongReplies: boolean
@@ -137,8 +186,116 @@ export interface Candidate { id: string; materials?: Material[]; knowledgeBaseId
 export interface Entry { id: string; materials?: Material[]; knowledgeBaseId: string; knowledgeBaseName: string; question: string; aliases: string[]; answer: string; source: string; status: string; indexStatus: string; indexError: string; version: number; hitCount: number; helpfulCount: number; unhelpfulCount: number; updatedAt: string }
 export interface Gap { id: string; question: string; occurrences: number; status: string; firstSeenAt: string; lastSeenAt: string; knowledgeBaseId?: string | null; knowledgeBaseName?: string }
 export interface Feedback { id: string; source: string; rating: string; comment: string; correctedAnswer: string; createdAt: string; answer: string; question: string; messageId?: string; conversationName: string; read?: boolean; knowledgeBaseId?: string | null; knowledgeBaseName?: string }
-export interface MemoryMember { botId: string; botName: string; conversationId: string; conversationName: string; conversationType: string; userId: string; displayName: string; count: number }
-export interface Memory { id: string; botId: string; botName: string; userId: string; displayName: string; kind: string; content: string; hasEmbedding: boolean; confidence: number; pinned: boolean; source: string; updatedAt: string; lastUsedAt?: string; eventAt?: string }
+export interface MemoryMember { botId: string; botName: string; conversationId: string; conversationName: string; conversationType: string; userId: string; displayName: string; subjectId?: string; count: number }
+export interface Memory {
+  id: string
+  subjectId?: string
+  botId: string
+  botName: string
+  conversationId?: string
+  sourceConversationName?: string
+  sourceBotName?: string
+  userId: string
+  displayName: string
+  kind: string
+  content: string
+  hasEmbedding: boolean
+  confidence: number
+  importance?: number
+  emotionTag?: string
+  accessCount?: number
+  resolvedAt?: string | null
+  pinned: boolean
+  source: string
+  updatedAt: string
+  lastUsedAt?: string
+  eventAt?: string
+}
+export interface IdentityLink {
+  id: string
+  botId?: string | null
+  botName: string
+  identityType: 'qq_union_id' | 'member_openid' | 'user_openid' | string
+  identityValue: string
+  displayName: string
+  conversationId?: string | null
+  conversationName?: string
+}
+export interface UserMoodState {
+  currentMood?: string
+  intensity?: number
+  valence?: number
+  negativeStreak?: number
+  updatedAt?: string
+}
+export interface SubjectSummary {
+  id: string
+  displayName: string
+  nicknames: string[]
+  profileContent: string
+  persona?: Persona | null
+  familiarity: number
+  affinity: number
+  trust: number
+  relationshipStage: RelationshipStage
+  interactionTurns: number
+  interactionDays: number
+  turnsSinceReflection: number
+  lastReflectedAt?: string | null
+  lastInteractionAt?: string | null
+  moodState?: UserMoodState
+  updatedAt?: string
+  memoryCount: number
+  links: IdentityLink[]
+}
+export interface GroupMemoryItem {
+  id: string
+  kind: string
+  content: string
+  importance: number
+  expiresAt?: string | null
+  createdAt?: string
+  updatedAt?: string
+}
+export interface ProactiveTrigger {
+  id: string
+  subjectId?: string | null
+  subjectName?: string
+  conversationId: string
+  conversationName: string
+  botName: string
+  kind: string
+  topic: string
+  scheduledAt: string
+  status: 'pending' | 'sent' | 'skipped' | 'failed' | 'cancelled' | string
+  skipReason?: string
+  sentMessageId?: string | null
+  createdAt: string
+}
+export interface TurnPerception {
+  replyMode?: string
+  socialOnly?: boolean
+  needsWebSearch?: boolean
+  isChimeIn?: boolean
+  userMood?: string
+  moodIntensity?: number
+  valence?: number
+  sarcasm?: boolean
+  needEmpathyFirst?: boolean
+  memoryFocus?: string
+  topicHint?: string
+  suggestHandoff?: boolean
+}
+export interface RecalledMemoryItem {
+  id?: string
+  kind: string
+  content: string
+  importance?: number
+  emotionTag?: string
+  sourceWhere?: string
+  resolved?: boolean
+  score?: number
+}
 /** 一个人格维度：0-100 分，confidence 0-1，evidence 是来自对话的一句依据；还看不出来时为 null */
 export type PersonaTrait = { score: number; confidence: number; evidence?: string } | null
 export interface Persona {
@@ -177,7 +334,14 @@ export interface MessageAgentDetail {
   senderName?: string
   senderIsStaff?: boolean
   eventAt?: string
-  agentRuns?: Array<{ rewrittenQuery?: string; steps?: AgentStep[]; evaluation?: Record<string, unknown> }>
+  agentRuns?: Array<{
+    rewrittenQuery?: string
+    steps?: AgentStep[]
+    evaluation?: Record<string, unknown>
+    perception?: TurnPerception
+    recalledMemories?: RecalledMemoryItem[]
+    directorNotes?: string
+  }>
   feedback?: Array<{ id: string; source: string; rating: string; comment: string; correctedAnswer: string; createdAt: string }>
   replies?: Array<{ id: string; eventType: string; content: string; status: string; eventAt: string }>
 }
@@ -219,8 +383,8 @@ export const agentApi = {
   },
   memories: {
     directory: () => request<MemoryMember[]>({ url: '/memories/directory' }, mockMemoryDirectory),
-    list: (params: { userId?: string; botId?: string; conversationId?: string; q?: string }) => request<Memory[]>({ url: '/memories', params }, mockMemories),
-    update: (id: string, data: { content: string; kind: string; pinned: boolean }) => request<{ updated: boolean }>({ method: 'PUT', url: `/memories/${id}`, data }),
+    list: (params: { subjectId?: string; userId?: string; botId?: string; conversationId?: string; q?: string }) => request<Memory[]>({ url: '/memories', params }, mockMemories),
+    update: (id: string, data: { content: string; kind: string; pinned: boolean; importance?: number; emotionTag?: string; resolved?: boolean }) => request<{ updated: boolean }>({ method: 'PUT', url: `/memories/${id}`, data }),
     remove: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/memories/${id}` }),
     profile: (conversationId: string, userId: string) => {
       const url = `/conversations/${conversationId}/user-profiles/${encodeURIComponent(userId)}`
@@ -230,6 +394,24 @@ export const agentApi = {
         clear: () => request<UserProfile>({ method: 'DELETE', url }),
       }
     },
+  },
+  subjects: {
+    list: (params: { q?: string; stage?: string; botId?: string } = {}) => request<SubjectSummary[]>({ url: '/subjects', params }, mock.mockSubjects),
+    get: (id: string) => request<SubjectSummary>({ url: `/subjects/${id}` }, mock.mockSubjects[0]),
+    update: (id: string, data: { displayName?: string; profileContent?: string; nicknames?: string[] }) => request<{ updated: boolean }>({ method: 'PUT', url: `/subjects/${id}`, data }),
+    remove: (id: string, mode?: 'clear_profile') => request<{ deleted?: boolean; cleared?: boolean }>({ method: 'DELETE', url: `/subjects/${id}`, params: mode ? { mode } : undefined }),
+    merge: (primaryId: string, secondaryId: string) => request<{ merged: boolean; subjectId: string }>({ method: 'POST', url: '/subjects/merge', data: { primaryId, secondaryId } }),
+    unlink: (id: string, linkId: string) => request<{ unlinked: boolean; newSubjectId: string }>({ method: 'POST', url: `/subjects/${id}/unlink`, data: { linkId } }),
+    reflect: (id: string) => request<{ reflected: boolean }>({ method: 'POST', url: `/subjects/${id}/reflect` }),
+  },
+  groupMemories: {
+    list: (conversationId: string) => request<{ groupVibe: string; lastDigestAt?: string; items: GroupMemoryItem[] }>({ url: `/conversations/${conversationId}/group-memories` }, mock.mockGroupMemories),
+    digest: (conversationId: string) => request<{ digested: boolean }>({ method: 'POST', url: `/conversations/${conversationId}/group-memories/digest` }),
+    remove: (id: string) => request<{ deleted: boolean }>({ method: 'DELETE', url: `/group-memories/${id}` }),
+  },
+  proactive: {
+    list: (status = 'all') => request<ProactiveTrigger[]>({ url: '/proactive-triggers', params: { status } }, mock.mockProactiveTriggers),
+    cancel: (id: string) => request<{ cancelled: boolean }>({ method: 'DELETE', url: `/proactive-triggers/${id}` }),
   },
   handoffs: {
     list: (status = 'active') => request<Handoff[]>({ url: '/handoffs', params: { status } }, status === 'active' || status === 'all' ? mock.mockHandoffs : []),

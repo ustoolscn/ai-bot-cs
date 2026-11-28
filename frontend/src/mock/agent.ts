@@ -1,5 +1,6 @@
 // 开发模式下后端不可用时的示例数据，仅用于本地预览界面。
-import type { AgentSettings, BuiltinTool, Candidate, CustomTool, Entry, EvalCase, EvalRun, Feedback, Gap, Handoff, LearningStats, LiveData, Memory, MessageAgentDetail, Skill } from '@/api/agent'
+import { defaultCompanionSettings, type AgentSettings, type BuiltinTool, type Candidate, type CustomTool, type Entry, type EvalCase, type EvalRun, type Feedback, type Gap, type GroupMemoryItem, type Handoff, type LearningStats, type LiveData, type Memory, type MessageAgentDetail, type ProactiveTrigger, type Skill, type SubjectSummary } from '@/api/agent'
+import { mockProfile } from './data'
 
 const now = Date.now()
 const ago = (minutes: number) => new Date(now - minutes * 60000).toISOString()
@@ -8,6 +9,7 @@ export const mockAgentSettings: AgentSettings = {
   personaName: '小Q',
   stylePrompt: '你是平台的在线客服，像一位熟练、友好的真人客服那样在 QQ 里聊天。\n1. 先直接给结论，一般 1～3 句话说完。\n2. 口语化、自然，不用标题和列表。',
   examples: [{ question: '充值后多久到账？', answer: '一般几秒内到账，超过 5 分钟没到把订单号发我帮你查。' }],
+  companion: defaultCompanionSettings(),
   groupReplyChars: 120,
   privateReplyChars: 300,
   splitLongReplies: true,
@@ -110,6 +112,9 @@ export const mockMessageAgentDetail: MessageAgentDetail = {
       { type: 'model', name: '第 2 次模型调用', output: '您可以在订单详情中发起退款申请…', latencyMs: 1460 },
     ],
     evaluation: { answered: true, too_long: false },
+    perception: { replyMode: 'help', userMood: '平静', moodIntensity: 0.2, valence: 0.1, memoryFocus: 'facts', topicHint: '退款申请流程' },
+    recalledMemories: [{ kind: 'preference', content: '喜欢直接看步骤结论', importance: 7, score: 0.86 }],
+    directorNotes: '【本轮表达与人设导演指令】\n- 关系阶段【熟人】：自然亲近。',
   }],
   feedback: [{ id: 'f1', source: 'admin', rating: 'good', comment: '', correctedAnswer: '', createdAt: ago(1) }],
   replies: [
@@ -117,3 +122,38 @@ export const mockMessageAgentDetail: MessageAgentDetail = {
     { id: 'r2', eventType: 'AI_RESPONSE', content: '具体步骤：打开订单 → 申请售后 → 选择七天无理由。', status: 'sent', eventAt: ago(3) },
   ],
 }
+
+export const mockSubjects: SubjectSummary[] = [
+  {
+    id: 'subj-zhouzhou',
+    displayName: '周周',
+    nicknames: ['老周'],
+    profileContent: mockProfile.content,
+    persona: mockProfile.persona,
+    familiarity: 64,
+    affinity: 72,
+    trust: 68,
+    relationshipStage: 'familiar',
+    interactionTurns: 18,
+    interactionDays: 5,
+    turnsSinceReflection: 2,
+    lastInteractionAt: ago(12),
+    moodState: { currentMood: '着急', intensity: 0.65, valence: -0.3, negativeStreak: 1, updatedAt: ago(12) },
+    memoryCount: 3,
+    links: [
+      { id: 'lnk-1', botId: 'bot-qq-service', botName: '客服小Q', identityType: 'member_openid', identityValue: 'member-zhouzhou', displayName: '周周', conversationId: 'group-1002', conversationName: '售后服务群' },
+    ],
+  },
+]
+
+export const mockGroupMemories: { groupVibe: string; lastDigestAt?: string; items: GroupMemoryItem[] } = {
+  groupVibe: '大家在讨论新模型接入和并发配置，整体气氛活跃',
+  lastDigestAt: ago(45),
+  items: [
+    { id: 'gm-1', kind: 'topic', content: '群友们下午集中讨论了绘图模型的 2K 输出参数', importance: 7, createdAt: ago(90) },
+  ],
+}
+
+export const mockProactiveTriggers: ProactiveTrigger[] = [
+  { id: 'pt-1', subjectId: 'subj-zhouzhou', subjectName: '周周', conversationId: 'group-1002', conversationName: '售后服务群', botName: '客服小Q', kind: 'event_care', topic: '今天项目上线，跟进是否顺利', scheduledAt: new Date(now + 3600000).toISOString(), status: 'pending', createdAt: ago(20) },
+]

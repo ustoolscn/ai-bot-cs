@@ -12,23 +12,72 @@ type Example struct {
 	Answer   string `json:"answer"`
 }
 
+// CompanionSettings configures the strong-persona community companion,
+// real-time emotion perception, group chime-in, and proactive outreach.
+type CompanionSettings struct {
+	Enabled                 bool     `json:"enabled"`
+	Backstory               string   `json:"backstory"`
+	PersonalityTraits       []string `json:"personalityTraits"`
+	Catchphrases            []string `json:"catchphrases"`
+	HumorLevel              int      `json:"humorLevel"`
+	WarmthLevel             int      `json:"warmthLevel"`
+	EmojiPolicy             string   `json:"emojiPolicy"`             // off | minimal | natural | expressive
+	CircadianAware          bool     `json:"circadianAware"`          // subtle morning/night tone awareness
+	RealTimeEmotion         bool     `json:"realTimeEmotion"`         // pre-reply emotion & intent perception
+	GroupChimeIn            string   `json:"groupChimeIn"`            // off | restrained | moderate | active
+	ChimeInCooldownMinutes  int      `json:"chimeInCooldownMinutes"`  // minimum gap between unprompted chime-ins
+	QuietHoursStart         string   `json:"quietHoursStart"`         // HH:MM in Asia/Shanghai
+	QuietHoursEnd           string   `json:"quietHoursEnd"`           // HH:MM in Asia/Shanghai
+	ReflectionIntervalTurns int      `json:"reflectionIntervalTurns"` // turns between slow-path user reflections
+	ProactiveEnabled        bool     `json:"proactiveEnabled"`
+	ProactiveDailyBudget    int      `json:"proactiveDailyBudget"`
+	TypingIndicator         bool     `json:"typingIndicator"`
+	DynamicTypingDelay      bool     `json:"dynamicTypingDelay"`
+}
+
+// DefaultCompanionSettings returns defaults tuned for a warm, lively,
+// knowledgeable community companion that still handles support accurately.
+func DefaultCompanionSettings() CompanionSettings {
+	return CompanionSettings{
+		Enabled:                 true,
+		Backstory:               "",
+		PersonalityTraits:       []string{"真诚", "幽默", "懂行", "不端着"},
+		Catchphrases:            nil,
+		HumorLevel:              45,
+		WarmthLevel:             70,
+		EmojiPolicy:             "natural",
+		CircadianAware:          true,
+		RealTimeEmotion:         true,
+		GroupChimeIn:            "moderate",
+		ChimeInCooldownMinutes:  8,
+		QuietHoursStart:         "01:00",
+		QuietHoursEnd:           "08:00",
+		ReflectionIntervalTurns: 6,
+		ProactiveEnabled:        true,
+		ProactiveDailyBudget:    1,
+		TypingIndicator:         false,
+		DynamicTypingDelay:      true,
+	}
+}
+
 // Settings are the global agent settings stored in system_settings.agent_settings.
 type Settings struct {
 	ToolNames        []string `json:"toolNames"`
 	SkillIDs         []string `json:"skillIds"`
 	KnowledgeBaseIDs []string `json:"knowledgeBaseIds"`
 	// Persona & style
-	PersonaName         string    `json:"personaName"`
-	StylePrompt         string    `json:"stylePrompt"`
-	Examples            []Example `json:"examples"`
-	GroupReplyChars     int       `json:"groupReplyChars"`
-	PrivateReplyChars   int       `json:"privateReplyChars"`
-	SplitLongReplies    bool      `json:"splitLongReplies"`
-	MaxReplyParts       int       `json:"maxReplyParts"`
-	SanitizeMarkdown    bool      `json:"sanitizeMarkdown"`
-	MaxOutputTokens     int       `json:"maxOutputTokens"`
-	ReplyQuietSeconds   int       `json:"replyQuietSeconds"`
-	ReplyMaxWaitSeconds int       `json:"replyMaxWaitSeconds"`
+	PersonaName         string            `json:"personaName"`
+	StylePrompt         string            `json:"stylePrompt"`
+	Examples            []Example         `json:"examples"`
+	Companion           CompanionSettings `json:"companion"`
+	GroupReplyChars     int               `json:"groupReplyChars"`
+	PrivateReplyChars   int               `json:"privateReplyChars"`
+	SplitLongReplies    bool              `json:"splitLongReplies"`
+	MaxReplyParts       int               `json:"maxReplyParts"`
+	SanitizeMarkdown    bool              `json:"sanitizeMarkdown"`
+	MaxOutputTokens     int               `json:"maxOutputTokens"`
+	ReplyQuietSeconds   int               `json:"replyQuietSeconds"`
+	ReplyMaxWaitSeconds int               `json:"replyMaxWaitSeconds"`
 	// Context & memory
 	HistoryTokenBudget int    `json:"historyTokenBudget"`
 	GroupThreadMode    bool   `json:"groupThreadMode"`
@@ -84,6 +133,7 @@ func DefaultSettings() Settings {
 		PersonaName:       "小助手",
 		ReplyQuietSeconds: 6, ReplyMaxWaitSeconds: 20,
 		StylePrompt:              DefaultStylePrompt,
+		Companion:                DefaultCompanionSettings(),
 		GroupReplyChars:          120,
 		PrivateReplyChars:        220,
 		SplitLongReplies:         true,
@@ -152,6 +202,74 @@ func (s *Settings) Normalize() {
 		s.LiveData.StatusImageStyle = "brief"
 	}
 	s.LiveData.BaseURL = strings.TrimRight(strings.TrimSpace(s.LiveData.BaseURL), "/")
+	s.Companion.Normalize()
+}
+
+// Normalize clamps ranges and populates defaults for companion settings.
+func (c *CompanionSettings) Normalize() {
+	def := DefaultCompanionSettings()
+	c.Backstory = strings.TrimSpace(c.Backstory)
+	if len([]rune(c.Backstory)) > 1500 {
+		c.Backstory = TruncateRunes(c.Backstory, 1500)
+	}
+	cleanList := func(in []string, limit int) []string {
+		if in == nil {
+			return nil
+		}
+		out := make([]string, 0, min(len(in), limit))
+		seen := map[string]bool{}
+		for _, item := range in {
+			item = strings.TrimSpace(item)
+			if item == "" || seen[item] || len([]rune(item)) > 24 {
+				continue
+			}
+			seen[item] = true
+			out = append(out, item)
+			if len(out) >= limit {
+				break
+			}
+		}
+		return out
+	}
+	c.PersonalityTraits = cleanList(c.PersonalityTraits, 12)
+	c.Catchphrases = cleanList(c.Catchphrases, 12)
+	if c.HumorLevel < 0 {
+		c.HumorLevel = 0
+	} else if c.HumorLevel > 100 {
+		c.HumorLevel = 100
+	}
+	if c.WarmthLevel < 0 {
+		c.WarmthLevel = 0
+	} else if c.WarmthLevel > 100 {
+		c.WarmthLevel = 100
+	}
+	switch c.EmojiPolicy {
+	case "off", "minimal", "natural", "expressive":
+	default:
+		c.EmojiPolicy = def.EmojiPolicy
+	}
+	switch c.GroupChimeIn {
+	case "off", "restrained", "moderate", "active":
+	default:
+		c.GroupChimeIn = def.GroupChimeIn
+	}
+	if c.ChimeInCooldownMinutes <= 0 {
+		c.ChimeInCooldownMinutes = def.ChimeInCooldownMinutes
+	} else if c.ChimeInCooldownMinutes > 120 {
+		c.ChimeInCooldownMinutes = 120
+	}
+	if c.ReflectionIntervalTurns <= 0 {
+		c.ReflectionIntervalTurns = def.ReflectionIntervalTurns
+	} else if c.ReflectionIntervalTurns > 30 {
+		c.ReflectionIntervalTurns = 30
+	}
+	if c.ProactiveDailyBudget <= 0 {
+		c.ProactiveDailyBudget = def.ProactiveDailyBudget
+	} else if c.ProactiveDailyBudget > 10 {
+		c.ProactiveDailyBudget = 10
+	}
+	c.QuietHoursStart = strings.TrimSpace(c.QuietHoursStart)
+	c.QuietHoursEnd = strings.TrimSpace(c.QuietHoursEnd)
 }
 
 // Validate checks user-supplied settings.
@@ -170,7 +288,28 @@ func (s Settings) Validate() error {
 	if len([]rune(s.StylePrompt)) > 6000 {
 		return fmt.Errorf("风格提示词过长（最多 6000 字）")
 	}
+	if len([]rune(s.Companion.Backstory)) > 1500 {
+		return fmt.Errorf("角色背景设定过长（最多 1500 字）")
+	}
+	for _, hhmm := range []string{s.Companion.QuietHoursStart, s.Companion.QuietHoursEnd} {
+		if hhmm != "" && !validHHMM(hhmm) {
+			return fmt.Errorf("免打扰时段格式须为 HH:MM")
+		}
+	}
 	return nil
+}
+
+func validHHMM(s string) bool {
+	if len(s) != 5 || s[2] != ':' {
+		return false
+	}
+	h1, h2, m1, m2 := s[0]-'0', s[1]-'0', s[3]-'0', s[4]-'0'
+	if h1 > 9 || h2 > 9 || m1 > 9 || m2 > 9 {
+		return false
+	}
+	h := int(h1)*10 + int(h2)
+	m := int(m1)*10 + int(m2)
+	return h >= 0 && h <= 23 && m >= 0 && m <= 59
 }
 
 // ReplyChars returns the target length for a conversation type.

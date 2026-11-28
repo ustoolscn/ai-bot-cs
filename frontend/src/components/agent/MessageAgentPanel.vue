@@ -22,6 +22,36 @@
       </ol>
     </section>
 
+    <section v-if="perception || run?.directorNotes || recalled.length" class="ap-section">
+      <h3>情绪感知与人设导演</h3>
+      <div v-if="perception" class="chips ap-history">
+        <el-tag v-if="perception.userMood" size="small" :type="moodTagType(perception.userMood)">情绪：{{ perception.userMood }}<template v-if="perception.moodIntensity != null"> ({{ Math.round(perception.moodIntensity * 100) }}%)</template></el-tag>
+        <el-tag v-if="perception.replyMode" size="small" effect="plain">模式：{{ replyModeText[perception.replyMode] || perception.replyMode }}</el-tag>
+        <el-tag v-if="perception.isChimeIn" size="small" type="warning" effect="plain">主动搭茬</el-tag>
+        <el-tag v-if="perception.sarcasm" size="small" type="danger" effect="plain">疑似反话</el-tag>
+        <el-tag v-if="perception.needEmpathyFirst" size="small" type="warning" effect="plain">共情优先</el-tag>
+        <el-tag v-if="perception.memoryFocus && perception.memoryFocus !== 'all'" size="small" effect="plain">聚焦：{{ focusText[perception.memoryFocus] || perception.memoryFocus }}</el-tag>
+        <el-tag v-if="perception.topicHint" size="small" type="info" effect="plain">话题：{{ perception.topicHint }}</el-tag>
+      </div>
+      <div v-if="recalled.length" class="ap-recalled">
+        <small>本轮召回记忆（{{ recalled.length }} 条）</small>
+        <ul>
+          <li v-for="(m, idx) in recalled" :key="m.id || idx">
+            <span class="ap-kind">{{ memKindText[m.kind] || m.kind }}</span>
+            <span>{{ m.content }}</span>
+            <small v-if="m.score != null" class="num">{{ (m.score * 100).toFixed(0) }}%</small>
+          </li>
+        </ul>
+      </div>
+      <div v-if="run?.directorNotes" class="ap-director">
+        <button type="button" class="ap-director-toggle" @click="showDirector = !showDirector">
+          <span>{{ showDirector ? '收起导演指令' : '查看本轮动态导演指令' }}</span>
+          <el-icon :class="{ open: showDirector }"><ArrowRight /></el-icon>
+        </button>
+        <pre v-if="showDirector">{{ run.directorNotes }}</pre>
+      </div>
+    </section>
+
     <section v-if="evaluation || (detail.replies || []).length > 1" class="ap-section">
       <h3>回复结果</h3>
       <div v-if="evaluation" class="chips">
@@ -101,6 +131,21 @@ const replyText = ref('')
 const learn = ref(true)
 const replying = ref(false)
 const run = computed(() => detail.value?.agentRuns?.[0])
+const perception = computed(() => {
+  const p = run.value?.perception
+  return p && Object.keys(p).length ? p : null
+})
+const recalled = computed(() => run.value?.recalledMemories || [])
+const showDirector = ref(false)
+const replyModeText: Record<string, string> = { help: '解答', empathy: '共情陪伴', banter: '闲聊接梗', brief_ack: '简短搭话' }
+const focusText: Record<string, string> = { facts: '事实偏好', episodes: '经历老梗', inside_jokes: '老梗默契', issues: '待决问题', none: '跳过' }
+const memKindText: Record<string, string> = { profile: '档案', fact: '事实', preference: '偏好', issue: '问题', episode: '共同经历', inside_joke: '老梗', social: '关系' }
+function moodTagType(mood: string) {
+  if (['愤怒', '不满', '委屈', '焦虑', '着急'].includes(mood)) return 'danger'
+  if (['疲惫', '困惑'].includes(mood)) return 'warning'
+  if (['开心', '兴奋', '调侃'].includes(mood)) return 'success'
+  return 'info'
+}
 const openStep = ref(-1)
 const maxStepMs = computed(() => Math.max(1, ...(run.value?.steps || []).map(s => s.latencyMs || 0)))
 const replyText_: Record<string, string> = { sent: '已发送', failed: '发送失败', pending: '待发送', processing: '发送中', expired: '已过期' }
@@ -187,5 +232,16 @@ useAdminEvents(['messages','agent_runs','model_calls','tool_calls','outbox_tasks
 .ap-reveal-enter-active, .ap-reveal-leave-active { transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
 .ap-reveal-enter-from, .ap-reveal-leave-to { opacity: 0; transform: translateY(-4px); }
 .ap-options { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ap-recalled { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.ap-recalled > small { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.ap-recalled ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.ap-recalled li { display: flex; align-items: baseline; gap: 8px; font-size: 12px; line-height: 1.5; }
+.ap-recalled li .ap-kind { flex: none; padding: 1px 6px; border-radius: var(--radius-xs); background: var(--surface-3); color: var(--text-2); }
+.ap-recalled li small { margin-left: auto; color: var(--muted); }
+.ap-director { margin-top: 8px; }
+.ap-director-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: var(--primary-text); font: inherit; font-size: 12px; cursor: pointer; }
+.ap-director-toggle .el-icon { transition: transform .2s var(--ease); }
+.ap-director-toggle .el-icon.open { transform: rotate(90deg); }
+.ap-director pre { margin: 6px 0 0; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-2); font: 12px/1.6 var(--font-mono); color: var(--text-2); white-space: pre-wrap; }
 @media (prefers-reduced-motion: reduce) { .ap-track i, .ap-chevron, .ap-reveal-enter-active, .ap-reveal-leave-active { transition: none; } }
 </style>

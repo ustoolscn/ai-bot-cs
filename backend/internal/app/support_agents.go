@@ -273,6 +273,8 @@ func (a *App) listServices(c *gin.Context) {
 		s.SkillIDs = slices.Clone(s.SkillIDs)
 		s.ToolNames = slices.Clone(s.ToolNames)
 		s.KnowledgeBaseIDs = slices.Clone(s.KnowledgeBaseIDs)
+		s.Companion.PersonalityTraits = slices.Clone(defaults.Companion.PersonalityTraits)
+		s.Companion.Catchphrases = slices.Clone(defaults.Companion.Catchphrases)
 		if style != "" {
 			s.StylePrompt = style
 		}
@@ -292,7 +294,7 @@ func (a *App) listServices(c *gin.Context) {
 
 func serviceField(key string) bool {
 	switch key {
-	case "replyQuietSeconds", "replyMaxWaitSeconds", "stylePrompt", "examples", "liveData", "toolsEnabled", "toolNames", "skillIds", "knowledgeBaseIds", "maxToolSteps", "handoffPauseMinutes", "evaluationEnabled", "staffMiningEnabled", "autoPublishStaff", "autoPublishMinConfidence", "learningKnowledgeBaseId":
+	case "replyQuietSeconds", "replyMaxWaitSeconds", "stylePrompt", "examples", "companion", "liveData", "toolsEnabled", "toolNames", "skillIds", "knowledgeBaseIds", "maxToolSteps", "handoffPauseMinutes", "evaluationEnabled", "staffMiningEnabled", "autoPublishStaff", "autoPublishMinConfidence", "learningKnowledgeBaseId":
 		return true
 	}
 	return false

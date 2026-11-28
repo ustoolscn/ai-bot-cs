@@ -96,7 +96,13 @@ func (a *App) runJob(ctx context.Context, j agentJob) error {
 	case "blacklist_kick":
 		err = a.jobBlacklistKick(ctx, str("actionId"))
 	case "evaluate":
-		err = a.jobEvaluate(ctx, str("runId"), str("messageId"), str("profileId"))
+		err = a.jobEvaluate(ctx, j.Payload)
+	case "user_reflection":
+		err = a.jobReflectUser(ctx, str("subjectId"), str("profileId"))
+	case "group_digest":
+		err = a.jobGroupDigest(ctx, str("conversationId"))
+	case "proactive_send":
+		err = a.jobProactiveSend(ctx, str("triggerId"))
 	case "summarize":
 		err = a.jobSummarize(ctx, str("conversationId"), str("scope"), str("until"), str("profileId"))
 	case "staff_history":
@@ -176,25 +182,36 @@ func (a *App) auxText(ctx context.Context, s agent.Settings, fallbackProfile, ki
 }
 
 type evaluation struct {
-	Persona          map[string]any `json:"persona,omitempty"`
-	Profile          *string        `json:"profile"`
-	Answered         bool           `json:"answered"`
-	KnowledgeGap     string         `json:"knowledge_gap"`
-	PreviousFeedback string         `json:"previous_feedback"`
-	TooLong          bool           `json:"too_long"`
-	Memories         []struct {
+	Persona            map[string]any `json:"persona,omitempty"`
+	Profile            *string        `json:"profile"`
+	Answered           bool           `json:"answered"`
+	KnowledgeGap       string         `json:"knowledge_gap"`
+	PreviousFeedback   string         `json:"previous_feedback"`
+	TooLong            bool           `json:"too_long"`
+	MoodDelta          string         `json:"mood_delta,omitempty"`
+	ProactiveCandidate *struct {
+		Kind       string  `json:"kind"`
+		Topic      string  `json:"topic"`
+		DelayHours float64 `json:"delayHours"`
+	} `json:"proactive_candidate,omitempty"`
+	Memories []struct {
 		Action     string  `json:"action"`
 		ID         string  `json:"id"`
 		EventAt    string  `json:"eventAt"`
 		Kind       string  `json:"kind"`
 		Content    string  `json:"content"`
+		Importance int     `json:"importance"`
+		EmotionTag string  `json:"emotionTag"`
 		Confidence float64 `json:"confidence"`
 	} `json:"memories"`
 }
 
-// jobEvaluate analyses a finished turn: quality, knowledge gaps, implicit
-// feedback on the previous answer and long-term user memories.
-func (a *App) jobEvaluate(ctx context.Context, runID, messageID, profileID string) error {
+// jobEvaluate analyses a finished turn (fast path): quality, knowledge gaps,
+// implicit feedback, atomic memory updates, relationship increments, and triggers
+// slow-path user_reflection once accumulated turns reach the threshold.
+func (a *App) jobEvaluate(ctx context.Context, payload map[string]any) error {
+	str := func(k string) string { v, _ := payload[k].(string); return v }
+	runID, messageID, profileID, subjectID := str("runId"), str("messageId"), str("profileId"), str("subjectId")
 	if excluded, err := a.messageExcluded(ctx, messageID); err != nil {
 		return err
 	} else if excluded {
@@ -229,21 +246,30 @@ func (a *App) jobEvaluate(ctx context.Context, runID, messageID, profileID strin
 		WHERE NOT i.context_excluded AND NOT o.context_excluded AND i.event_at>coalesce((SELECT moderation_cutoff FROM conversations WHERE id=$1),'-infinity') AND i.conversation_id=$1 AND i.direction='inbound' AND i.sender_id=$2 AND i.event_at<$3 AND i.event_at>$3-interval '30 minutes' AND i.id<>$4
 		ORDER BY i.event_at DESC, o.event_at DESC LIMIT 1`, convID, senderID, eventAt, messageID).Scan(&prevAnswerID, &prevAnswer, &prevQuestion)
 
+	if s.MemoryEnabled && senderID != "" && subjectID == "" {
+		subjectID, _ = a.resolveSubject(ctx, botID, convID, convType, senderID, senderName, "")
+	}
+
 	var b strings.Builder
 	if prevAnswer != "" {
 		fmt.Fprintf(&b, "（上一轮）用户：%s\n（上一轮）客服：%s\n\n", agent.TruncateRunes(prevQuestion, 300), agent.TruncateRunes(prevAnswer, 500))
 	}
-	fmt.Fprintf(&b, "（本轮）用户：%s\n（本轮）客服：%s", agent.TruncateRunes(question, 800), agent.TruncateRunes(answer, 1200))
-	var previousProfile, existing, previousPersona string
+	fmt.Fprintf(&b, "（本轮）用户：%s\n（本轮）回复：%s", agent.TruncateRunes(question, 800), agent.TruncateRunes(answer, 1200))
+	var previousProfile, existing string
 	if s.MemoryEnabled && senderID != "" {
-		if err = a.db.QueryRow(ctx, `SELECT coalesce((SELECT persona::text FROM user_profiles WHERE conversation_id=$1 AND platform_user_id=$2),'null'),coalesce((SELECT content FROM user_profiles WHERE conversation_id=$1 AND platform_user_id=$2),''),coalesce((SELECT jsonb_agg(jsonb_build_object('id',id,'content',content,'eventAt',coalesce(event_at,created_at))) FROM user_memories WHERE conversation_id=$1 AND platform_user_id=$2 AND status='active'),'[]')::text`, convID, senderID).Scan(&previousPersona, &previousProfile, &existing); err != nil {
-			return err
+		if subjectID != "" {
+			if err = a.db.QueryRow(ctx, `SELECT coalesce((SELECT profile_content FROM memory_subjects WHERE id=$1),''),coalesce((SELECT jsonb_agg(jsonb_build_object('id',id,'kind',kind,'content',content,'resolved',resolved_at IS NOT NULL,'eventAt',coalesce(event_at,created_at))) FROM (SELECT id,kind,content,resolved_at,event_at,created_at FROM user_memories WHERE subject_id=$1 AND status='active' ORDER BY pinned DESC, updated_at DESC LIMIT 30) sub),'[]')::text`, subjectID).Scan(&previousProfile, &existing); err != nil {
+				return err
+			}
+		} else {
+			if err = a.db.QueryRow(ctx, `SELECT coalesce((SELECT content FROM user_profiles WHERE conversation_id=$1 AND platform_user_id=$2),''),coalesce((SELECT jsonb_agg(jsonb_build_object('id',id,'content',content,'eventAt',coalesce(event_at,created_at))) FROM user_memories WHERE conversation_id=$1 AND platform_user_id=$2 AND status='active'),'[]')::text`, convID, senderID).Scan(&previousProfile, &existing); err != nil {
+				return err
+			}
 		}
-		fmt.Fprintf(&b, "\n已有结构化画像：%s", previousPersona)
-		fmt.Fprintf(&b, "\n本轮时间：%s\n已有用户档案：%s\n已有事件：%s", eventAt.Format(time.RFC3339), previousProfile, existing)
+		fmt.Fprintf(&b, "\n本轮时间：%s\n已有用户记忆：%s", eventAt.Format(time.RFC3339), existing)
 	}
 	var ev evaluation
-	if err := a.auxJSON(ctx, s, profileID, runID, "", "evaluate", agent.EvaluationPrompt+personaPrompt, b.String(), &ev); err != nil {
+	if err := a.auxJSON(ctx, s, profileID, runID, "", "evaluate", agent.EvaluationPrompt, b.String(), &ev); err != nil {
 		return err
 	}
 	evForAudit := ev
@@ -253,9 +279,22 @@ func (a *App) jobEvaluate(ctx context.Context, runID, messageID, profileID strin
 	evJSON, _ := json.Marshal(evForAudit)
 	_, _ = a.db.Exec(ctx, "UPDATE agent_runs SET evaluation=$1::jsonb WHERE id=$2", string(evJSON), runID)
 
+	var perception TurnPerception
+	if rawP, err := json.Marshal(payload["perception"]); err == nil && len(rawP) > 2 {
+		_ = json.Unmarshal(rawP, &perception)
+	}
+	perception.normalize(false)
+
 	if s.MemoryEnabled && senderID != "" {
 		if err = a.applyExtractedMemory(ctx, ev, previousProfile, existing, convID, senderID, senderName, botID, messageID, eventAt, s); err != nil {
 			return err
+		}
+		if subjectID != "" {
+			a.advanceSubjectRelationship(ctx, subjectID, convID, botID, profileID, eventAt, ev, perception, s)
+			a.applyTurnEmotionAndMood(ctx, subjectID, botMoodScope(convID, botID), perception, time.Now())
+			if s.Companion.Enabled && s.Companion.ProactiveEnabled && ev.ProactiveCandidate != nil && strings.TrimSpace(ev.ProactiveCandidate.Topic) != "" {
+				a.scheduleProactiveCandidate(ctx, subjectID, botID, convID, ev.ProactiveCandidate.Kind, ev.ProactiveCandidate.Topic, ev.ProactiveCandidate.DelayHours)
+			}
 		}
 	}
 	if !s.EvaluationEnabled {

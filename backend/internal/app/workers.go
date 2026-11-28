@@ -40,6 +40,12 @@ func (a *App) maintenanceLoop(ctx context.Context) {
 		if err := a.queueScheduledPosts(ctx, time.Now()); err != nil && !errors.Is(err, context.Canceled) {
 			a.log.Error("scheduled posts", "error", err)
 		}
+		if err := a.queueDueGroupDigests(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			a.log.Error("group digests", "error", err)
+		}
+		if err := a.queueDueProactiveTriggers(ctx, time.Now()); err != nil && !errors.Is(err, context.Canceled) {
+			a.log.Error("proactive triggers", "error", err)
+		}
 		if err := a.processMaintenance(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			a.log.Error("maintenance error", "error", err)
 		}
@@ -533,9 +539,14 @@ func (a *App) handleOutbox(ctx context.Context, j outboxJob) error {
 		defer cancelSend()
 	}
 	replyTo := j.ReplyTo
-	active := j.EventType == "SCHEDULED_POST" || humanReplyNeedsActive(j, time.Now())
+	active := j.EventType == "SCHEDULED_POST" || (j.EventType == "PROACTIVE_CARE" && j.ReplyTo == "") || humanReplyNeedsActive(j, time.Now())
 	if active {
 		replyTo = ""
+	}
+	if j.EventType == "AI_RESPONSE" && j.ConversationType == "private" && j.Sequence > 1 {
+		if svcSettings, _, _, e := a.conversationAgent(ctx, j.ConversationRecordID, a.agentSettings(ctx)); e == nil && svcSettings.Companion.Enabled && svcSettings.Companion.TypingIndicator {
+			go a.sendPrivateTyping(ctx, j.BotID, j.ConversationID, j.ReplyTo, 3)
+		}
 	}
 	if j.MaterialBatch && j.Text == "" {
 		format = "image-only"
